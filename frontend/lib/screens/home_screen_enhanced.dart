@@ -1724,30 +1724,6 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     return Directionality(
       textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
-        // 🧪 TEST ONLY — remove after testing
-        floatingActionButton: FloatingActionButton.small(
-          heroTag: 'achievement_test',
-          backgroundColor: AppColors.primaryGold,
-          onPressed: () => GoalAchievementOverlay.show(
-            context,
-            achievement: GoalAchievement(
-              id: 9999,
-              employeeName: 'سامي الخالد',
-              department: 'المبيعات',
-              position: 'موظف متميّز',
-              goalName: 'هدف النقاط الشهري',
-              goalDescription: 'تجاوز 500 نقطة في الفترة',
-              bonusAmount: 450000,
-              currency: 'ر.س',
-              metrics: {'points': 523, 'invoices': 87, 'rank': 1},
-              achievedAt: DateTime.now(),
-            ),
-            isArabic: widget.isArabic,
-            onDismiss: () {},
-            onViewDetails: () {},
-          ),
-          child: const Icon(Icons.celebration, color: Colors.white),
-        ),
         drawer: _buildDrawer(isAr, AppColors.primaryGold),
         appBar: AppBar(
           automaticallyImplyLeading: false,
