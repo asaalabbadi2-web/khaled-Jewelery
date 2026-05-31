@@ -818,3 +818,28 @@ def ensure_bonus_accounts(engine: Engine) -> None:
 
     except Exception as exc:
         LOGGER.error("ensure_bonus_accounts failed: %s", exc)
+
+
+def ensure_unique_reservation_invoice_index(engine: Engine) -> None:
+    """Partial unique index: each invoice can only be linked to one reservation.
+    Allows multiple NULLs (unsettled reservations).
+    """
+    INDEX_NAME = 'uq_office_reservation_purchase_invoice_id'
+    try:
+        with engine.connect() as conn:
+            dialect = _dialect_name(engine, conn)
+            if dialect != 'postgresql':
+                return  # Only needed for PostgreSQL (SQLite handles this differently)
+            exists = conn.execute(text(
+                "SELECT 1 FROM pg_indexes WHERE indexname = :name"
+            ), {'name': INDEX_NAME}).fetchone()
+            if not exists:
+                conn.execute(text(f"""
+                    CREATE UNIQUE INDEX {INDEX_NAME}
+                    ON office_reservation (purchase_invoice_id)
+                    WHERE purchase_invoice_id IS NOT NULL
+                """))
+                conn.commit()
+                LOGGER.info("schema_guard: created partial unique index %s", INDEX_NAME)
+    except Exception as exc:
+        LOGGER.error("ensure_unique_reservation_invoice_index failed: %s", exc)
