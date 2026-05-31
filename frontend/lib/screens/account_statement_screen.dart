@@ -3200,100 +3200,137 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   void _showLineDetails(StatementLine line, double mainKarat) {
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(18)),
       ),
       builder: (_) {
-        return Padding(
-          padding: const EdgeInsets.all(20.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.receipt_long),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'تفاصيل الحركة - ${DateFormat('dd/MM/yyyy').format(line.date)}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.55,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          builder: (_, scrollController) => SingleChildScrollView(
+            controller: scrollController,
+            padding: const EdgeInsets.all(20.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.receipt_long),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'تفاصيل الحركة - ${DateFormat('dd/MM/yyyy').format(line.date)}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
                     ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.copy_all),
-                    onPressed: () async {
-                      final summary = _buildLineSummary(line, mainKarat);
-                      await Clipboard.setData(ClipboardData(text: summary));
-                      if (mounted) {
-                        Navigator.of(context).pop();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('تم نسخ التفاصيل')),
-                        );
-                      }
-                    },
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _buildDetailsRow('الوصف', line.description),
-              _buildDetailsRow('رقم السطر', line.id.toString()),
-              const Divider(height: 24),
-              if (_viewMode != 2) ...[
-                _buildDetailsRow(
-                  'ذهب مدين (عيار ${_statement!.mainKarat})',
-                  _convertToMainKarat(
-                    line.debit21k +
-                        line.debit22k +
-                        line.debit24k +
-                        line.debit18k,
-                    21,
-                    mainKarat,
-                  ).toStringAsFixed(3),
-                ),
-                _buildDetailsRow(
-                  'ذهب دائن (عيار ${_statement!.mainKarat})',
-                  _convertToMainKarat(
-                    line.credit21k +
-                        line.credit22k +
-                        line.credit24k +
-                        line.credit18k,
-                    21,
-                    mainKarat,
-                  ).toStringAsFixed(3),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    if (line.debit18k != 0 || line.credit18k != 0)
-                      _buildKaratChip('18k', line.debit18k, line.credit18k),
-                    if (line.debit21k != 0 || line.credit21k != 0)
-                      _buildKaratChip('21k', line.debit21k, line.credit21k),
-                    if (line.debit22k != 0 || line.credit22k != 0)
-                      _buildKaratChip('22k', line.debit22k, line.credit22k),
-                    if (line.debit24k != 0 || line.credit24k != 0)
-                      _buildKaratChip('24k', line.debit24k, line.credit24k),
+                    IconButton(
+                      icon: const Icon(Icons.copy_all),
+                      onPressed: () async {
+                        final summary = _buildLineSummary(line, mainKarat);
+                        await Clipboard.setData(ClipboardData(text: summary));
+                        if (mounted) {
+                          Navigator.of(context).pop();
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('تم نسخ التفاصيل')),
+                          );
+                        }
+                      },
+                    ),
                   ],
                 ),
+                const SizedBox(height: 16),
+                _buildDetailsRow('الوصف', line.description),
+                if (line.entryNumber != null && line.entryNumber!.isNotEmpty)
+                  _buildDetailsRow('رقم القيد', line.entryNumber!),
+                _buildDetailsRow('رقم السطر', line.id.toString()),
+                if (line.referenceType != null && line.referenceType!.isNotEmpty)
+                  _buildDetailsRow(
+                    'المرجع',
+                    '${_friendlyRefType(line.referenceType!)}${line.referenceNumber != null && line.referenceNumber!.isNotEmpty ? ' • ${line.referenceNumber}' : line.referenceId != null ? ' #${line.referenceId}' : ''}',
+                  ),
+                const Divider(height: 24),
+                if (_viewMode != 2) ...[
+                  _buildDetailsRow(
+                    'ذهب مدين (عيار ${_statement!.mainKarat})',
+                    _convertToMainKarat(
+                      line.debit21k +
+                          line.debit22k +
+                          line.debit24k +
+                          line.debit18k,
+                      21,
+                      mainKarat,
+                    ).toStringAsFixed(3),
+                  ),
+                  _buildDetailsRow(
+                    'ذهب دائن (عيار ${_statement!.mainKarat})',
+                    _convertToMainKarat(
+                      line.credit21k +
+                          line.credit22k +
+                          line.credit24k +
+                          line.credit18k,
+                      21,
+                      mainKarat,
+                    ).toStringAsFixed(3),
+                  ),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      if (line.debit18k != 0 || line.credit18k != 0)
+                        _buildKaratChip('18k', line.debit18k, line.credit18k),
+                      if (line.debit21k != 0 || line.credit21k != 0)
+                        _buildKaratChip('21k', line.debit21k, line.credit21k),
+                      if (line.debit22k != 0 || line.credit22k != 0)
+                        _buildKaratChip('22k', line.debit22k, line.credit22k),
+                      if (line.debit24k != 0 || line.credit24k != 0)
+                        _buildKaratChip('24k', line.debit24k, line.credit24k),
+                    ],
+                  ),
+                ],
+                if (_viewMode != 1) ...[
+                  const Divider(height: 32),
+                  _buildDetailsRow('نقد مدين', line.cashDebit.toStringAsFixed(2)),
+                  _buildDetailsRow('نقد دائن', line.cashCredit.toStringAsFixed(2)),
+                ],
+                if (line.runningCashBalance != null || line.runningGoldBalance != null) ...[
+                  const Divider(height: 24),
+                  if (line.runningCashBalance != null)
+                    _buildDetailsRow(
+                      'الرصيد النقدي',
+                      line.runningCashBalance!.toStringAsFixed(2),
+                    ),
+                  if (line.runningGoldBalance != null)
+                    _buildDetailsRow(
+                      'الرصيد الذهبي (عيار ${_statement!.mainKarat})',
+                      line.runningGoldBalance!.toStringAsFixed(3),
+                    ),
+                ],
               ],
-              if (_viewMode != 1) ...[
-                const Divider(height: 32),
-                _buildDetailsRow('نقد مدين', line.cashDebit.toStringAsFixed(2)),
-                _buildDetailsRow(
-                  'نقد دائن',
-                  line.cashCredit.toStringAsFixed(2),
-                ),
-              ],
-            ],
+            ),
           ),
         );
       },
     );
+  }
+
+  String _friendlyRefType(String refType) {
+    switch (refType) {
+      case 'invoice': return 'فاتورة';
+      case 'office_reservation': return 'حجز مكتب';
+      case 'voucher': return 'سند';
+      case 'voucher_reversal': return 'عكس سند';
+      case 'invoice_payment': return 'دفعة فاتورة';
+      case 'clearing_settlement': return 'تسوية';
+      default: return refType;
+    }
   }
 
   Widget _buildDetailsRow(String label, String value) {
