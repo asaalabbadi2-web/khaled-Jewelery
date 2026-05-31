@@ -1177,6 +1177,42 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     return _coerceAccountId(candidates.first['id']);
   }
 
+  int? _findEmployeeBonusPayableAccountId(EmployeeModel employee) {
+    // Expected: per-employee bonus payable account under 2310xxxx
+    // Account name pattern: "ح/مكافآت مستحقة <name>" or similar
+    final empKey = _normalizeSearchText(employee.name);
+
+    final candidates = _accounts.where((acc) {
+      final numStr = (acc['account_number'] ?? '').toString().trim();
+      if (!numStr.startsWith('2310') || numStr.length < 5) return false;
+      final nameStr = (acc['name'] ?? '').toString();
+      return _normalizeSearchText(nameStr).contains(empKey);
+    }).toList();
+
+    if (candidates.isNotEmpty) {
+      candidates.sort((a, b) {
+        final an = (a['account_number'] ?? '').toString().length;
+        final bn = (b['account_number'] ?? '').toString().length;
+        return bn.compareTo(an);
+      });
+      return _coerceAccountId(candidates.first['id']);
+    }
+
+    // Fallback: general 2310 bonus payable account (any sub-account of 2310)
+    final fallback = _accounts.where((acc) {
+      final numStr = (acc['account_number'] ?? '').toString().trim();
+      return numStr == '2310' ||
+          (numStr.startsWith('2310') && numStr.length >= 5);
+    }).toList();
+    if (fallback.isEmpty) return null;
+    fallback.sort((a, b) {
+      final an = (a['account_number'] ?? '').toString().length;
+      final bn = (b['account_number'] ?? '').toString().length;
+      return bn.compareTo(an);
+    });
+    return _coerceAccountId(fallback.first['id']);
+  }
+
   int? _coerceAccountId(dynamic value) {
     if (value == null) {
       return null;
@@ -1437,6 +1473,12 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         'icon': Icons.money_off_outlined,
       },
       {
+        'id': 'payment_bonus',
+        'title': 'مكافأة موظف',
+        'description': 'صرف مكافأة أو مقدم منها لموظف من الخزينة.',
+        'icon': Icons.emoji_events_outlined,
+      },
+      {
         'id': 'payment_expense',
         'title': 'مصروف تشغيلي',
         'description': 'صرف مصروف تشغيلي من الخزينة.',
@@ -1555,6 +1597,20 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             description: 'سلفة موظف',
           );
           break;
+        case 'payment_bonus':
+          _partyType = 'employee';
+          clearPartySelections();
+          _descriptionController.text = _descriptionController.text.isEmpty
+              ? 'صرف مكافأة لموظف'
+              : _descriptionController.text;
+          _notesController.text = _notesController.text.isEmpty
+              ? 'اختر الموظف وسيتم الربط تلقائياً بحساب المكافآت المستحقة (2310xxxx).'
+              : _notesController.text;
+          _ensureFirstLineConfiguration(
+            amountType: 'cash',
+            description: 'مكافأة موظف',
+          );
+          break;
         case 'payment_expense':
           _partyType = 'other';
           clearPartySelections();
@@ -1657,6 +1713,12 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         newDesc = partyName != null
             ? 'صرف سلفة للموظف $partyName'
             : 'صرف سلفة لموظف';
+        newReceiver = partyName;
+        break;
+      case 'payment_bonus':
+        newDesc = partyName != null
+            ? 'مقدم مكافأة للموظف $partyName'
+            : 'صرف مكافأة لموظف';
         newReceiver = partyName;
         break;
       case 'payment_expense':
@@ -3253,6 +3315,14 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             throw Exception(
               'لا يوجد حساب ذمم رواتب (2400xxxx) مرتبط بهذا الموظف.\n'
               'يرجى إنشاء/تأكيد حسابات الذمم للموظف من شاشة الموظفين (Ensure setup).',
+            );
+          }
+        } else if (_selectedTemplateId == 'payment_bonus') {
+          partyAccountId = _findEmployeeBonusPayableAccountId(selectedEmployee);
+          if (partyAccountId == null) {
+            throw Exception(
+              'لا يوجد حساب مكافآت مستحقة (2310xxxx) في شجرة الحسابات.\n'
+              'يرجى إنشاء حساب المكافآت المستحقة أولاً.',
             );
           }
         } else {
