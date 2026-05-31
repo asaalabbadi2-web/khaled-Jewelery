@@ -15,7 +15,7 @@ Endpoints:
 """
 
 from flask import Blueprint, request, jsonify, g
-from models import db, Employee, BonusRule, EmployeeBonus, Voucher, VoucherAccountLine, Account, Office, SafeBox, GoalAchievement, Invoice
+from models import db, Employee, BonusRule, EmployeeBonus, Voucher, VoucherAccountLine, Account, Office, SafeBox, GoalAchievement, Invoice, BonusInvoiceLink
 from bonus_calculator import BonusCalculator
 from datetime import datetime, date, timedelta
 from auth_decorators import require_auth, require_permission, require_any_permission
