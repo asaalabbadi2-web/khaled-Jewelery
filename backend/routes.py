@@ -24348,7 +24348,13 @@ def ensure_employee_setup(employee_id):
 @api.route('/employees/bulk-ensure-setup', methods=['POST'])
 @require_permission('employees.edit')
 def bulk_ensure_employees_setup():
-    """Run ensure-setup (accounts + safes) for every active employee at once."""
+    """Run ensure-setup (accounts + safes) for every active employee at once.
+
+    Safe creation is gated by the global Settings flags:
+      - employee_cash_safes_enabled → create cash safe only if True
+      - employee_gold_safes_enabled → create gold safe only if True
+    Payables accounts (2400/2410/2420/2310) are always ensured.
+    """
     from employee_account_helpers import (
         get_or_create_employee_payables_accounts,
         ensure_employee_group_accounts,
@@ -24360,39 +24366,68 @@ def bulk_ensure_employees_setup():
     from employee_gold_safe_helpers import create_employee_gold_safe, ensure_employee_gold_group_account
     from employee_cash_safe_helpers import create_employee_cash_safe, ensure_employee_cash_group_account
 
+    # Read global safe-feature flags from Settings
+    settings_row = Settings.query.first()
+    cash_safes_enabled = bool(getattr(settings_row, 'employee_cash_safes_enabled', False))
+    gold_safes_enabled = bool(getattr(settings_row, 'employee_gold_safes_enabled', False))
+
     employees = Employee.query.filter_by(is_active=True).all()
-    summary = {'total': len(employees), 'updated': [], 'errors': []}
+    summary = {
+        'total': len(employees),
+        'cash_safes_enabled': cash_safes_enabled,
+        'gold_safes_enabled': gold_safes_enabled,
+        'updated': [],
+        'errors': [],
+    }
+
+    # Ensure group structure once before the loop
+    try:
+        ensure_employee_group_accounts(created_by='bulk-ensure')
+        if cash_safes_enabled:
+            ensure_employee_cash_group_account(created_by='bulk-ensure')
+        if gold_safes_enabled:
+            ensure_employee_gold_group_account(created_by='bulk-ensure')
+    except Exception:
+        pass
 
     for emp in employees:
         try:
             created: dict = {}
 
             # personal account
-            if not emp.account_id:
+            if not getattr(emp, 'account_id', None):
                 acct = create_employee_account(emp.name, created_by='bulk-ensure')
                 emp.account_id = acct.id
                 created['personal_account'] = acct.account_number
 
-            # payables accounts (2400/2410/2420/2310)
+            # payables accounts (2400/2410/2420/2310) — always
             payables = get_or_create_employee_payables_accounts(emp.name, created_by='bulk-ensure')
             if payables:
                 created['payables'] = [a.account_number for a in payables]
 
-            # gold safe
-            if not getattr(emp, 'gold_safe_id', None):
+            # gold safe — only when globally enabled
+            if gold_safes_enabled and (getattr(emp, 'gold_safe_box_id', None) in (None, 0)):
                 try:
-                    safe = create_employee_gold_safe(emp, created_by='bulk-ensure')
-                    if safe:
-                        created['gold_safe'] = safe.name
+                    acc, sb = create_employee_gold_safe(
+                        employee_name=emp.name,
+                        employee_code=getattr(emp, 'employee_code', None),
+                        created_by='bulk-ensure',
+                    )
+                    emp.gold_safe_box_id = sb.id
+                    created['gold_safe'] = sb.name
                 except Exception:
                     pass
 
-            # cash safe
-            if not getattr(emp, 'cash_safe_id', None):
+            # cash safe — only when globally enabled
+            if cash_safes_enabled and (getattr(emp, 'cash_safe_box_id', None) in (None, 0)):
                 try:
-                    safe = create_employee_cash_safe(emp, created_by='bulk-ensure')
-                    if safe:
-                        created['cash_safe'] = safe.name
+                    acc, sb = create_employee_cash_safe(
+                        employee_name=emp.name,
+                        employee_code=getattr(emp, 'employee_code', None),
+                        created_by='bulk-ensure',
+                    )
+                    emp.cash_safe_box_id = sb.id
+                    created['cash_safe'] = sb.name
                 except Exception:
                     pass
 
