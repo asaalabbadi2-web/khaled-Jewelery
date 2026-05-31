@@ -64,7 +64,6 @@ deploy-production:
     - cd C:\khaled-jewelery
     - docker compose -f docker-compose.prod.images.yml --env-file .env.production pull
     - docker compose -f docker-compose.prod.images.yml --env-file .env.production up -d --remove-orphans
-    - docker image prune -f
     - echo "Deploy completed successfully"
   environment:
     name: production
