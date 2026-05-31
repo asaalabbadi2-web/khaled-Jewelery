@@ -410,7 +410,7 @@ class BonusCalculator:
         return bonus
 
     @staticmethod
-    def calculate_all_bonuses_for_period(period_start, period_end, employee_ids=None, rule_ids=None, auto_approve=False, refresh_results=True):
+    def calculate_all_bonuses_for_period(period_start, period_end, employee_ids=None, rule_ids=None, auto_approve=False, refresh_results=True, goal_period_filter=None):
         bonuses = []
         processed_bonus_ids = []
 
@@ -422,6 +422,8 @@ class BonusCalculator:
         rules_query = BonusRule.query.filter_by(is_active=True)
         if rule_ids:
             rules_query = rules_query.filter(BonusRule.id.in_(rule_ids))
+        if goal_period_filter:
+            rules_query = rules_query.filter(BonusRule.goal_period == goal_period_filter)
         rules = rules_query.all()
 
         def _sync_invoice_links(bonus_obj, invoice_ids):

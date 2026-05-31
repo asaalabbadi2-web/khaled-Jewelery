@@ -37,7 +37,8 @@ class BonusScheduler:
                 bonuses = BonusCalculator.calculate_all_bonuses_for_period(
                     period_start=yesterday,
                     period_end=yesterday,
-                    auto_approve=False  # تتطلب الموافقة اليدوية
+                    goal_period_filter='daily',
+                    auto_approve=False,
                 )
                 
                 if bonuses:
@@ -62,7 +63,8 @@ class BonusScheduler:
                 bonuses = BonusCalculator.calculate_all_bonuses_for_period(
                     period_start=last_monday,
                     period_end=last_sunday,
-                    auto_approve=False
+                    goal_period_filter='weekly',
+                    auto_approve=False,
                 )
                 
                 if bonuses:
@@ -97,7 +99,8 @@ class BonusScheduler:
                 bonuses = BonusCalculator.calculate_all_bonuses_for_period(
                     period_start=period_start,
                     period_end=period_end,
-                    auto_approve=False
+                    goal_period_filter='monthly',
+                    auto_approve=False,
                 )
                 
                 if bonuses:
