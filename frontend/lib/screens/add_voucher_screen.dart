@@ -1198,18 +1198,12 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       return _coerceAccountId(candidates.first['id']);
     }
 
-    // Fallback: general 2310 bonus payable account (any sub-account of 2310)
+    // Fallback: only the exact parent 2310 account — never a sibling employee's sub-account
     final fallback = _accounts.where((acc) {
       final numStr = (acc['account_number'] ?? '').toString().trim();
-      return numStr == '2310' ||
-          (numStr.startsWith('2310') && numStr.length >= 5);
+      return numStr == '2310';
     }).toList();
     if (fallback.isEmpty) return null;
-    fallback.sort((a, b) {
-      final an = (a['account_number'] ?? '').toString().length;
-      final bn = (b['account_number'] ?? '').toString().length;
-      return bn.compareTo(an);
-    });
     return _coerceAccountId(fallback.first['id']);
   }
 

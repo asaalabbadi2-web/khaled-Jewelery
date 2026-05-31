@@ -1232,6 +1232,8 @@ class _VoucherDetailsScreenState extends State<VoucherDetailsScreen> {
         return 'عميل';
       case 'supplier':
         return 'مورد';
+      case 'employee':
+        return 'موظف';
       case 'other':
         return 'آخر';
       default:
