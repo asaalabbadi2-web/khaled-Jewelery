@@ -268,15 +268,25 @@ def ensure_employee_group_accounts(created_by: str = 'system'):
         ensured[acc_num] = detail
         ensure_memo_for_account(detail)
 
-        # Backfill: ensure memo copies for any existing per-employee accounts under this group.
-        try:
-            children = Account.query.filter_by(parent_id=detail.id).all()
-            for child in children:
-                if getattr(child, 'transaction_type', None) == 'gold':
-                    continue
-                ensure_memo_for_account(child)
-        except Exception:
-            pass
+    # 2310 - مكافآت مستحقة للموظفين (under liabilities, sibling to 240)
+    acc_2310 = Account.query.filter_by(account_number='2310').first()
+    if not acc_2310:
+        parent_23 = (
+            Account.query.filter_by(account_number='23').first()
+            or _find_existing_parent_by_prefix('23')
+            or Account.query.filter_by(account_number='2').first()
+            or _find_existing_parent_by_prefix('2')
+        )
+        acc_2310 = _ensure_account(
+            account_number='2310',
+            name='مكافآت مستحقة للموظفين',
+            acc_type='Liability',
+            transaction_type='cash',
+            tracks_weight=False,
+            parent_account=parent_23,
+        )
+    ensured['2310'] = acc_2310
+    ensure_memo_for_account(acc_2310)
 
     # Backfill: ensure memo copies for any existing employee personal accounts under 1700.
     try:
@@ -352,12 +362,13 @@ def create_employee_payables_accounts(employee_name: str, created_by: str = 'sys
 
 
 def get_or_create_employee_payables_accounts(employee_name: str, created_by: str = 'system') -> List[Account]:
-    """Idempotently ensure employee-specific payables accounts under (24) groups.
+    """Idempotently ensure employee-specific payables accounts under (24/23) groups.
 
     Creates per-employee accounts under:
     - 2400 ذمم الموظفين-رواتب
     - 2410 ذمم الموظفين-عمولات
     - 2420 ذمم الموظفين - مكافآت نهاية الخدمة
+    - 2310 مكافآت مستحقة للموظفين
     """
 
     ensured = ensure_employee_group_accounts(created_by=created_by)
@@ -367,6 +378,7 @@ def get_or_create_employee_payables_accounts(employee_name: str, created_by: str
         ('2400', 'رواتب'),
         ('2410', 'عمولات'),
         ('2420', 'نهاية الخدمة'),
+        ('2310', 'مكافآت'),
     ]
 
     for parent_num, category_ar in specs:
