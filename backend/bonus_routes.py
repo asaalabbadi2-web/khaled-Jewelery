@@ -1088,6 +1088,37 @@ def bulk_reject_bonuses():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+@bonus_bp.route('/bonuses/bulk-delete', methods=['POST'])
+@require_auth
+@require_permission('bonus.approve')
+def bulk_delete_bonuses():
+    """حذف نهائي لمكافآت معلقة أو مرفوضة (لا يُطبَّق على معتمدة أو مدفوعة)"""
+    try:
+        data = request.get_json(silent=True) or {}
+        ids = data.get('ids') or data.get('bonus_ids') or []
+
+        if not isinstance(ids, list) or not ids:
+            return jsonify({'success': False, 'message': 'قائمة المعرفات مطلوبة'}), 400
+
+        bonuses = EmployeeBonus.query.filter(EmployeeBonus.id.in_(ids)).all()
+        deleted, skipped = [], []
+
+        for bonus in bonuses:
+            if bonus.status in ('pending', 'rejected'):
+                BonusInvoiceLink.query.filter_by(bonus_id=bonus.id).delete()
+                db.session.delete(bonus)
+                deleted.append(bonus.id)
+            else:
+                skipped.append({'id': bonus.id, 'status': bonus.status})
+
+        db.session.commit()
+        return jsonify({'success': True, 'deleted_ids': deleted, 'skipped': skipped, 'count': len(deleted)}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)}), 500
+
+
 @bonus_bp.route('/bonuses/<int:bonus_id>/pay', methods=['POST'])
 @require_auth
 @require_permission('bonus.pay')
