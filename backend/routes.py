@@ -24345,6 +24345,72 @@ def ensure_employee_setup(employee_id):
         return jsonify({'error': f'Failed to ensure employee setup: {str(e)}'}), 500
 
 
+@api.route('/employees/bulk-ensure-setup', methods=['POST'])
+@require_permission('employees.edit')
+def bulk_ensure_employees_setup():
+    """Run ensure-setup (accounts + safes) for every active employee at once."""
+    from employee_account_helpers import (
+        get_or_create_employee_payables_accounts,
+        ensure_employee_group_accounts,
+        create_employee_account,
+        EMPLOYEE_PERSONAL_PARENT_NUMBER,
+        ensure_memo_for_account,
+    )
+    from employee_account_naming import employee_personal_account_name
+    from employee_gold_safe_helpers import create_employee_gold_safe, ensure_employee_gold_group_account
+    from employee_cash_safe_helpers import create_employee_cash_safe, ensure_employee_cash_group_account
+
+    employees = Employee.query.filter_by(is_active=True).all()
+    summary = {'total': len(employees), 'updated': [], 'errors': []}
+
+    for emp in employees:
+        try:
+            created: dict = {}
+
+            # personal account
+            if not emp.account_id:
+                acct = create_employee_account(emp.name, created_by='bulk-ensure')
+                emp.account_id = acct.id
+                created['personal_account'] = acct.account_number
+
+            # payables accounts (2400/2410/2420/2310)
+            payables = get_or_create_employee_payables_accounts(emp.name, created_by='bulk-ensure')
+            if payables:
+                created['payables'] = [a.account_number for a in payables]
+
+            # gold safe
+            if not getattr(emp, 'gold_safe_id', None):
+                try:
+                    safe = create_employee_gold_safe(emp, created_by='bulk-ensure')
+                    if safe:
+                        created['gold_safe'] = safe.name
+                except Exception:
+                    pass
+
+            # cash safe
+            if not getattr(emp, 'cash_safe_id', None):
+                try:
+                    safe = create_employee_cash_safe(emp, created_by='bulk-ensure')
+                    if safe:
+                        created['cash_safe'] = safe.name
+                except Exception:
+                    pass
+
+            db.session.flush()
+            summary['updated'].append({'id': emp.id, 'name': emp.name, 'created': created})
+
+        except Exception as e:
+            summary['errors'].append({'id': emp.id, 'name': emp.name, 'error': str(e)})
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+    return jsonify(summary), 200
+
+
 @api.route('/advances/summary', methods=['GET'])
 @require_permission('employees.payroll')
 def get_all_advances_summary():

@@ -3933,6 +3933,20 @@ class ApiService {
     }
   }
 
+  Future<Map<String, dynamic>> bulkEnsureAllEmployeesSetup() async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/employees/bulk-ensure-setup'),
+      headers: _jsonHeaders(token: token),
+      body: json.encode({}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
+    } else {
+      throw Exception(_errorMessageFromResponse(response));
+    }
+  }
+
   Future<void> deleteEmployee(int employeeId) async {
     final token = await _requireAuthToken();
     final response = await http.delete(

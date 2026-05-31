@@ -1048,6 +1048,37 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
             onPressed: _refresh,
             icon: const Icon(Icons.refresh),
           ),
+          IconButton(
+            tooltip: isAr ? 'إصلاح حسابات جميع الموظفين' : 'Fix all employee accounts',
+            icon: const Icon(Icons.build_circle_outlined),
+            onPressed: () async {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: Text(isAr ? 'إصلاح حسابات جميع الموظفين' : 'Fix All Employee Accounts'),
+                  content: Text(isAr
+                      ? 'سيتم إنشاء الحسابات المحاسبية والخزائن الناقصة لجميع الموظفين النشطين.\nهذه العملية آمنة ولا تُكرر الحسابات الموجودة.'
+                      : 'This will create missing accounts and safes for all active employees. Safe to re-run.'),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(isAr ? 'إلغاء' : 'Cancel')),
+                    ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: Text(isAr ? 'تأكيد' : 'Confirm')),
+                  ],
+                ),
+              );
+              if (confirmed != true) return;
+              try {
+                final result = await ApiService().bulkEnsureAllEmployeesSetup();
+                final updated = (result['updated'] as List?)?.length ?? 0;
+                final errors = (result['errors'] as List?)?.length ?? 0;
+                _showSnack(isAr
+                    ? 'تم إصلاح $updated موظف${errors > 0 ? " — $errors أخطاء" : ""}'
+                    : 'Fixed $updated employees${errors > 0 ? " — $errors errors" : ""}');
+                _refresh();
+              } catch (e) {
+                _showSnack(e.toString(), isError: true);
+              }
+            },
+          ),
           PopupMenuButton<bool?>(
             icon: const Icon(Icons.filter_list),
             onSelected: (value) {
