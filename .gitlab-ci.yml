@@ -49,52 +49,24 @@ build-web:
     - docker push "$CI_REGISTRY_IMAGE/web:$CI_COMMIT_SHORT_SHA"
 
 # ─────────────────────────────────────────────
-# Deploy to production VPS via SSH
+# Deploy to production via local Windows runner
 # ─────────────────────────────────────────────
 deploy-production:
   stage: deploy
-  image: alpine:3.20
+  tags:
+    - windows-docker
   needs:
     - build-backend
     - build-web
   before_script:
-    - apk add --no-cache openssh-client
-    - eval $(ssh-agent -s)
-    - printf '%s\n' "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
-    - chmod 644 ~/.ssh/known_hosts
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
   script:
-    # Copy latest compose file to VPS
-    - scp docker-compose.prod.gitlab.yml "${VPS_USER}@${VPS_HOST}:${PROJECT_PATH}/docker-compose.prod.gitlab.yml"
-    # Deploy on VPS
-    - |
-      ssh "${VPS_USER}@${VPS_HOST}" \
-        CI_REGISTRY="$CI_REGISTRY" \
-        CI_REGISTRY_USER="$CI_REGISTRY_USER" \
-        CI_REGISTRY_PASSWORD="$CI_REGISTRY_PASSWORD" \
-        PROJECT_PATH="$PROJECT_PATH" \
-        "bash -s" << 'ENDSSH'
-        set -euo pipefail
-        cd "$PROJECT_PATH"
-
-        # Login to GitLab Registry
-        printf '%s\n' "$CI_REGISTRY_PASSWORD" | \
-          docker login "$CI_REGISTRY" -u "$CI_REGISTRY_USER" --password-stdin
-
-        # Support Docker Compose v2 and legacy v1
-        COMPOSE="docker compose"
-        docker compose version >/dev/null 2>&1 || COMPOSE="docker-compose"
-
-        $COMPOSE -f docker-compose.prod.gitlab.yml --env-file .env.production pull
-        $COMPOSE -f docker-compose.prod.gitlab.yml --env-file .env.production up -d
-        $COMPOSE -f docker-compose.prod.gitlab.yml --env-file .env.production \
-          run --rm backend alembic upgrade head
-
-        echo "✅ Deploy completed successfully"
-      ENDSSH
+    - cd C:\khaled-jewelery
+    - docker compose -f docker-compose.prod.images.yml --env-file .env.production pull
+    - docker compose -f docker-compose.prod.images.yml --env-file .env.production up -d --remove-orphans
+    - docker image prune -f
+    - echo "Deploy completed successfully"
   environment:
     name: production
-    url: http://$VPS_HOST
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
