@@ -31620,6 +31620,28 @@ def create_office_reservation():
     except ValueError:
         return jsonify({'error': 'reservation_date يجب أن يكون بصيغة ISO'}), 400
 
+    # ── guard: duplicate reservation within 24 hours ─────────────────────────
+    if not data.get('force', False):
+        cutoff = datetime.now() - timedelta(hours=24)
+        dup = OfficeReservation.query.filter(
+            OfficeReservation.office_id == office_id,
+            OfficeReservation.weight_grams == weight_grams,
+            OfficeReservation.price_per_gram == price_per_gram,
+            OfficeReservation.status.in_(['approved', 'completed']),
+            OfficeReservation.created_at >= cutoff,
+        ).first()
+        if dup:
+            return jsonify({
+                'error': 'duplicate_reservation',
+                'message': (
+                    f'يوجد حجز مشابه لنفس المكتب بنفس الوزن والسعر خلال آخر 24 ساعة '
+                    f'(رقم الحجز: {dup.reservation_code}). '
+                    'إذا كان هذا مقصوداً أرسل "force": true في الطلب.'
+                ),
+                'existing_reservation_id': dup.id,
+                'existing_reservation_code': dup.reservation_code,
+            }), 409
+
     try:
         supplier = ensure_office_supplier(office)
         supplier_override = data.get('supplier_id')
