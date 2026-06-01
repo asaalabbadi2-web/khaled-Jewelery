@@ -34425,19 +34425,16 @@ def get_admin_dashboard():
     payables_due_7_days = 0.0
     receivables_due_7_days = 0.0
     try:
-        # Get suppliers with credit balances (we owe them)
-        suppliers = Customer.query.filter(Customer.customer_type == 'مورد').all()
-        for supplier in suppliers:
-            balance = float(getattr(supplier, 'balance', 0) or 0)
-            if balance < 0:  # Negative balance means we owe them
-                payables_due_7_days += abs(balance)
-        
-        # Get customers with debit balances (they owe us)
-        customers = Customer.query.filter(Customer.customer_type == 'عميل').all()
-        for customer in customers:
-            balance = float(getattr(customer, 'balance', 0) or 0)
-            if balance > 0:  # Positive balance means they owe us
-                receivables_due_7_days += balance
+        payables_due_7_days = float(
+            db.session.query(func.coalesce(func.sum(func.abs(Customer.balance)), 0.0))
+            .filter(Customer.customer_type == 'مورد', Customer.balance < 0)
+            .scalar() or 0.0
+        )
+        receivables_due_7_days = float(
+            db.session.query(func.coalesce(func.sum(Customer.balance), 0.0))
+            .filter(Customer.customer_type == 'عميل', Customer.balance > 0)
+            .scalar() or 0.0
+        )
     except Exception:
         payables_due_7_days = 0.0
         receivables_due_7_days = 0.0
