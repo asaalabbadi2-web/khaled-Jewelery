@@ -34834,114 +34834,102 @@ def get_admin_dashboard():
         except Exception:
             pass
 
+        # Pre-load employees once for username → name resolution.
+        _employee_name_cache: dict = {}
+        try:
+            for emp in Employee.query.with_entities(Employee.id, Employee.name).all():
+                if emp.name:
+                    _employee_name_cache[emp.id] = emp.name
+        except Exception:
+            pass
+
+        # Pre-load ALL sale+purchase invoices for the year range in ONE query.
+        # Python-side filtering per period is far cheaper than 12 round-trips.
+        _all_inv_types = list({**sale_types, **{t: 1 for t in ['شراء', 'شراء من عميل', 'مرتجع شراء', 'مرتجع شراء (مورد)']}, 'مرتجع بيع': -1}.keys())
+        _year_invoices: list = []
+        _year_items_by_inv: dict = {}
+        try:
+            _year_invoices = (
+                Invoice.query
+                .filter(Invoice.invoice_type.in_(_all_inv_types))
+                .filter(Invoice.is_posted.is_(True))
+                .filter(Invoice.date >= year_start)
+                .filter(Invoice.date < tomorrow_start)
+                .all()
+            )
+            if _year_invoices:
+                _inv_ids = [inv.id for inv in _year_invoices]
+                for item in InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(_inv_ids)).all():
+                    _year_items_by_inv.setdefault(item.invoice_id, []).append(item)
+        except Exception:
+            _year_invoices = []
+
+        # Build username→name map once from cached users + employees.
+        _posted_by_to_name: dict = {}
+        try:
+            for u in _cached_app_users:
+                if not u.employee_id:
+                    continue
+                emp_name = _employee_name_cache.get(u.employee_id, '')
+                if not emp_name:
+                    continue
+                for key in (str(u.username or '').strip().lower(), str(u.full_name or '').strip().lower()):
+                    if key and key not in _posted_by_to_name:
+                        _posted_by_to_name[key] = emp_name
+        except Exception:
+            pass
+
         def _build_inv_summary(inv_types_dict, start, end, exclude_gold_type=None):
-            # Uses Invoice.query directly (same proven pattern as today_invoices/series_invoices).
+            # Filters the pre-loaded _year_invoices cache — zero DB round-trips.
             try:
-                inv_types = [str(t).strip() for t in inv_types_dict.keys() if str(t).strip()]
-                if not inv_types:
+                inv_types_set = {str(t).strip() for t in inv_types_dict.keys() if str(t).strip()}
+                if not inv_types_set:
                     return dict(_EMPTY_INV_SUMMARY)
 
-                q = (
-                    Invoice.query
-                    .filter(Invoice.invoice_type.in_(inv_types))
-                    .filter(Invoice.is_posted.is_(True))
-                    .filter(Invoice.date >= start)
-                    .filter(Invoice.date < end)
-                )
+                rows = [
+                    inv for inv in _year_invoices
+                    if inv.invoice_type in inv_types_set
+                    and inv.date is not None
+                    and start <= inv.date < end
+                    and (not exclude_gold_type or getattr(inv, 'gold_type', None) != exclude_gold_type)
+                ]
 
-                if exclude_gold_type:
-                    try:
-                        if _db_has_column('invoice', 'gold_type'):
-                            q = q.filter(
-                                or_(Invoice.gold_type.is_(None), Invoice.gold_type != exclude_gold_type)
-                            )
-                    except Exception:
-                        pass
-
-                rows = q.all()
                 if not rows:
                     return dict(_EMPTY_INV_SUMMARY)
 
                 total_value = 0.0
                 total_weight = 0.0
-                by_user = {}
-                by_karat = {}
-                sign_by_id = {}
-                employee_ids = set()
-                posted_keys = set()
+                by_user: dict = {}
+                by_karat: dict = {}
 
                 for inv in rows:
                     sign = float(inv_types_dict.get(inv.invoice_type, 1) or 1)
-                    sign_by_id[inv.id] = sign
-                    total_value += float(inv.total or 0) * sign
-                    total_weight += float(inv.total_weight or 0) * sign
-                    if inv.employee_id:
-                        try:
-                            employee_ids.add(int(inv.employee_id))
-                        except Exception:
-                            pass
-                    posted_raw = str(inv.posted_by or '').strip().lower()
-                    if posted_raw:
-                        posted_keys.add(posted_raw)
-
-                # Resolve display name: employee name > posted_by username fallback
-                employee_name_by_id = {}
-                if employee_ids:
-                    try:
-                        for emp in Employee.query.filter(Employee.id.in_(list(employee_ids))).all():
-                            if emp.name:
-                                employee_name_by_id[emp.id] = emp.name
-                    except Exception:
-                        pass
-
-                posted_by_to_name = {}
-                if posted_keys:
-                    try:
-                        for u in _cached_app_users:
-                            if not u.employee_id:
-                                continue
-                            emp_name = employee_name_by_id.get(u.employee_id, '')
-                            if not emp_name:
-                                continue
-                            uk = str(u.username or '').strip().lower()
-                            if uk and uk in posted_keys:
-                                posted_by_to_name[uk] = emp_name
-                            fk = str(u.full_name or '').strip().lower()
-                            if fk and fk in posted_keys and fk not in posted_by_to_name:
-                                posted_by_to_name[fk] = emp_name
-                    except Exception:
-                        pass
-
-                for inv in rows:
-                    sign = float(sign_by_id.get(inv.id, 1) or 1)
                     v = float(inv.total or 0) * sign
                     w = float(inv.total_weight or 0) * sign
-                    if inv.employee_id and inv.employee_id in employee_name_by_id:
-                        user = employee_name_by_id[inv.employee_id]
+                    total_value += v
+                    total_weight += w
+
+                    # Resolve display name from caches (no DB call)
+                    if inv.employee_id and inv.employee_id in _employee_name_cache:
+                        user = _employee_name_cache[inv.employee_id]
                     else:
                         pk = str(inv.posted_by or '').strip().lower()
-                        user = posted_by_to_name.get(pk) or str(inv.posted_by or 'غير معروف').strip() or 'غير معروف'
-                    if user not in by_user:
-                        by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
-                    by_user[user]['value'] += v
-                    by_user[user]['weight'] += w
-                    by_user[user]['docs'] += 1
+                        user = _posted_by_to_name.get(pk) or str(inv.posted_by or 'غير معروف').strip() or 'غير معروف'
 
-                # Karat breakdown via InvoiceItem
-                try:
-                    inv_ids = [inv.id for inv in rows]
-                    for item in InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(inv_ids)).all():
-                        sign = float(sign_by_id.get(item.invoice_id, 1) or 1)
+                    bucket = by_user.setdefault(user, {'value': 0.0, 'weight': 0.0, 'docs': 0})
+                    bucket['value'] += v
+                    bucket['weight'] += w
+                    bucket['docs'] += 1
+
+                    # Karat breakdown from pre-loaded items cache
+                    for item in _year_items_by_inv.get(inv.id, []):
                         try:
                             k = f"{int(float(item.karat))}k" if item.karat not in (None, '') else '?'
                         except Exception:
                             k = '?'
-                        if k not in by_karat:
-                            by_karat[k] = {'weight': 0.0, 'value': 0.0}
-                        by_karat[k]['weight'] += float(item.weight or 0) * sign
-                        by_karat[k]['value'] += float(item.net or 0) * sign
-                except Exception:
-                    pass
+                        kb = by_karat.setdefault(k, {'weight': 0.0, 'value': 0.0})
+                        kb['weight'] += float(item.weight or 0) * sign
+                        kb['value'] += float(item.net or 0) * sign
 
                 return {
                     'total_value': round(total_value, 2),
@@ -34964,29 +34952,30 @@ def get_admin_dashboard():
 
         def _build_expenses_summary(start, end):
             try:
-                exp_total = 0.0
-                exp_by_account: dict = {}
-                exp_rows = (
-                    db.session.query(JELine, AccModel)
-                    .join(AccModel, JELine.account_id == AccModel.id)
+                agg_rows = (
+                    db.session.query(
+                        AccModel.name,
+                        AccModel.account_number,
+                        func.coalesce(func.sum(JELine.cash_debit), 0.0).label('total'),
+                    )
+                    .join(JELine, JELine.account_id == AccModel.id)
                     .join(JE2, JELine.journal_entry_id == JE2.id)
                     .filter(AccModel.account_number.like('5%'))
                     .filter(JE2.is_posted.is_(True))
                     .filter(JE2.date >= start)
                     .filter(JE2.date < end)
+                    .group_by(AccModel.id, AccModel.name, AccModel.account_number)
+                    .having(func.coalesce(func.sum(JELine.cash_debit), 0.0) > 0)
+                    .order_by(func.coalesce(func.sum(JELine.cash_debit), 0.0).desc())
                     .all()
                 )
-                for line, acc in exp_rows:
-                    amt = float(line.cash_debit or 0)
-                    exp_total += amt
-                    name = (acc.name or acc.account_number or '?').strip()
-                    exp_by_account[name] = exp_by_account.get(name, 0.0) + amt
+                exp_total = sum(float(r.total or 0) for r in agg_rows)
                 return {
                     'total_value': round(exp_total, 2),
-                    'by_account': sorted(
-                        [{'account': a, 'value': round(v, 2)} for a, v in exp_by_account.items() if v > 0],
-                        key=lambda x: -x['value']
-                    ),
+                    'by_account': [
+                        {'account': (r.name or r.account_number or '?').strip(), 'value': round(float(r.total or 0), 2)}
+                        for r in agg_rows
+                    ],
                 }
             except Exception:
                 return {'total_value': 0.0, 'by_account': []}
@@ -34995,15 +34984,13 @@ def get_admin_dashboard():
             """مشتريات الكسر والتسكير فقط (gold_type='scrap')."""
             try:
                 scrap_inv_types = {'شراء من عميل': 1, 'شراء': 1, 'مرتجع شراء': -1}
-                invs = (
-                    Invoice.query
-                    .filter(Invoice.invoice_type.in_(list(scrap_inv_types.keys())))
-                    .filter(Invoice.gold_type == 'scrap')
-                    .filter(Invoice.is_posted.is_(True))
-                    .filter(Invoice.date >= start)
-                    .filter(Invoice.date < end)
-                    .all()
-                )
+                invs = [
+                    inv for inv in _year_invoices
+                    if inv.invoice_type in scrap_inv_types
+                    and getattr(inv, 'gold_type', None) == 'scrap'
+                    and inv.date is not None
+                    and start <= inv.date < end
+                ]
                 total_value = 0.0
                 total_weight = 0.0
                 for inv in invs:
