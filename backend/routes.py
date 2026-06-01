@@ -7511,7 +7511,7 @@ def pending_post_invoices():
 
         # Pre-fetch approval alerts for all invoices in one query
         inv_ids = [inv.id for inv in invoices]
-        approval_alerts = {}
+        approval_alerts = {}  # inv_id -> {'message': str, 'details': dict}
         try:
             from models import SystemAlert
             alerts = (
@@ -7524,7 +7524,15 @@ def pending_post_invoices():
             )
             for a in alerts:
                 if a.entity_id not in approval_alerts:
-                    approval_alerts[a.entity_id] = a.message or ''
+                    parsed_details = {}
+                    try:
+                        parsed_details = json.loads(a.details) if a.details else {}
+                    except Exception:
+                        pass
+                    approval_alerts[a.entity_id] = {
+                        'message': a.message or '',
+                        'details': parsed_details,
+                    }
         except Exception:
             pass
 
@@ -7544,15 +7552,57 @@ def pending_post_invoices():
             elif getattr(inv, 'employee', None) and inv.employee.name:
                 creator = inv.employee.name
 
+            alert_info = approval_alerts.get(inv.id, {})
+
+            # Extract karat info from karat_lines (supplier purchases)
+            karat_info = []
+            try:
+                for kl in (inv.karat_lines or []):
+                    karat_info.append({
+                        'karat': int(kl.karat or 0),
+                        'weight_grams': float(kl.weight_grams or 0),
+                        'price_per_gram': round(float(kl.gold_value_cash or 0) / float(kl.weight_grams), 2)
+                            if (kl.weight_grams or 0) > 0 else 0.0,
+                        'gold_value': float(kl.gold_value_cash or 0),
+                    })
+            except Exception:
+                pass
+
+            # Extract karat info from invoice_items (sales)
+            if not karat_info:
+                try:
+                    seen_karats: dict = {}
+                    for item in (inv.items or []):
+                        k = int(float(item.karat or 0)) if item.karat else 0
+                        if k not in seen_karats:
+                            seen_karats[k] = {'weight': 0.0, 'value': 0.0}
+                        seen_karats[k]['weight'] += float(item.weight or 0)
+                        seen_karats[k]['value'] += float(item.net or 0)
+                    for k, v in seen_karats.items():
+                        karat_info.append({
+                            'karat': k,
+                            'weight_grams': round(v['weight'], 4),
+                            'price_per_gram': round(v['value'] / v['weight'], 2) if v['weight'] > 0 else 0.0,
+                            'gold_value': round(v['value'], 2),
+                        })
+                except Exception:
+                    pass
+
             result.append({
                 'id': inv.id,
                 'invoice_number': inv.invoice_number,
                 'invoice_type': inv.invoice_type or '',
                 'total_amount': float(inv.total or 0),
+                'total_weight': float(inv.total_weight or 0),
+                'gold_type': getattr(inv, 'gold_type', None) or 'new',
+                'gold_subtotal': float(getattr(inv, 'gold_subtotal', 0) or 0),
+                'payment_method': getattr(inv, 'payment_method', None) or '',
                 'party_name': party_name,
                 'created_by_name': creator,
                 'created_at': inv.date.isoformat() if inv.date else None,
-                'approval_reason_message': approval_alerts.get(inv.id, ''),
+                'karat_lines': karat_info,
+                'approval_reason_message': alert_info.get('message', ''),
+                'approval_details': alert_info.get('details', {}),
             })
 
         return jsonify({

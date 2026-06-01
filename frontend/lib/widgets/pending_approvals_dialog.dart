@@ -151,10 +151,20 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     final isAr = widget.isArabic;
     final reason = (invoice['approval_reason_message'] as String?) ?? '';
     final invoiceNumber = invoice['invoice_number']?.toString() ?? '';
-    final total = invoice['total_amount'];
+    final total = (invoice['total_amount'] as num?)?.toDouble() ?? 0.0;
+    final totalWeight = (invoice['total_weight'] as num?)?.toDouble() ?? 0.0;
+    final goldSubtotal = (invoice['gold_subtotal'] as num?)?.toDouble() ?? 0.0;
+    final goldType = invoice['gold_type']?.toString() ?? '';
     final party = invoice['party_name']?.toString() ?? '';
     final creator = invoice['created_by_name']?.toString() ?? '';
+    final paymentMethod = invoice['payment_method']?.toString() ?? '';
+    final karatLines = (invoice['karat_lines'] as List?) ?? [];
     final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+
+    final goldTypeLabel = goldType == 'scrap'
+        ? (isAr ? 'كسر' : 'Scrap')
+        : (isAr ? 'جديد' : 'New');
 
     showModalBottomSheet(
       context: context,
@@ -162,65 +172,130 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       backgroundColor: Colors.transparent,
       builder: (_) => Container(
         decoration: BoxDecoration(
-          color: theme.cardColor,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+          color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Center(
-              child: Container(
-                width: 36, height: 4,
-                decoration: BoxDecoration(
-                  color: theme.dividerColor,
-                  borderRadius: BorderRadius.circular(2),
+        padding: EdgeInsets.fromLTRB(20, 12, 20, MediaQuery.of(context).viewInsets.bottom + 28),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Handle bar
+              Center(
+                child: Container(
+                  width: 36, height: 4,
+                  decoration: BoxDecoration(
+                    color: theme.dividerColor,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
                 ),
               ),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              invoiceNumber,
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            if (party.isNotEmpty)
-              _detailRow(isAr ? 'الطرف' : 'Party', party, theme),
-            _detailRow(
-              isAr ? 'المبلغ' : 'Amount',
-              total is num ? total.toStringAsFixed(2) : '—',
-              theme,
-            ),
-            if (creator.isNotEmpty)
-              _detailRow(isAr ? 'المنشئ' : 'Created by', creator, theme),
-            if (reason.isNotEmpty) ...[
-              const Divider(height: 24),
+              const SizedBox(height: 14),
+              // Header
               Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.info_outline, size: 16, color: Colors.orange),
-                  const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      reason,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        color: Colors.orange,
-                        fontWeight: FontWeight.w600,
+                      invoiceNumber,
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: goldType == 'scrap'
+                          ? Colors.brown.withValues(alpha: 0.12)
+                          : AppColors.primaryGold.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      goldTypeLabel,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: goldType == 'scrap' ? Colors.brown : AppColors.primaryGold,
                       ),
                     ),
                   ),
                 ],
               ),
-            ] else ...[
-              const Divider(height: 24),
-              Text(
-                isAr ? 'تحتاج اعتماداً قبل الترحيل' : 'Requires approval before posting',
-                style: TextStyle(fontSize: 13, color: theme.hintColor),
+              const SizedBox(height: 14),
+
+              // Main info
+              if (party.isNotEmpty) _detailRow(isAr ? 'الطرف' : 'Party', party, theme),
+              if (creator.isNotEmpty) _detailRow(isAr ? 'المنشئ' : 'Created by', creator, theme),
+              if (paymentMethod.isNotEmpty) _detailRow(isAr ? 'وسيلة الدفع' : 'Payment', paymentMethod, theme),
+              _detailRow(isAr ? 'إجمالي الفاتورة' : 'Total', '${total.toStringAsFixed(2)} ر.س', theme),
+              if (goldSubtotal > 0 && goldSubtotal != total)
+                _detailRow(isAr ? 'قيمة الذهب' : 'Gold value', '${goldSubtotal.toStringAsFixed(2)} ر.س', theme),
+              if (totalWeight > 0)
+                _detailRow(isAr ? 'إجمالي الوزن' : 'Total weight', '${totalWeight.toStringAsFixed(3)} جم', theme),
+
+              // Karat breakdown
+              if (karatLines.isNotEmpty) ...[
+                const Divider(height: 22),
+                Text(
+                  isAr ? 'تفاصيل العيارات' : 'Karat details',
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: theme.hintColor),
+                ),
+                const SizedBox(height: 8),
+                ...karatLines.map((kl) {
+                  final karat = kl['karat'] ?? 0;
+                  final weight = (kl['weight_grams'] as num?)?.toDouble() ?? 0.0;
+                  final ppg = (kl['price_per_gram'] as num?)?.toDouble() ?? 0.0;
+                  final value = (kl['gold_value'] as num?)?.toDouble() ?? 0.0;
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryGold.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text('${karat}k', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryGold)),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(child: Text('${weight.toStringAsFixed(3)} جم', style: const TextStyle(fontSize: 12))),
+                        Text('${ppg.toStringAsFixed(2)} ر.س/جم', style: TextStyle(fontSize: 12, color: theme.hintColor)),
+                        const SizedBox(width: 8),
+                        Text('${value.toStringAsFixed(2)} ر.س', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                  );
+                }),
+              ],
+
+              // Approval reason
+              const Divider(height: 22),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    reason.isNotEmpty ? Icons.warning_amber_rounded : Icons.info_outline,
+                    size: 18,
+                    color: reason.isNotEmpty ? Colors.orange : theme.hintColor,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      reason.isNotEmpty
+                          ? reason
+                          : (isAr ? 'تحتاج اعتماداً قبل الترحيل' : 'Requires approval before posting'),
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: reason.isNotEmpty ? Colors.orange : theme.hintColor,
+                        fontWeight: reason.isNotEmpty ? FontWeight.w600 : FontWeight.normal,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
-          ],
+          ),
         ),
       ),
     );
@@ -230,9 +305,10 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 90,
+            width: 100,
             child: Text(label, style: TextStyle(fontSize: 12, color: theme.hintColor)),
           ),
           Expanded(
