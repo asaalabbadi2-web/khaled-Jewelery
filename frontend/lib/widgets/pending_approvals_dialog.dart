@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../theme/app_theme.dart';
 import '../providers/auth_provider.dart';
-import '../screens/invoices_list_screen.dart';
 import '../screens/posting_management_screen.dart';
 
 class PendingApprovalsDialog extends StatefulWidget {
@@ -148,15 +147,100 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     }
   }
 
-  Future<void> _viewDetails(Map<String, dynamic> invoice) async {
-    Navigator.of(context).pop();
-    await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => InvoicesListScreen(isArabic: widget.isArabic),
+  void _viewDetails(Map<String, dynamic> invoice) {
+    final isAr = widget.isArabic;
+    final reason = (invoice['approval_reason_message'] as String?) ?? '';
+    final invoiceNumber = invoice['invoice_number']?.toString() ?? '';
+    final total = invoice['total_amount'];
+    final party = invoice['party_name']?.toString() ?? '';
+    final creator = invoice['created_by_name']?.toString() ?? '';
+    final theme = Theme.of(context);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: BoxDecoration(
+          color: theme.cardColor,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                decoration: BoxDecoration(
+                  color: theme.dividerColor,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              invoiceNumber,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 12),
+            if (party.isNotEmpty)
+              _detailRow(isAr ? 'الطرف' : 'Party', party, theme),
+            _detailRow(
+              isAr ? 'المبلغ' : 'Amount',
+              total is num ? total.toStringAsFixed(2) : '—',
+              theme,
+            ),
+            if (creator.isNotEmpty)
+              _detailRow(isAr ? 'المنشئ' : 'Created by', creator, theme),
+            if (reason.isNotEmpty) ...[
+              const Divider(height: 24),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.info_outline, size: 16, color: Colors.orange),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      reason,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Colors.orange,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ] else ...[
+              const Divider(height: 24),
+              Text(
+                isAr ? 'تحتاج اعتماداً قبل الترحيل' : 'Requires approval before posting',
+                style: TextStyle(fontSize: 13, color: theme.hintColor),
+              ),
+            ],
+          ],
+        ),
       ),
     );
-    widget.onCountChanged?.call();
+  }
+
+  Widget _detailRow(String label, String value, ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 90,
+            child: Text(label, style: TextStyle(fontSize: 12, color: theme.hintColor)),
+          ),
+          Expanded(
+            child: Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openPostingManagement() async {

@@ -7509,6 +7509,25 @@ def pending_post_invoices():
             .all()
         )
 
+        # Pre-fetch approval alerts for all invoices in one query
+        inv_ids = [inv.id for inv in invoices]
+        approval_alerts = {}
+        try:
+            from models import SystemAlert
+            alerts = (
+                SystemAlert.query
+                .filter(SystemAlert.entity_type == 'Invoice')
+                .filter(SystemAlert.entity_id.in_(inv_ids))
+                .filter(SystemAlert.alert_type == 'invoice_approval')
+                .order_by(SystemAlert.created_at.desc())
+                .all()
+            )
+            for a in alerts:
+                if a.entity_id not in approval_alerts:
+                    approval_alerts[a.entity_id] = a.message or ''
+        except Exception:
+            pass
+
         result = []
         for inv in invoices:
             # party name
@@ -7533,6 +7552,7 @@ def pending_post_invoices():
                 'party_name': party_name,
                 'created_by_name': creator,
                 'created_at': inv.date.isoformat() if inv.date else None,
+                'approval_reason_message': approval_alerts.get(inv.id, ''),
             })
 
         return jsonify({
