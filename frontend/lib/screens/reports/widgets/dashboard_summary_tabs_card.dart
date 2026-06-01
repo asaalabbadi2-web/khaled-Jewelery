@@ -16,10 +16,10 @@ typedef _SummaryTabInfo = ({
   Map<String, dynamic> data,
 });
 
-/// A compact operations summary card with internal tabs.
+/// A compact operations summary card with internal tabs and period switcher.
 class DashboardSummaryTabsCard extends StatefulWidget {
-  final Map<String, dynamic> periodData;
-  final Map<String, dynamic> prevData;
+  /// All three periods: {'today': {...}, 'month': {...}, 'year': {...}}
+  final Map<String, dynamic> allPeriodsData;
   final bool isArabic;
   final NumberFormat currencyFormat;
   final String currencySymbol;
@@ -29,8 +29,7 @@ class DashboardSummaryTabsCard extends StatefulWidget {
 
   const DashboardSummaryTabsCard({
     super.key,
-    required this.periodData,
-    this.prevData = const {},
+    required this.allPeriodsData,
     required this.isArabic,
     required this.currencyFormat,
     this.currencySymbol = 'ر.س',
@@ -46,6 +45,10 @@ class DashboardSummaryTabsCard extends StatefulWidget {
 
 class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
   _SummaryTab _activeTab = _SummaryTab.sales;
+  String _activePeriod = 'today'; // 'today' | 'month' | 'year'
+
+  Map<String, dynamic> get _periodData =>
+      (widget.allPeriodsData[_activePeriod] as Map<String, dynamic>?) ?? {};
 
   double _asDouble(dynamic v) => v is num ? v.toDouble() : 0.0;
   double _s(double v) => widget.scale(v);
@@ -78,7 +81,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
   }
 
   double? _prevTabValue(_SummaryTab tab) {
-    final prev = widget.prevData;
+    final prev = const <String, dynamic>{};
     if (prev.isEmpty) return null;
     switch (tab) {
       case _SummaryTab.sales:
@@ -108,7 +111,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
     final isAr = widget.isArabic;
     switch (tab) {
       case _SummaryTab.sales:
-        final d = (widget.periodData['sales'] as Map<String, dynamic>?) ?? {};
+        final d = (_periodData['sales'] as Map<String, dynamic>?) ?? {};
         return (
           label: isAr ? 'المبيعات' : 'Sales',
           count: (d['docs'] as int?) ?? 0,
@@ -120,7 +123,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
         );
       case _SummaryTab.purchases:
         final d =
-            (widget.periodData['purchases'] as Map<String, dynamic>?) ?? {};
+            (_periodData['purchases'] as Map<String, dynamic>?) ?? {};
         return (
           label: isAr ? 'المشتريات' : 'Purchases',
           count: (d['docs'] as int?) ?? 0,
@@ -131,7 +134,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
           data: d,
         );
       case _SummaryTab.scrap:
-        final d = (widget.periodData['scrap_purchases']
+        final d = (_periodData['scrap_purchases']
                 as Map<String, dynamic>?) ??
             {};
         return (
@@ -145,7 +148,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
         );
       case _SummaryTab.expenses:
         final d =
-            (widget.periodData['expenses'] as Map<String, dynamic>?) ?? {};
+            (_periodData['expenses'] as Map<String, dynamic>?) ?? {};
         return (
           label: isAr ? 'المصروفات' : 'Expenses',
           count: (d['docs'] as int?) ?? 0,
@@ -182,7 +185,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Padding(
-            padding: EdgeInsets.fromLTRB(_s(16), _s(14), _s(16), _s(12)),
+            padding: EdgeInsets.fromLTRB(_s(16), _s(14), _s(16), _s(8)),
             child: Row(
               children: [
                 Icon(
@@ -200,6 +203,7 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
                     ),
                   ),
                 ),
+                _buildPeriodSwitcher(theme, isAr),
               ],
             ),
           ),
@@ -229,6 +233,45 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildPeriodSwitcher(ThemeData theme, bool isAr) {
+    final periods = [
+      ('today', isAr ? 'اليوم' : 'Today'),
+      ('month', isAr ? 'الشهر' : 'Month'),
+      ('year', isAr ? 'السنة' : 'Year'),
+    ];
+    return Container(
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
+        borderRadius: BorderRadius.circular(_s(8)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: periods.map((p) {
+          final isActive = _activePeriod == p.$1;
+          return GestureDetector(
+            onTap: () => setState(() => _activePeriod = p.$1),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 160),
+              padding: EdgeInsets.symmetric(horizontal: _s(9), vertical: _s(4)),
+              decoration: BoxDecoration(
+                color: isActive ? AppColors.primaryGold : Colors.transparent,
+                borderRadius: BorderRadius.circular(_s(7)),
+              ),
+              child: Text(
+                p.$2,
+                style: TextStyle(
+                  fontSize: _s(10.5),
+                  fontWeight: FontWeight.w700,
+                  color: isActive ? Colors.white : theme.textTheme.bodySmall?.color,
+                ),
+              ),
+            ),
+          );
+        }).toList(),
       ),
     );
   }
