@@ -606,7 +606,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     vertical: _s(8),
                   ),
                   child: DashboardSummaryTabsCard(
-                    allPeriodsData: salesPurchasesSummary,
+                    periodData: (salesPurchasesSummary[_summaryPeriod] as Map<String, dynamic>?) ?? {},
                     isArabic: widget.isArabic,
                     currencyFormat: _currencyFormat,
                     currencySymbol: _currencySymbol,

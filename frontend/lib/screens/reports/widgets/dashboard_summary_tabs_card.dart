@@ -16,10 +16,9 @@ typedef _SummaryTabInfo = ({
   Map<String, dynamic> data,
 });
 
-/// A compact operations summary card with internal tabs and period switcher.
+/// A compact operations summary card with internal tabs.
 class DashboardSummaryTabsCard extends StatefulWidget {
-  /// All three periods: {'today': {...}, 'month': {...}, 'year': {...}}
-  final Map<String, dynamic> allPeriodsData;
+  final Map<String, dynamic> periodData;
   final bool isArabic;
   final NumberFormat currencyFormat;
   final String currencySymbol;
@@ -29,7 +28,7 @@ class DashboardSummaryTabsCard extends StatefulWidget {
 
   const DashboardSummaryTabsCard({
     super.key,
-    required this.allPeriodsData,
+    required this.periodData,
     required this.isArabic,
     required this.currencyFormat,
     this.currencySymbol = 'ر.س',
@@ -45,10 +44,8 @@ class DashboardSummaryTabsCard extends StatefulWidget {
 
 class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
   _SummaryTab _activeTab = _SummaryTab.sales;
-  String _activePeriod = 'today'; // 'today' | 'month' | 'year'
 
-  Map<String, dynamic> get _periodData =>
-      (widget.allPeriodsData[_activePeriod] as Map<String, dynamic>?) ?? {};
+  Map<String, dynamic> get _periodData => widget.periodData;
 
   double _asDouble(dynamic v) => v is num ? v.toDouble() : 0.0;
   double _s(double v) => widget.scale(v);
@@ -203,7 +200,6 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
                     ),
                   ),
                 ),
-                _buildPeriodSwitcher(theme, isAr),
               ],
             ),
           ),
@@ -233,45 +229,6 @@ class _DashboardSummaryTabsCardState extends State<DashboardSummaryTabsCard> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildPeriodSwitcher(ThemeData theme, bool isAr) {
-    final periods = [
-      ('today', isAr ? 'اليوم' : 'Today'),
-      ('month', isAr ? 'الشهر' : 'Month'),
-      ('year', isAr ? 'السنة' : 'Year'),
-    ];
-    return Container(
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.35),
-        borderRadius: BorderRadius.circular(_s(8)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: periods.map((p) {
-          final isActive = _activePeriod == p.$1;
-          return GestureDetector(
-            onTap: () => setState(() => _activePeriod = p.$1),
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              padding: EdgeInsets.symmetric(horizontal: _s(9), vertical: _s(4)),
-              decoration: BoxDecoration(
-                color: isActive ? AppColors.primaryGold : Colors.transparent,
-                borderRadius: BorderRadius.circular(_s(7)),
-              ),
-              child: Text(
-                p.$2,
-                style: TextStyle(
-                  fontSize: _s(10.5),
-                  fontWeight: FontWeight.w700,
-                  color: isActive ? Colors.white : theme.textTheme.bodySmall?.color,
-                ),
-              ),
-            ),
-          );
-        }).toList(),
       ),
     );
   }
