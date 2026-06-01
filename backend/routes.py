@@ -34248,70 +34248,6 @@ def get_admin_dashboard():
         except Exception:
             inventory_value = None
 
-    # --- Critical alerts (unreviewed) ---
-    critical_unreviewed_count = 0
-    critical_latest = None
-    try:
-        critical_unreviewed_count = (
-            SystemAlert.query.filter(SystemAlert.severity == 'critical')
-            .filter(SystemAlert.is_reviewed.is_(False))
-            .count()
-        )
-        critical_latest = (
-            SystemAlert.query.filter(SystemAlert.severity == 'critical')
-            .filter(SystemAlert.is_reviewed.is_(False))
-            .order_by(SystemAlert.created_at.desc())
-            .first()
-        )
-        critical_latest = critical_latest.to_dict() if critical_latest else None
-    except Exception:
-        critical_unreviewed_count = 0
-        critical_latest = None
-
-    # --- Alerts: last shift closing (system-wide) ---
-    last_shift_alert = None
-    try:
-        last_close = (
-            AuditLog.query.filter_by(action='shift_closing', success=True)
-            .order_by(AuditLog.timestamp.desc())
-            .first()
-        )
-        if last_close and last_close.details:
-            try:
-                details = (
-                    json.loads(last_close.details)
-                    if isinstance(last_close.details, str)
-                    else (last_close.details or {})
-                )
-            except Exception:
-                details = {}
-
-            cash_diff = None
-            try:
-                cash_diff = float(((details.get('totals') or {}).get('total_difference')))
-            except Exception:
-                cash_diff = None
-
-            gold_pure_diff = None
-            try:
-                gold_pure_diff = float(
-                    (((details.get('gold') or {}).get('pure_24k') or {}).get('difference'))
-                )
-            except Exception:
-                gold_pure_diff = None
-
-            last_shift_alert = {
-                'entity_number': getattr(last_close, 'entity_number', None),
-                'timestamp': last_close.timestamp.isoformat()
-                if getattr(last_close, 'timestamp', None)
-                else None,
-                'user_name': getattr(last_close, 'user_name', None),
-                'cash_difference': cash_diff,
-                'gold_pure_24k_difference': gold_pure_diff,
-            }
-    except Exception:
-        last_shift_alert = None
-
     # --- Purchases today (posted only) ---
     # Include both supplier purchases and scrap purchases from customers,
     # and include return variants used in production.
@@ -34641,160 +34577,6 @@ def get_admin_dashboard():
         safe_boxes_enhanced = safe_boxes_summary
 
     # --- Sensitive Operations (Last 5 important actions) ---
-    sensitive_operations = []
-    try:
-        noise_actions = {
-            'login_success', 'login_failed', 'logout',
-            'forgot_password', 'forgot_username', 'password_reset_confirm',
-        }
-
-        recent_logs = (
-            AuditLog.query
-            .filter(AuditLog.success.is_(True))
-            .filter(~AuditLog.action.in_(list(noise_actions)))
-            .order_by(AuditLog.timestamp.desc())
-            .limit(8)
-            .all()
-        )
-        for log in recent_logs:
-            op_desc = {
-                # Shift closing
-                'shift_closing': 'إغلاق وردية',
-                # Posting/unposting
-                'post_invoice': 'ترحيل فاتورة',
-                'post': 'ترحيل',
-                'post_batch': 'ترحيل دفعة',
-                'unpost': 'إلغاء ترحيل',
-                # Vouchers
-                'approve_voucher': 'ترحيل سند',
-                'cancel_voucher': 'إلغاء سند',
-                'voucher_approve': 'اعتماد سند',
-                'voucher_reject': 'رفض سند',
-                'voucher_unapprove': 'إلغاء اعتماد سند',
-                'batch_voucher_approve': 'اعتماد دفعة سندات',
-                # Safety/ops
-                'delete_voucher': 'حذف سند',
-                'large_discount': 'خصم كبير',
-                'create_invoice': 'إنشاء فاتورة',
-            }.get(log.action, log.action)
-            
-            sensitive_operations.append({
-                'action': log.action,
-                'description': op_desc,
-                'user_name': getattr(log, 'user_name', None) or 'غير معروف',
-                'entity_type': getattr(log, 'entity_type', None),
-                'entity_number': getattr(log, 'entity_number', None),
-                'timestamp': log.timestamp.isoformat() if log.timestamp else None,
-                'time_ago': _time_ago(log.timestamp, now) if log.timestamp else None,
-            })
-    except Exception:
-        sensitive_operations = []
-
-    # --- Critical Alert Bar (compact) ---
-    critical_bar = []
-    try:
-        # 0) Count of unreviewed critical alerts (even if latest message missing)
-        try:
-            ccount = int(critical_unreviewed_count or 0)
-        except Exception:
-            ccount = 0
-
-        if ccount > 0:
-            critical_bar.append({
-                'severity': 'critical',
-                'message_ar': f"{ccount} تنبيهات حرجة بانتظار المراجعة",
-                'message_en': f"{ccount} critical alerts pending review",
-                'entity_type': 'SystemAlert',
-                'entity_number': None,
-            })
-
-        # 1) Latest unreviewed critical system alert
-        if isinstance(critical_latest, dict):
-            msg = (critical_latest.get('message') or critical_latest.get('title') or '').strip()
-            if msg:
-                critical_bar.append({
-                    'severity': 'critical',
-                    'message_ar': msg,
-                    'message_en': msg,
-                    'entity_type': critical_latest.get('entity_type'),
-                    'entity_number': critical_latest.get('entity_number'),
-                })
-
-        # 2) Shift closing diffs (when present)
-        if isinstance(last_shift_alert, dict):
-            cash_diff = last_shift_alert.get('cash_difference')
-            gold_diff = last_shift_alert.get('gold_pure_24k_difference')
-            entity_num = last_shift_alert.get('entity_number')
-            try:
-                cash_diff_f = float(cash_diff) if cash_diff is not None else 0.0
-            except Exception:
-                cash_diff_f = 0.0
-            try:
-                gold_diff_f = float(gold_diff) if gold_diff is not None else 0.0
-            except Exception:
-                gold_diff_f = 0.0
-
-            if abs(gold_diff_f) > 0.001:
-                critical_bar.append({
-                    'severity': 'warning',
-                    'message_ar': f"⚠️ يوجد فرق وزني (+/-{gold_diff_f:.3f} جم 24K) في إغلاق {entity_num or ''}".strip(),
-                    'message_en': f"Weight difference ({gold_diff_f:+.3f} g 24K) in shift closing {entity_num or ''}".strip(),
-                    'entity_type': 'ShiftClosing',
-                    'entity_number': entity_num,
-                })
-
-            if abs(cash_diff_f) > 0.01:
-                critical_bar.append({
-                    'severity': 'warning',
-                    'message_ar': f"⚠️ يوجد فرق نقدي ({cash_diff_f:+.2f}) في إغلاق {entity_num or ''}".strip(),
-                    'message_en': f"Cash difference ({cash_diff_f:+.2f}) in shift closing {entity_num or ''}".strip(),
-                    'entity_type': 'ShiftClosing',
-                    'entity_number': entity_num,
-                })
-
-        # 3) Low bank balance (optional threshold)
-        threshold = None
-        try:
-            raw_thr = os.getenv('BANK_LOW_BALANCE_THRESHOLD', '').strip()
-            if raw_thr:
-                threshold = float(raw_thr)
-        except Exception:
-            threshold = None
-
-        if threshold is not None:
-            for sb in safe_boxes_enhanced:
-                if (sb.get('safe_type') or '') != 'bank':
-                    continue
-                try:
-                    bal = float(sb.get('balance_cash') or 0.0)
-                except Exception:
-                    bal = 0.0
-                if bal < threshold:
-                    name = sb.get('name') or 'Bank'
-                    critical_bar.append({
-                        'severity': 'warning',
-                        'message_ar': f"⚠️ رصيد {name} تحت الحد المسموح ({bal:.2f} < {threshold:.2f})",
-                        'message_en': f"{name} balance below threshold ({bal:.2f} < {threshold:.2f})",
-                        'entity_type': 'SafeBox',
-                        'entity_number': None,
-                    })
-
-        # 4) Unposted invoices
-        try:
-            up = int(unposted_invoices_count or 0)
-        except Exception:
-            up = 0
-        if up > 0:
-            critical_bar.append({
-                'severity': 'warning',
-                'message_ar': f"⚠️ {up} فاتورة بانتظار الترحيل",
-                'message_en': f"{up} invoices pending posting",
-                'entity_type': 'Invoice',
-                'entity_number': None,
-            })
-    except Exception:
-        critical_bar = []
-
     # --- Liquidity breakdown (Cash vs Banks) ---
     cash_in_hand = 0.0
     cash_in_banks = 0.0
@@ -35100,13 +34882,6 @@ def get_admin_dashboard():
                 for row in last_7_days_purchases
             ],
         },
-        'alerts': {
-            'last_shift_closing': last_shift_alert,
-            'critical_unreviewed_count': int(critical_unreviewed_count or 0),
-            'critical_unreviewed_latest': critical_latest,
-            'unposted_invoices_count': unposted_invoices_count,
-            'critical_bar': critical_bar[:3],
-        },
         'valuation': {
             'spot_price_24k_per_gram': round(float(spot_price_24k_per_gram), 2)
             if spot_price_24k_per_gram is not None
@@ -35127,7 +34902,6 @@ def get_admin_dashboard():
             'coverage_ratio_pct': round(liquidity_coverage_ratio, 1) if liquidity_coverage_ratio is not None else None,
         },
         'safe_boxes': safe_boxes_enhanced,
-        'sensitive_operations': sensitive_operations,
         'sales_purchases_summary': sales_purchases_summary,
     }), 200
 

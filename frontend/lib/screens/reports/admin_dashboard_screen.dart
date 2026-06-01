@@ -50,15 +50,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   Map<String, dynamic>? _gramProfitData;
   bool _gramProfitLoading = false;
 
-  // ── Overlay alert state ──────────────────────────────────────────────────
-  /// Alerts that the user has manually dismissed (by id/text key).
-  final Set<String> _dismissedAlertKeys = {};
-  /// Live OverlayEntry for the floating toast stack (null = not shown).
-  OverlayEntry? _toastOverlayEntry;
-
-  // ── Alert badge (pending approvals + system alerts) ──────────────────────
-  int _alertsBadgeCount = 0;
-
   // ── Vault ordering ────────────────────────────────────────────────────────
   /// Local ordered list of safe-box ids (persisted in SharedPreferences).
   List<int> _vaultOrder = [];
@@ -120,8 +111,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   @override
   void dispose() {
     AppEvents.vaultRefreshSignal.removeListener(_onVaultRefresh);
-    _toastOverlayEntry?.remove();
-    _toastOverlayEntry = null;
     _vaultScrollController.dispose();
     super.dispose();
   }
@@ -246,10 +235,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
-        _refreshAlertsBadge();
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _updateToastOverlay();
-        });
       }
     }
   }
@@ -386,53 +371,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     }
   }
 
-  void _refreshAlertsBadge() {
-    if (!mounted) return;
-    final alerts = (_response?['alerts'] as Map<String, dynamic>?) ?? {};
-    final criticalBar = (alerts['critical_bar'] as List?) ?? [];
-    final criticalCount = alerts['critical_unreviewed_count'];
-    final unpostedCount = alerts['unposted_invoices_count'];
-    final lastShift = alerts['last_shift_closing'] as Map<String, dynamic>?;
-    final cashDiff = lastShift?['cash_difference'];
-    final goldDiff = lastShift?['gold_pure_24k_difference'];
-
-    int count = criticalBar.length;
-    if ((criticalCount is num ? criticalCount.toInt() : 0) > 0) count++;
-    if ((cashDiff is num ? cashDiff.toDouble() : 0.0).abs() > 0.01) count++;
-    if ((goldDiff is num ? goldDiff.toDouble() : 0.0).abs() > 0.001) count++;
-    if ((unpostedCount is num ? unpostedCount.toInt() : 0) > 0) count++;
-
-    setState(() => _alertsBadgeCount = count);
-  }
-
-  void _updateToastOverlay() {
-    _toastOverlayEntry?.remove();
-    _toastOverlayEntry = null;
-    if (!mounted) return;
-    final alerts = _getAllAlerts();
-    if (alerts.isEmpty) return;
-    final entry = OverlayEntry(
-      builder: (ctx) => Positioned(
-        bottom: 24,
-        left: 16,
-        child: Material(
-          color: Colors.transparent,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: alerts
-                .map((a) => _buildToastCard(a, onDismiss: () {
-                      setState(() => _dismissedAlertKeys.add(a.text));
-                      _updateToastOverlay();
-                    }))
-                .toList(),
-          ),
-        ),
-      ),
-    );
-    _toastOverlayEntry = entry;
-    Overlay.of(context, rootOverlay: true).insert(entry);
-  }
 
   double _asDouble(dynamic value) => value is num ? value.toDouble() : 0.0;
 
@@ -520,7 +458,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
     final valuation = (_response?['valuation'] as Map<String, dynamic>?) ?? {};
     final liquidity = (_response?['liquidity'] as Map<String, dynamic>?) ?? {};
     final safeBoxes = (_response?['safe_boxes'] as List?) ?? [];
-    final sensitiveOps = (_response?['sensitive_operations'] as List?) ?? [];
     final series = (_response?['series'] as Map<String, dynamic>?) ?? {};
     final salesPurchasesSummary =
         (_response?['sales_purchases_summary'] as Map<String, dynamic>?) ?? {};
@@ -622,11 +559,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           // === 4. Vaults & Custody (Horizontal List) ===
           SliverToBoxAdapter(child: _buildVaultsSection(safeBoxes)),
 
-          // === 5. Sensitive Operations Feed ===
-          SliverToBoxAdapter(
-            child: _buildSensitiveOperationsSection(sensitiveOps),
-          ),
-
           SliverToBoxAdapter(child: SizedBox(height: _s(24))),
         ],
       ),
@@ -705,48 +637,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ),
               ),
               const Spacer(),
-              Stack(
-                children: [
-                  IconButton(
-                    icon: Icon(Icons.notifications_outlined, size: _s(22)),
-                    onPressed: () async {
-                      await AlertsDialog.show(
-                        context: context,
-                        api: widget.api,
-                        isArabic: widget.isArabic,
-                        onCountChanged: () {
-                          _loadData();
-                          _refreshAlertsBadge();
-                        },
-                      );
-                      _loadData();
-                    },
-                  ),
-                  if (_alertsBadgeCount > 0)
-                    Positioned(
-                      right: 6,
-                      top: 6,
-                      child: Container(
-                        width: 16,
-                        height: 16,
-                        decoration: const BoxDecoration(
-                          color: Colors.red,
-                          shape: BoxShape.circle,
-                        ),
-                        child: Center(
-                          child: Text(
-                            _alertsBadgeCount > 9 ? '9+' : '$_alertsBadgeCount',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
               IconButton(
                 icon: Icon(Icons.refresh, size: _s(22)),
                 onPressed: _isLoading ? null : _loadData,
@@ -1171,183 +1061,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.hintColor,
                 fontSize: _s(11),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // ── macOS-style floating notification toasts ──────────────────────────────
-  /// Collects all current alerts from response data, filters dismissed ones.
-  List<_AlertItem> _getAllAlerts() {
-    if (_response == null) return [];
-    final isArabic = widget.isArabic;
-    final alerts = (_response!['alerts'] as Map<String, dynamic>?) ?? {};
-    final items = <_AlertItem>[];
-
-    // Critical bar alerts
-    final rawItems = (alerts['critical_bar'] as List?) ?? [];
-    for (final raw in rawItems) {
-      final item = raw is Map ? raw : <String, dynamic>{};
-      final severity = (item['severity']?.toString().toLowerCase() ?? 'warning');
-      final isCrit = severity == 'critical';
-      final msg = (isArabic
-              ? item['message_ar']?.toString()
-              : item['message_en']?.toString()) ??
-          item['message']?.toString() ??
-          '';
-      if (msg.isNotEmpty) {
-        items.add(_AlertItem(
-          icon: isCrit ? Icons.error_outline : Icons.warning_amber_rounded,
-          color: isCrit ? AppColors.error : AppColors.warning,
-          text: msg,
-        ));
-      }
-    }
-
-    // Audit zone alerts
-    final criticalCount = alerts['critical_unreviewed_count'];
-    final unpostedCount = alerts['unposted_invoices_count'];
-    final lastShift = alerts['last_shift_closing'] as Map<String, dynamic>?;
-    final cashDiff = lastShift?['cash_difference'];
-    final goldDiff = lastShift?['gold_pure_24k_difference'];
-
-    final cCount = criticalCount is num ? criticalCount.toInt() : 0;
-    final uCount = unpostedCount is num ? unpostedCount.toInt() : 0;
-    final cDiff = cashDiff is num ? cashDiff.toDouble() : 0.0;
-    final gDiff = goldDiff is num ? goldDiff.toDouble() : 0.0;
-
-    if (cCount > 0) {
-      final isManyAlerts = cCount > 5;
-      items.add(_AlertItem(
-        icon: isManyAlerts
-            ? Icons.error_outline
-            : Icons.warning_amber_rounded,
-        color: AppColors.error,
-        text: isArabic
-            ? '$cCount تنبيهات حرجة بانتظار المراجعة'
-            : '$cCount critical alerts pending',
-      ));
-    }
-    if (cDiff.abs() > 0.01) {
-      items.add(_AlertItem(
-        icon: Icons.account_balance_wallet,
-        color: AppColors.warning,
-        text: isArabic
-            ? 'فرق نقدي (${_formatCurrency(cDiff)}) في آخر إغلاق'
-            : 'Cash difference (${_formatCurrency(cDiff)}) in last closing',
-      ));
-    }
-    if (gDiff.abs() > 0.001) {
-      items.add(_AlertItem(
-        icon: Icons.auto_awesome,
-        color: AppColors.warning,
-        text: isArabic
-            ? 'فرق ذهب (${_formatWeight(gDiff)}) في آخر إغلاق'
-            : 'Gold difference (${_formatWeight(gDiff)}) in last closing',
-      ));
-    }
-    if (uCount > 0) {
-      items.add(_AlertItem(
-        icon: Icons.pending_actions,
-        color: AppColors.info,
-        text: isArabic
-            ? '$uCount فاتورة بانتظار الترحيل'
-            : '$uCount invoices pending posting',
-      ));
-    }
-
-    return items.where((a) => !_dismissedAlertKeys.contains(a.text)).toList();
-  }
-
-  Widget _buildToastCard(_AlertItem alert, {required VoidCallback onDismiss}) {
-    final theme = Theme.of(context);
-    final isDark = theme.brightness == Brightness.dark;
-
-    // Accent color band: slightly tinted background based on alert color
-    final bgColor = isDark
-        ? Color.lerp(const Color(0xFF2C2C2E), alert.color, 0.06)!
-        : Color.lerp(Colors.white, alert.color, 0.05)!;
-
-    return TweenAnimationBuilder<double>(
-      key: Key('toast_${alert.text.hashCode}'),
-      tween: Tween(begin: 0.0, end: 1.0),
-      duration: const Duration(milliseconds: 420),
-      curve: Curves.easeOutCubic,
-      builder: (context, t, child) => Transform.translate(
-        offset: Offset(-40 * (1 - t), 0),
-        child: Opacity(opacity: t, child: child),
-      ),
-      child: Container(
-        width: 300,
-        margin: const EdgeInsets.only(bottom: 8),
-        decoration: BoxDecoration(
-          color: bgColor,
-          borderRadius: BorderRadius.circular(12),
-          border: Border(
-            left: BorderSide(color: alert.color, width: 4),
-            top: BorderSide(
-              color: alert.color.withValues(alpha: 0.22),
-              width: 0.8,
-            ),
-            right: BorderSide(
-              color: alert.color.withValues(alpha: 0.22),
-              width: 0.8,
-            ),
-            bottom: BorderSide(
-              color: alert.color.withValues(alpha: 0.22),
-              width: 0.8,
-            ),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.18),
-              blurRadius: 20,
-              spreadRadius: 0,
-              offset: const Offset(0, 6),
-            ),
-            BoxShadow(
-              color: alert.color.withValues(alpha: 0.12),
-              blurRadius: 10,
-              offset: const Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 8, 12),
-              child: Icon(alert.icon, color: alert.color, size: 18),
-            ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 11),
-                child: _currencyAwareText(
-                  alert.text,
-                  style: theme.textTheme.bodySmall?.copyWith(
-                    color: isDark
-                        ? Colors.white.withValues(alpha: 0.92)
-                        : const Color(0xFF1C1C1E),
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w500,
-                    height: 1.4,
-                  ),
-                ),
-              ),
-            ),
-            GestureDetector(
-              onTap: onDismiss,
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Icon(
-                  Icons.close,
-                  size: 14,
-                  color: (isDark ? Colors.white : Colors.black)
-                      .withValues(alpha: 0.40),
-                ),
               ),
             ),
           ],
@@ -3098,154 +2811,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       child: cardBody,
     );
   }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // 5. SENSITIVE OPERATIONS FEED
-  // ══════════════════════════════════════════════════════════════════════════
-  Widget _buildSensitiveOperationsSection(List<dynamic> operations) {
-    final theme = Theme.of(context);
-    final isArabic = widget.isArabic;
-
-    final hasData = operations.isNotEmpty;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(height: _s(16)),
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: _s(16)),
-          child: Row(
-            children: [
-              Icon(Icons.history, color: Colors.purple, size: _s(22)),
-              SizedBox(width: _s(8)),
-              Text(
-                isArabic ? 'العمليات الحساسة' : 'Audit Trail',
-                style: theme.textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const Spacer(),
-              TextButton(
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const AuditLogScreen()),
-                  );
-                },
-                child: Text(isArabic ? 'السجل' : 'Log'),
-              ),
-            ],
-          ),
-        ),
-        SizedBox(height: _s(8)),
-        if (!hasData)
-          Container(
-            margin: EdgeInsets.symmetric(horizontal: _s(16)),
-            padding: EdgeInsets.all(_s(12)),
-            decoration: BoxDecoration(
-              color: Colors.purple.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: Colors.purple.withValues(alpha: 0.1)),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  Icons.shield_outlined,
-                  color: Colors.purple.shade300,
-                  size: _s(22),
-                ),
-                SizedBox(width: _s(10)),
-                Expanded(
-                  child: Text(
-                    isArabic
-                        ? 'لا توجد عمليات حساسة للعرض حالياً'
-                        : 'No sensitive operations to show',
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.hintColor,
-                      fontSize: _s(12),
-                    ),
-                  ),
-                ),
-                TextButton(
-                  onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => const AuditLogScreen()),
-                    );
-                  },
-                  child: Text(isArabic ? 'فتح السجل' : 'Open log'),
-                ),
-              ],
-            ),
-          )
-        else
-          ...operations.take(5).map((op) {
-            final opMap = op as Map<String, dynamic>;
-            final desc = opMap['description'] ?? '-';
-            final user = opMap['user_name'] ?? '-';
-            final timeAgo = opMap['time_ago'] ?? '';
-            final entityNumber = opMap['entity_number'];
-
-            return InkWell(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const AuditLogScreen()),
-                );
-              },
-              borderRadius: BorderRadius.circular(8),
-              child: Container(
-                margin: EdgeInsets.symmetric(
-                  horizontal: _s(16),
-                  vertical: _s(4),
-                ),
-                padding: EdgeInsets.all(_s(10)),
-                decoration: BoxDecoration(
-                  color: Colors.purple.withValues(alpha: 0.05),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(
-                    color: Colors.purple.withValues(alpha: 0.1),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(
-                      Icons.security,
-                      color: Colors.purple.shade300,
-                      size: _s(18),
-                    ),
-                    SizedBox(width: _s(8)),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '$desc ${entityNumber != null ? "#$entityNumber" : ""}',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              fontWeight: FontWeight.w600,
-                              fontSize: _s(12),
-                            ),
-                          ),
-                          Text(
-                            '$user • $timeAgo',
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.hintColor,
-                              fontSize: _s(11),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Icon(
-                      Icons.chevron_left,
-                      size: _s(20),
-                      color: theme.hintColor,
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
-      ],
-    );
-  }
 }
 
 class _StickyRangeSelectorDelegate extends SliverPersistentHeaderDelegate {
@@ -3316,14 +2881,6 @@ class _StickyRangeSelectorDelegate extends SliverPersistentHeaderDelegate {
         oldDelegate.horizontalPadding != horizontalPadding ||
         oldDelegate.verticalPadding != verticalPadding;
   }
-}
-
-class _AlertItem {
-  final IconData icon;
-  final Color color;
-  final String text;
-
-  _AlertItem({required this.icon, required this.color, required this.text});
 }
 
 class _AnimatedValueText extends StatefulWidget {
