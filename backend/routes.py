@@ -34845,7 +34845,7 @@ def get_admin_dashboard():
 
         # Pre-load ALL sale+purchase invoices for the year range in ONE query.
         # Python-side filtering per period is far cheaper than 12 round-trips.
-        _all_inv_types = list({**sale_types, **{t: 1 for t in ['شراء', 'شراء من عميل', 'مرتجع شراء', 'مرتجع شراء (مورد)']}, 'مرتجع بيع': -1}.keys())
+        _all_inv_types = list(set(list(sale_types.keys()) + list(purchase_types.keys())))
         _year_invoices: list = []
         _year_items_by_inv: dict = {}
         try:
@@ -34861,7 +34861,9 @@ def get_admin_dashboard():
                 _inv_ids = [inv.id for inv in _year_invoices]
                 for item in InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(_inv_ids)).all():
                     _year_items_by_inv.setdefault(item.invoice_id, []).append(item)
-        except Exception:
+        except Exception as _cache_err:
+            print(f'[dashboard] invoice pre-cache error: {_cache_err}')
+            import traceback; traceback.print_exc()
             _year_invoices = []
 
         # Build username→name map once from cached users + employees.
