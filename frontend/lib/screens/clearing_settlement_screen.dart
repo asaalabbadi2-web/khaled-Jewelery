@@ -1913,6 +1913,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                               final status =
                                   (v['status'] ?? '').toString();
                               final totalCash =
+                                  (v['amount_cash'] as num?)?.toDouble() ??
                                   (v['total_cash'] as num?)?.toDouble() ??
                                   0.0;
                               final isActive = status == 'active';
