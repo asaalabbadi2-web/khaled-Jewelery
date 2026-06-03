@@ -873,6 +873,19 @@ def approve_bonus(bonus_id):
         )
         db.session.add(credit_line)
         
+        # إنشاء القيد المحاسبي من السند — يُرحّل المصروف والالتزام إلى الـ GL
+        try:
+            from routes import create_journal_entry_from_voucher
+            journal_entry = create_journal_entry_from_voucher(voucher)
+            if journal_entry:
+                voucher.journal_entry_id = journal_entry.id
+                db.session.add(voucher)
+        except Exception as _je_err:
+            # لا نوقف الاعتماد إذا فشل القيد — يُسجَّل للمراجعة
+            import traceback
+            print(f'[approve_bonus] ⚠️ فشل إنشاء قيد السند: {_je_err}')
+            traceback.print_exc()
+
         # اعتماد المكافأة
         bonus.approve(approved_by)
         bonus.payment_reference = voucher_number  # حفظ رقم سند الاستحقاق
