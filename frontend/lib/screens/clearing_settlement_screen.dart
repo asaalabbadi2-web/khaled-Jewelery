@@ -1916,7 +1916,7 @@ class _ClearingSettlementScreenState extends State<ClearingSettlementScreen> {
                                   (v['amount_cash'] as num?)?.toDouble() ??
                                   (v['total_cash'] as num?)?.toDouble() ??
                                   0.0;
-                              final isActive = status == 'active';
+                              final isActive = status == 'active' || status == 'approved';
                               return Padding(
                                 padding:
                                     const EdgeInsets.symmetric(vertical: 5),
