@@ -314,9 +314,21 @@ def ensure_journal_entry_columns(engine: Engine) -> None:
                     ("deletion_reason", "VARCHAR(500)", "NULL"),
                     ("restored_at", "DATETIME", "NULL"),
                     ("restored_by", "VARCHAR(100)", "NULL"),
+                    ("created_at", "TIMESTAMP", "NULL"),
                 ],
             )
         )
+        # Backfill created_at from date for existing rows (PostgreSQL only)
+        try:
+            with engine.connect() as conn:
+                dialect = _dialect_name(engine, conn)
+                if dialect == 'postgresql':
+                    conn.execute(text(
+                        "UPDATE journal_entry SET created_at = date WHERE created_at IS NULL"
+                    ))
+                    conn.commit()
+        except Exception:
+            pass
     except SQLAlchemyError as exc:
         LOGGER.error("Auto schema guard failed (journal_entry): %s", exc)
         return
