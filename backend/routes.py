@@ -8839,6 +8839,37 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     try:
         ip.payment_method_id = new_pm_id
 
+        # 0. Recalculate commission on InvoicePayment based on new PM
+        #    - commission_timing='invoice' → commission deducted immediately, affects profit
+        #    - commission_timing='settlement' → commission=0 here, handled later by settlement
+        new_commission_timing = str(getattr(new_pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+        new_commission_rate = float(getattr(new_pm, 'commission_rate', 0.0) or 0.0)
+        payment_amount = float(ip.amount or 0.0)
+
+        if new_commission_timing == 'settlement':
+            new_commission_amount = 0.0
+            new_commission_vat = 0.0
+            new_net_amount = payment_amount
+        else:
+            new_commission_amount = payment_amount * (new_commission_rate / 100.0) if new_commission_rate > 0 else 0.0
+            new_commission_vat = round(new_commission_amount * 0.15, 4)
+            new_net_amount = payment_amount - new_commission_amount - new_commission_vat
+
+        ip.commission_rate = new_commission_rate
+        ip.commission_amount = round(new_commission_amount, 4)
+        ip.commission_vat = round(new_commission_vat, 4)
+        ip.net_amount = round(new_net_amount, 4)
+
+        # Recompute invoice-level commission_amount = sum of all its payments
+        try:
+            all_payments = InvoicePayment.query.filter_by(invoice_id=invoice_id).all()
+            total_commission = sum(float(p.commission_amount or 0.0) for p in all_payments)
+            invoice.commission_amount = round(total_commission, 4)
+            total_net = sum(float(p.net_amount or 0.0) for p in all_payments)
+            invoice.net_amount = round(total_net, 4)
+        except Exception:
+            pass
+
         # 1. Update ALL linked SafeBoxTransactions (not just the first)
         if new_sb_id is not None:
             sbts = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).all()
