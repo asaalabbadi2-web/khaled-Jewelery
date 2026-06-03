@@ -8883,37 +8883,68 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                 for sbt in sbts_by_ref:
                     sbt.safe_box_id = new_sb_id
 
-        # 2. Update ALL GL lines pointing to old safe account across all JEs for this invoice.
-        #    Search by account_id match (not by description text) to avoid silent misses.
+        # 2. Create a correcting journal entry instead of editing posted lines.
+        #    Original entries stay untouched (audit trail preserved).
+        #    Correcting entry: Dr. new_safe_account / Cr. old_safe_account
         je_line_updated = False
         je_lines_updated = 0
+        correction_je_id = None
         if old_safe_account_id and new_safe_account_id and old_safe_account_id != new_safe_account_id:
-            # Find all JEs linked to this invoice (any reference type)
+            # Sum the net cash amount that moved through old safe account for this invoice
             invoice_jes = JournalEntry.query.filter(
                 JournalEntry.is_deleted == False,
                 JournalEntry.reference_type.in_(['invoice', 'invoice_payments', 'invoice_payment']),
                 JournalEntry.reference_id == int(invoice.id),
             ).all()
+            total_net_cash = 0.0
             for je in invoice_jes:
                 safe_lines = JournalEntryLine.query.filter(
                     JournalEntryLine.journal_entry_id == je.id,
                     JournalEntryLine.account_id == int(old_safe_account_id),
                     JournalEntryLine.is_deleted == False,
                 ).all()
-                for safe_line in safe_lines:
-                    net_cash = float(safe_line.cash_debit or 0.0) - float(safe_line.cash_credit or 0.0)
-                    try:
-                        old_acc = Account.query.get(int(old_safe_account_id))
-                        new_acc = Account.query.get(int(new_safe_account_id))
-                        if old_acc is not None:
-                            old_acc.balance_cash = float(old_acc.balance_cash or 0.0) - net_cash
-                        if new_acc is not None:
-                            new_acc.balance_cash = float(new_acc.balance_cash or 0.0) + net_cash
-                    except Exception:
-                        pass
-                    safe_line.account_id = int(new_safe_account_id)
+                for ln in safe_lines:
+                    total_net_cash += float(ln.cash_debit or 0.0) - float(ln.cash_credit or 0.0)
                     je_lines_updated += 1
-            je_line_updated = je_lines_updated > 0
+
+            if je_lines_updated > 0 and abs(total_net_cash) > 0.001:
+                old_pm_name = getattr(old_pm, 'name', str(old_pm_id)) if old_pm else str(old_pm_id)
+                new_pm_name = getattr(new_pm, 'name', str(new_pm_id))
+                correction_entry_number = _generate_journal_entry_number('CORR')
+                correction_je = JournalEntry(
+                    entry_number=correction_entry_number,
+                    date=datetime.now(),
+                    description=(
+                        f'تصحيح وسيلة الدفع: {invoice.invoice_number} '
+                        f'({old_pm_name} → {new_pm_name}) — {reason}'
+                    ),
+                    reference_type='payment_method_correction',
+                    reference_id=int(invoice.id),
+                    is_posted=True,
+                    posted_at=datetime.now(),
+                    posted_by=g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin',
+                )
+                db.session.add(correction_je)
+                db.session.flush()
+                correction_je_id = correction_je.id
+
+                # Dr. new safe account (money now flows through new safe)
+                db.session.add(JournalEntryLine(
+                    journal_entry_id=correction_je.id,
+                    account_id=int(new_safe_account_id),
+                    cash_debit=round(abs(total_net_cash), 4) if total_net_cash > 0 else 0.0,
+                    cash_credit=round(abs(total_net_cash), 4) if total_net_cash < 0 else 0.0,
+                    description=f'تصحيح: {new_pm_name} — {invoice.invoice_number}',
+                ))
+                # Cr. old safe account (reverse original safe movement)
+                db.session.add(JournalEntryLine(
+                    journal_entry_id=correction_je.id,
+                    account_id=int(old_safe_account_id),
+                    cash_credit=round(abs(total_net_cash), 4) if total_net_cash > 0 else 0.0,
+                    cash_debit=round(abs(total_net_cash), 4) if total_net_cash < 0 else 0.0,
+                    description=f'عكس: {old_pm_name} — {invoice.invoice_number}',
+                ))
+                je_line_updated = True
 
         # 3. Audit log
         try:
@@ -8932,6 +8963,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                     'new_safe_account_id': new_safe_account_id,
                     'je_line_updated': je_line_updated,
                     'je_lines_updated': je_lines_updated,
+                    'correction_je_id': correction_je_id,
                     'reason': reason,
                 }, ensure_ascii=False),
                 ip_address=request.remote_addr,
@@ -8954,6 +8986,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
             'new_safe_account_id': new_safe_account_id,
             'je_line_updated': je_line_updated,
             'je_lines_updated': je_lines_updated,
+            'correction_je_id': correction_je_id,
         }), 200
 
     except Exception as exc:
