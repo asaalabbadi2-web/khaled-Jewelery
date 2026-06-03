@@ -698,16 +698,23 @@ class ClearingSettlementScheduler:
 
                     # محاولة التسوية لكل يوم (cap بالرصيد المتاح وبالمستحق الفعلي)
                     running_balance = clearing_balance
-                    # Track SBT-based remaining due to prevent exceeds_due_amount errors.
-                    # SettlementLine may be missing legacy settlement records that only
-                    # exist as SBT voucher_out rows, causing _compute_due_for_day to
-                    # overestimate the day amount vs what _create_clearing_settlement_voucher allows.
+                    # Use _compute_clearing_due_amount as the authoritative cap.
+                    # It includes transfer_in and handles partial SettlementLine gaps
+                    # better than _compute_sbt_based_due which can return 0 when
+                    # historical settlements covered total IPs but left partial residuals.
+                    try:
+                        from routes import _compute_clearing_due_amount
+                        running_clearing_due = _compute_clearing_due_amount(clearing_sb.id)
+                    except Exception:
+                        running_clearing_due = self._compute_sbt_based_due(clearing_sb.id)
+                    # Also keep SBT due as fallback floor — use the higher of both
                     running_sbt_due = self._compute_sbt_based_due(clearing_sb.id)
+                    running_cap = max(running_clearing_due, running_sbt_due, gross_amount)
                     days_settled = 0
 
                     for settle_day in due_days:
-                        if running_sbt_due < 0.01:
-                            break  # nothing left to settle per SBT accounting
+                        if running_balance < 0.01:
+                            break  # خزينة فارغة
 
                         day_start = datetime.combine(settle_day, time.min)
                         day_end = datetime.combine(settle_day, time.max)
@@ -726,10 +733,9 @@ class ClearingSettlementScheduler:
                         if day_amount < 0.01:
                             break  # الرصيد نفد
 
-                        # Cap to SBT-based remaining due (handles legacy settlements
-                        # missing from SettlementLine, preventing exceeds_due_amount)
-                        if day_amount > running_sbt_due + 0.01:
-                            day_amount = round(min(day_amount, running_sbt_due), 2)
+                        # Cap to clearing due (prevents exceeds_due_amount errors)
+                        if running_cap > 0.01 and day_amount > running_cap + 0.01:
+                            day_amount = round(min(day_amount, running_cap), 2)
                         if day_amount < 0.01:
                             break
 
@@ -776,6 +782,7 @@ class ClearingSettlementScheduler:
                             db.session.commit()
                             running_balance -= day_amount
                             running_sbt_due -= day_amount
+                            running_cap -= day_amount
                             days_settled += 1
                             result['settled_count'] += 1
                             print(
