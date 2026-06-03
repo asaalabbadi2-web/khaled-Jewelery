@@ -8839,42 +8839,37 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     try:
         ip.payment_method_id = new_pm_id
 
-        # 1. Update the linked SafeBoxTransaction safe_box_id
+        # 1. Update ALL linked SafeBoxTransactions (not just the first)
         if new_sb_id is not None:
-            sbt = SafeBoxTransaction.query.filter_by(
-                invoice_payment_id=payment_id
-            ).first()
-            if sbt:
+            sbts = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).all()
+            for sbt in sbts:
                 sbt.safe_box_id = new_sb_id
+            # Also catch SBTs linked by ref_type/ref_id without invoice_payment_id
+            if not sbts and old_sb_id is not None:
+                sbts_by_ref = SafeBoxTransaction.query.filter_by(
+                    ref_type='invoice_payment', ref_id=payment_id, safe_box_id=old_sb_id
+                ).all()
+                for sbt in sbts_by_ref:
+                    sbt.safe_box_id = new_sb_id
 
-        # 2. Update the GL: re-point the consolidated JE line from old safe account → new safe account.
-        #    The consolidated JE (reference_type='invoice_payments') has 2 lines per payment;
-        #    the line with account_id == old_safe_account_id is the safe-box leg.
+        # 2. Update ALL GL lines pointing to old safe account across all JEs for this invoice.
+        #    Search by account_id match (not by description text) to avoid silent misses.
         je_line_updated = False
+        je_lines_updated = 0
         if old_safe_account_id and new_safe_account_id and old_safe_account_id != new_safe_account_id:
-            marker = f'دفعة #{payment_id}'
-            consolidated_je = (
-                JournalEntry.query
-                .filter(
-                    JournalEntry.is_deleted == False,
-                    JournalEntry.reference_type == 'invoice_payments',
-                    JournalEntry.reference_id == int(invoice.id),
-                )
-                .first()
-            )
-            if consolidated_je:
-                safe_line = (
-                    JournalEntryLine.query
-                    .filter(
-                        JournalEntryLine.journal_entry_id == consolidated_je.id,
-                        JournalEntryLine.account_id == int(old_safe_account_id),
-                        JournalEntryLine.is_deleted == False,
-                        JournalEntryLine.description.contains(marker),
-                    )
-                    .first()
-                )
-                if safe_line:
-                    # Adjust cached balance_cash on both accounts
+            # Find all JEs linked to this invoice (any reference type)
+            invoice_jes = JournalEntry.query.filter(
+                JournalEntry.is_deleted == False,
+                JournalEntry.reference_type.in_(['invoice', 'invoice_payments', 'invoice_payment']),
+                JournalEntry.reference_id == int(invoice.id),
+            ).all()
+            for je in invoice_jes:
+                safe_lines = JournalEntryLine.query.filter(
+                    JournalEntryLine.journal_entry_id == je.id,
+                    JournalEntryLine.account_id == int(old_safe_account_id),
+                    JournalEntryLine.is_deleted == False,
+                ).all()
+                for safe_line in safe_lines:
                     net_cash = float(safe_line.cash_debit or 0.0) - float(safe_line.cash_credit or 0.0)
                     try:
                         old_acc = Account.query.get(int(old_safe_account_id))
@@ -8886,7 +8881,8 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                     except Exception:
                         pass
                     safe_line.account_id = int(new_safe_account_id)
-                    je_line_updated = True
+                    je_lines_updated += 1
+            je_line_updated = je_lines_updated > 0
 
         # 3. Audit log
         try:
@@ -8904,6 +8900,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                     'old_safe_account_id': old_safe_account_id,
                     'new_safe_account_id': new_safe_account_id,
                     'je_line_updated': je_line_updated,
+                    'je_lines_updated': je_lines_updated,
                     'reason': reason,
                 }, ensure_ascii=False),
                 ip_address=request.remote_addr,
@@ -8925,6 +8922,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
             'old_safe_account_id': old_safe_account_id,
             'new_safe_account_id': new_safe_account_id,
             'je_line_updated': je_line_updated,
+            'je_lines_updated': je_lines_updated,
         }), 200
 
     except Exception as exc:
