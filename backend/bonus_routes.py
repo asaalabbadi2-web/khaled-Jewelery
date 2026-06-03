@@ -70,37 +70,12 @@ def _find_bonus_expense_account():  # Optional[Account]
     if name_match:
         return name_match
 
-    # 3) أرقام احتياطية — نقبل فقط إذا كان اسم الحساب يتضمن كلمة مكافأة/مكافئة
-    bonus_keywords = ('مكافأ', 'مكافئ', 'bonus', 'incentive', 'مكافاة')
-    for num in ('5450', '5451', '5452', '5455', '5491', '5492', '5460', '5470'):
+    # 3) أرقام احتياطية مرتبة حسب الأولوية
+    # 5401 = المكافآت والعمولات (الحساب المعتمد في دليل الحسابات)
+    for num in ('5401', '5450', '5451', '5452', '5455', '5491', '5492'):
         acc = Account.query.filter_by(account_number=num).first()
         if acc and acc.type in ('Expense', 'expense'):
-            name_lower = (acc.name or '').lower()
-            if any(kw in name_lower for kw in bonus_keywords):
-                return acc
-
-    # 4) لا يوجد حساب مخصص — أنشئ حساباً فرعياً تحت 5450 أو أول حساب مصروفات متاح
-    try:
-        parent = Account.query.filter(
-            Account.account_number.in_(['5450', '5400', '54', '5']),
-            Account.type.in_(['Expense', 'expense']),
-        ).order_by(Account.account_number.desc()).first()
-
-        new_acc = Account(
-            account_number='5451',
-            name='مصروف مكافآت الموظفين',
-            type='Expense',
-            transaction_type='cash',
-            tracks_weight=False,
-            is_active=True,
-            balance_cash=0.0,
-            parent_id=parent.id if parent else None,
-        )
-        db.session.add(new_acc)
-        db.session.flush()
-        return new_acc
-    except Exception:
-        pass
+            return acc
 
     return None
 
