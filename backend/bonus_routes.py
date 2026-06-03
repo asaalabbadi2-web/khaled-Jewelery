@@ -70,11 +70,37 @@ def _find_bonus_expense_account():  # Optional[Account]
     if name_match:
         return name_match
 
-    # 3) أرقام احتياطية معروفة
-    for num in ('5450', '5491', '5492', '5460', '5470', '5480', '5490'):
+    # 3) أرقام احتياطية — نقبل فقط إذا كان اسم الحساب يتضمن كلمة مكافأة/مكافئة
+    bonus_keywords = ('مكافأ', 'مكافئ', 'bonus', 'incentive', 'مكافاة')
+    for num in ('5450', '5451', '5452', '5455', '5491', '5492', '5460', '5470'):
         acc = Account.query.filter_by(account_number=num).first()
         if acc and acc.type in ('Expense', 'expense'):
-            return acc
+            name_lower = (acc.name or '').lower()
+            if any(kw in name_lower for kw in bonus_keywords):
+                return acc
+
+    # 4) لا يوجد حساب مخصص — أنشئ حساباً فرعياً تحت 5450 أو أول حساب مصروفات متاح
+    try:
+        parent = Account.query.filter(
+            Account.account_number.in_(['5450', '5400', '54', '5']),
+            Account.type.in_(['Expense', 'expense']),
+        ).order_by(Account.account_number.desc()).first()
+
+        new_acc = Account(
+            account_number='5451',
+            name='مصروف مكافآت الموظفين',
+            type='Expense',
+            transaction_type='cash',
+            tracks_weight=False,
+            is_active=True,
+            balance_cash=0.0,
+            parent_id=parent.id if parent else None,
+        )
+        db.session.add(new_acc)
+        db.session.flush()
+        return new_acc
+    except Exception:
+        pass
 
     return None
 
@@ -798,10 +824,11 @@ def approve_bonus(bonus_id):
         # إن لم يُوجد نستخدم 2310 (مكافآت مستحقة للموظفين) كاحتياط عام.
         bonuses_payable_account = None
         if employee:
+            # الأولوية: 2310xxx (مكافآت مستحقة) الخاص بالموظف
             bonuses_payable_account = (
                 Account.query
                 .filter(
-                    Account.account_number.like('2410%'),
+                    Account.account_number.like('2310%'),
                     Account.name.like(f'%{employee.name}%'),
                 )
                 .first()
@@ -812,9 +839,9 @@ def approve_bonus(bonus_id):
             return jsonify({
                 'success': False,
                 'message': (
-                    'لم يُعثر على حساب ذمة المكافآت للموظف '
+                    'لم يُعثر على حساب مكافآت مستحقة للموظف '
                     f'({employee.name if employee else bonus.employee_id}). '
-                    'يرجى ربط الموظف بحساب عمولات (2410xxx) أو إنشاء حساب 2310.'
+                    'شغّل "إصلاح حسابات الموظف" لإنشاء حساب 2310xxx أو حدد حساب 2310 في الإعدادات.'
                 )
             }), 400
         voucher_number = f"BAPP-{bonus.id}"
@@ -1254,13 +1281,13 @@ def pay_bonus(bonus_id):
             }), 400
         
         # حساب الذمة المدينة عند الصرف: نفس الحساب الذي جرى القيد عليه عند الاعتماد
-        # الأولوية: 2410xxx الخاص بالموظف → 2310 العام كاحتياط
+        # الأولوية: 2310xxx (مكافآت مستحقة) الخاص بالموظف → 2310 العام كاحتياط
         bonuses_payable_account = None
         if employee:
             bonuses_payable_account = (
                 Account.query
                 .filter(
-                    Account.account_number.like('2410%'),
+                    Account.account_number.like('2310%'),
                     Account.name.like(f'%{employee.name}%'),
                 )
                 .first()
