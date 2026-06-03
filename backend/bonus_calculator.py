@@ -290,24 +290,24 @@ class BonusCalculator:
     @staticmethod
     def calculate_points_bonus(employee, rule, period_start, period_end):
         """حساب مكافأة النقاط (points_based) — تعتمد على نقاط سباق المبيعات."""
+        from datetime import date as _date
         conditions = rule.conditions or {}
         points_period = conditions.get("points_period", "month")
         min_points = float(conditions.get("min_points", 0))
 
-        # تحديد حدود الفترة بناءً على إعداد القاعدة (وليس فترة الحساب الممررة)
-        now = datetime.now()
-        if points_period == "today":
-            from datetime import date as _date
-            start_dt = datetime.combine(_date.today(), datetime.min.time())
-            end_dt = datetime.combine(_date.today(), datetime.max.time())
-        elif points_period == "week":
-            week_start = now.date() - timedelta(days=now.date().weekday())
-            start_dt = datetime.combine(week_start, datetime.min.time())
-            end_dt = datetime.combine(week_start + timedelta(days=6), datetime.max.time())
-        else:  # month
-            month_start = now.date().replace(day=1)
-            start_dt = datetime.combine(month_start, datetime.min.time())
-            end_dt = now
+        # استخدام الفترة الممررة مباشرة — هي الصحيحة دائماً:
+        # - عند استدعاء المجدول الشهري: period_start/end = الشهر المنتهي
+        # - عند استدعاء اليومي/الأسبوعي: period_start/end = الفترة المنتهية
+        # - عند الاستدعاء اليدوي: period_start/end = ما اختاره المستخدم
+        if isinstance(period_start, _date) and not isinstance(period_start, datetime):
+            start_dt = datetime.combine(period_start, datetime.min.time())
+        else:
+            start_dt = period_start
+
+        if isinstance(period_end, _date) and not isinstance(period_end, datetime):
+            end_dt = datetime.combine(period_end, datetime.max.time())
+        else:
+            end_dt = period_end
 
         # جلب معدل النقاط للجرام
         try:
