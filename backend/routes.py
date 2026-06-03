@@ -4063,7 +4063,7 @@ def get_account_statement(account_id):
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
         .filter(*journal_filters)
-        .order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -4330,7 +4330,7 @@ def get_account_statement_merged(account_id):
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
         .filter(*journal_filters)
-        .order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -4640,7 +4640,7 @@ def get_customer_statement(id):
         .filter(*journal_filters)
         .filter(Account.type == 'Asset')
         .filter(Account.account_number.like('12%'))
-        .order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -6015,7 +6015,7 @@ def get_supplier_weight_statement(supplier_id):
     opening_lines = (
         base_query
         .filter(JournalEntry.entry_type == 'افتتاحي')
-        .order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -6039,7 +6039,7 @@ def get_supplier_weight_statement(supplier_id):
     journal_lines = (
         base_query
         .filter(JournalEntry.entry_type != 'افتتاحي')
-        .order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -22305,7 +22305,7 @@ def get_general_ledger_all():
     total_count = query.count()
     lines = (
         query
-        .order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .limit(per_page)
         .offset((page - 1) * per_page)
         .all()
@@ -23244,7 +23244,7 @@ def get_customer_balances_aging():
         query = query.filter(JournalEntry.date <= end_dt)
     
     # Order by date and id
-    lines = query.order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc()).all()
+    lines = query.order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc()).all()
     
     # Calculate running balances
     running_cash_balance = 0
@@ -23429,7 +23429,7 @@ def get_account_ledger(account_id):
             opening_24k += (line.debit_24k or 0) - (line.credit_24k or 0)
     
     # Order by date
-    lines = query.order_by(func.date(JournalEntry.date).asc(), JournalEntry.created_at.asc(), JournalEntry.id.asc()).all()
+    lines = query.order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc()).all()
     
     # Calculate running balances
     running_cash = opening_cash
@@ -32543,7 +32543,7 @@ def get_dual_account_statement():
             end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
             query = query.filter(JournalEntry.date <= end_date)
         
-        lines = query.order_by(func.date(JournalEntry.date), JournalEntry.created_at, JournalEntry.id).all()
+        lines = query.order_by(func.date(JournalEntry.date), func.coalesce(JournalEntry.created_at, JournalEntry.date), JournalEntry.id).all()
         
         # حساب الأرصدة الجارية
         balance_cash = 0.0

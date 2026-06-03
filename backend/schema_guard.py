@@ -318,17 +318,9 @@ def ensure_journal_entry_columns(engine: Engine) -> None:
                 ],
             )
         )
-        # Backfill created_at from date for existing rows (PostgreSQL only)
-        try:
-            with engine.connect() as conn:
-                dialect = _dialect_name(engine, conn)
-                if dialect == 'postgresql':
-                    conn.execute(text(
-                        "UPDATE journal_entry SET created_at = date WHERE created_at IS NULL"
-                    ))
-                    conn.commit()
-        except Exception:
-            pass
+        # Do NOT backfill created_at for old rows — leave NULL.
+        # Sorting uses COALESCE(created_at, date) so old rows fall back to date.
+        # New rows get the accurate insertion timestamp from db.func.now().
     except SQLAlchemyError as exc:
         LOGGER.error("Auto schema guard failed (journal_entry): %s", exc)
         return
