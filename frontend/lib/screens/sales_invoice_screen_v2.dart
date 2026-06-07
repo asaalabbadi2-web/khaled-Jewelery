@@ -624,6 +624,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       setState(() {
         _goldPrice24k = _parseDouble(priceData['price_24k']);
       });
+      _applyGoldPriceToItems();
     } catch (e) {
       _showError('فشل تحميل سعر الذهب: $e');
     }
@@ -1064,6 +1065,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
       );
     }
     _recomputeCostingPreview();
+  }
+
+  void _applyGoldPriceToItems() {
+    if (_items.isEmpty) return;
+    setState(() {
+      for (final item in _items) {
+        item.updateGoldPrice(_goldPrice24k);
+      }
+    });
   }
 
   void _recomputeCostingPreview() {
@@ -6579,7 +6589,7 @@ class InvoiceItem {
   double wage; // أجور المصنعية للجرام الواحد
   final int? categoryId;
   final String? categoryName;
-  final double goldPrice24k;
+  double goldPrice24k;
   final int mainKarat;
   double taxRate;
   int count; // 🆕 عدد القطع لهذا الصنف
@@ -6624,13 +6634,14 @@ class InvoiceItem {
     return weight * (karat / mainKarat);
   }
 
-  // التكلفة = الوزن × (سعر الذهب للجرام + المصنعية للجرام)
+  // التكلفة = تكلفة الذهب + تكلفة التصنيع
+  // تكلفة الذهب: إما من المتوسط المتحرك أو من سعر الذهب الحالي
+  // تكلفة التصنيع: دائماً من المصنعية الفعلية للسطر (wage)
   double get cost {
-    final totalAvg = _avgGoldCostPerMainGram + _avgManufacturingCostPerMainGram;
-    if (totalAvg > 0) {
-      return weightInMainKarat * totalAvg;
-    }
-    return weight * (calculatePricePerGram() + wage);
+    final goldCost = _avgGoldCostPerMainGram > 0
+        ? weightInMainKarat * _avgGoldCostPerMainGram
+        : weight * calculatePricePerGram();
+    return goldCost + weight * wage;
   }
 
   // الصافي = التكلفة + الربح الموزع
@@ -6684,6 +6695,10 @@ class InvoiceItem {
     _avgManufacturingCostPerMainGram = avgManufacturingPerMainGram;
   }
 
+  void updateGoldPrice(double newPrice) {
+    goldPrice24k = newPrice;
+  }
+
   Map<String, dynamic> toJson() {
     return {
       if (id != null) 'item_id': id,
@@ -6699,6 +6714,7 @@ class InvoiceItem {
       'price': totalWithTax, // الـ backend يتوقع 'price' بدلاً من 'total'
       'quantity': count, // 🆕 عدد فعلي
       'calculated_selling_price_per_gram': calculateSellingPricePerGram(),
+      'avg_manufacturing_cost_per_gram': _avgManufacturingCostPerMainGram,
     };
   }
 }
