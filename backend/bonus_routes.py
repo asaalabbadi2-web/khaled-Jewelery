@@ -1369,6 +1369,19 @@ def pay_bonus(bonus_id):
         if safe_box is None:
             bonus.office_id = office_id
         
+        # إنشاء القيد المحاسبي من السند — يُرحّل تسديد الالتزام وخروج الأموال إلى الـ GL
+        try:
+            from routes import create_journal_entry_from_voucher
+            journal_entry = create_journal_entry_from_voucher(voucher)
+            if journal_entry:
+                voucher.journal_entry_id = journal_entry.id
+                db.session.add(voucher)
+        except Exception as _je_err:
+            # لا نوقف الدفع إذا فشل القيد — يُسجَّل للمراجعة
+            import traceback
+            print(f'[pay_bonus] ⚠️ فشل إنشاء قيد سند الصرف: {_je_err}')
+            traceback.print_exc()
+
         try:
             db.session.commit()
         except IntegrityError:

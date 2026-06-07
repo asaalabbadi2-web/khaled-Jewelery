@@ -12,8 +12,9 @@ import '../providers/settings_provider.dart';
 
 class InvoicePdfOptions {
   final bool isArabic;
+  final bool blackAndWhite;
 
-  const InvoicePdfOptions({this.isArabic = true});
+  const InvoicePdfOptions({this.isArabic = true, this.blackAndWhite = false});
 }
 
 class InvoicePdfBuilder {
@@ -63,7 +64,8 @@ class InvoicePdfBuilder {
         PdfSarCache.tinted(darkColor),
       ]);
     }
-    final sarGoldBytes = isNewSar ? PdfSarCache.tintedBytes(amberColor) : null;
+    // In B&W mode always use the dark tint (gold would print as faint gray).
+    final sarGoldBytes = isNewSar ? PdfSarCache.tintedBytes(options.blackAndWhite ? darkColor : amberColor) : null;
     final sarTextBytes = isNewSar ? PdfSarCache.tintedBytes(darkColor) : null;
 
     final showLogoFlag = settings?.showCompanyLogo ?? true;
@@ -207,11 +209,11 @@ class InvoicePdfBuilder {
 
     // All assets captured from main thread — no rootBundle / dart:ui here.
 
-    // Theme colors
-    const gold = PdfColor.fromInt(0xFF8B6914);
-    const goldMid = PdfColor.fromInt(0xFFA07820);
-    const goldBg = PdfColor.fromInt(0xFFFBF7EE);
-    const border = PdfColor.fromInt(0xFFE8D899);
+    // Theme colors — B&W palette swaps amber tones for strong grays.
+    final gold   = options.blackAndWhite ? const PdfColor.fromInt(0xFF1A1A1A) : const PdfColor.fromInt(0xFF8B6914);
+    final goldMid = options.blackAndWhite ? const PdfColor.fromInt(0xFF333333) : const PdfColor.fromInt(0xFFA07820);
+    final goldBg  = options.blackAndWhite ? const PdfColor.fromInt(0xFFF0F0F0) : const PdfColor.fromInt(0xFFFBF7EE);
+    final border  = options.blackAndWhite ? const PdfColor.fromInt(0xFF888888) : const PdfColor.fromInt(0xFFE8D899);
     const text = PdfColor.fromInt(0xFF1A1A1A);
     const muted = PdfColor.fromInt(0xFF444444);
 
@@ -233,9 +235,13 @@ class InvoicePdfBuilder {
           textDirection: pw.TextDirection.ltr,
           style: pw.TextStyle(fontSize: size, color: color),
         );
+        // Arabic: symbol LEFT of number (img first in LTR row).
+        // English: number LEFT of symbol (num first in LTR row).
         return pw.Row(
           mainAxisSize: pw.MainAxisSize.min,
-          children: [num, pw.SizedBox(width: 2), img],
+          children: options.isArabic
+              ? [img, pw.SizedBox(width: 2), num]
+              : [num, pw.SizedBox(width: 2), img],
         );
       }
       final sym = cashCurrencySymbol;
@@ -451,17 +457,19 @@ class InvoicePdfBuilder {
         children: [
           pw.Container(
             height: 4,
-            decoration: pw.BoxDecoration(
-              gradient: pw.LinearGradient(
-                colors: [
-                  PdfColor.fromInt(0xFF8B6914),
-                  PdfColor.fromInt(0xFFC9A84C),
-                  PdfColor.fromInt(0xFFE8C97A),
-                  PdfColor.fromInt(0xFFC9A84C),
-                  PdfColor.fromInt(0xFF8B6914),
-                ],
-              ),
-            ),
+            decoration: options.blackAndWhite
+                ? const pw.BoxDecoration(color: PdfColor.fromInt(0xFF1A1A1A))
+                : pw.BoxDecoration(
+                    gradient: pw.LinearGradient(
+                      colors: [
+                        PdfColor.fromInt(0xFF8B6914),
+                        PdfColor.fromInt(0xFFC9A84C),
+                        PdfColor.fromInt(0xFFE8C97A),
+                        PdfColor.fromInt(0xFFC9A84C),
+                        PdfColor.fromInt(0xFF8B6914),
+                      ],
+                    ),
+                  ),
           ),
           pw.Container(
             padding: const pw.EdgeInsets.fromLTRB(14, 12, 14, 10),

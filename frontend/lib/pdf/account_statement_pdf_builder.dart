@@ -44,6 +44,8 @@ class AccountStatementPdfBranding {
   final String currencySymbol;
   final bool isNewSar;
 
+  final bool blackAndWhite;
+
   const AccountStatementPdfBranding({
     required this.companyName,
     required this.companyAddress,
@@ -54,6 +56,7 @@ class AccountStatementPdfBranding {
     required this.companyLogoBase64,
     this.currencySymbol = 'ر.س',
     this.isNewSar = false,
+    this.blackAndWhite = false,
   });
 }
 
@@ -296,6 +299,8 @@ class AccountStatementPdfBuilder {
     }) {
       final sarImg = useDark ? sarDarkImg : sarGoldImg;
       if (isNewSar && sarImg != null) {
+        // Page is RTL so pw.Row reverses child order automatically.
+        // [num, spacer, img] → RTL flip → num RIGHT, img LEFT → number first (correct).
         return pw.Row(
           mainAxisSize: pw.MainAxisSize.min,
           children: [

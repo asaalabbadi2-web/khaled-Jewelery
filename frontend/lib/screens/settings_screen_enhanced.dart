@@ -139,11 +139,17 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
   String _printerPaperSize = '80 مم';
   final List<String> _printerPaperOptions = const ['58 مم', '80 مم', 'A4'];
 
+  bool _printInColor = true;
+  String _invoicePaperSize = 'A4';
+  final List<String> _invoicePaperOptions = const ['A4', 'A5', 'Letter', 'Thermal'];
+
   static const String _printerAutoConnectKey = 'printer_auto_connect_v1';
   static const String _printerShowPreviewKey = 'printer_show_preview_v1';
   static const String _printerAutoCutKey = 'printer_auto_cut_v1';
   static const String _printerPaperSizeKey = 'printer_paper_size_v1';
   static const String _printerPreferredNameKey = 'printer_preferred_name_v1';
+  static const String _printInColorKey = 'print_in_color';
+  static const String _invoicePaperSizeKey = 'invoice_paper_size';
 
   String? _preferredPrinterName;
   bool _isLoadingPrinters = false;
@@ -246,6 +252,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
       final printerAutoCut = prefs.getBool(_printerAutoCutKey) ?? true;
       final printerPaperSize = prefs.getString(_printerPaperSizeKey) ?? '80 مم';
       final preferredPrinterName = prefs.getString(_printerPreferredNameKey);
+      final printInColor = prefs.getBool(_printInColorKey) ?? true;
+      final invoicePaperSize = prefs.getString(_invoicePaperSizeKey) ?? 'A4';
 
       _currencyController.text =
           settings['currency_symbol']?.toString() ?? 'ر.س';
@@ -390,6 +398,10 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
             ? printerPaperSize
             : '80 مم';
         _preferredPrinterName = preferredPrinterName;
+        _printInColor = printInColor;
+        _invoicePaperSize = _invoicePaperOptions.contains(invoicePaperSize)
+            ? invoicePaperSize
+            : 'A4';
       });
     } catch (error) {
       if (!mounted) return;
@@ -471,6 +483,8 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
         } else {
           await prefs.setString(_printerPreferredNameKey, preferred);
         }
+        await prefs.setBool(_printInColorKey, _printInColor);
+        await prefs.setString(_invoicePaperSizeKey, _invoicePaperSize);
       } catch (_) {
         // ignore local persistence failures
       }
@@ -1396,6 +1410,52 @@ class _SettingsScreenEnhancedState extends State<SettingsScreenEnhanced>
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
+        _buildSectionCard(
+          icon: Icons.palette_outlined,
+          iconColor: _primaryColor,
+          title: 'نمط الطباعة',
+          children: [
+            SwitchListTile.adaptive(
+              value: _printInColor,
+              onChanged: (value) => setState(() => _printInColor = value),
+              title: const Text('طباعة ملونة'),
+              subtitle: const Text(
+                'استخدم الألوان الكاملة (ذهبي وتدرجات). أوقفه للطباعة بالأسود فقط على الطابعات العادية.',
+              ),
+              thumbColor: _thumbColorFor(_primaryColor),
+              trackColor: _trackColorFor(_primaryColor),
+            ),
+            const SizedBox(height: 12),
+            Text('حجم ورق الفواتير والسندات', style: _fieldLabelStyle()),
+            const SizedBox(height: 10),
+            Directionality(
+              textDirection: TextDirection.rtl,
+              child: DropdownMenu<String>(
+                initialSelection: _invoicePaperSize,
+                onSelected: (value) {
+                  if (value == null) return;
+                  setState(() => _invoicePaperSize = value);
+                },
+                leadingIcon: Icon(Icons.straighten, color: _primaryColor),
+                trailingIcon: const Icon(Icons.keyboard_arrow_down),
+                enableSearch: false,
+                textStyle: Theme.of(context).textTheme.bodyLarge,
+                inputDecorationTheme: _dropdownDecoration(
+                  accentColor: _primaryColor,
+                ),
+                dropdownMenuEntries: _invoicePaperOptions
+                    .map(
+                      (option) => DropdownMenuEntry<String>(
+                        value: option,
+                        label: option,
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
         _buildSectionCard(
           icon: Icons.print_outlined,
           iconColor: _primaryColor,

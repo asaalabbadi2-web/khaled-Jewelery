@@ -43,6 +43,8 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
   static const String _emailCopyKey = 'printing_email_copy';
   static const String _secureModeKey = 'printing_secure_mode';
   static const String _presetListKey = 'printing_presets';
+  static const String _printInColorKey = 'print_in_color';
+  static const String _invoicePaperSizeKey = 'invoice_paper_size';
 
   SharedPreferences? _preferences;
 
@@ -290,6 +292,8 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
           prefs.getString(_watermarkTextKey) ?? _selectedWatermark;
       _emailCustomerCopy = prefs.getBool(_emailCopyKey) ?? _emailCustomerCopy;
       _secureMode = prefs.getBool(_secureModeKey) ?? _secureMode;
+      _printInColor = prefs.getBool(_printInColorKey) ?? _printInColor;
+      _paperSize = prefs.getString(_invoicePaperSizeKey) ?? _paperSize;
       _savedPresets = savedPresets
           .map((entry) {
             try {
@@ -1977,6 +1981,13 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
     }
   }
 
+  Future<void> _persistPrintStylePrefs(bool inColor, String paperSize) async {
+    final prefs = _preferences ?? await SharedPreferences.getInstance();
+    _preferences = prefs;
+    await prefs.setBool(_printInColorKey, inColor);
+    await prefs.setString(_invoicePaperSizeKey, paperSize);
+  }
+
   Map<String, dynamic> _currentPresetData() {
     return {
       'topMargin': _topMargin,
@@ -2495,6 +2506,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
             invoice: selectedInvoice,
             paperSize: (_getPrintSettings()['paperSize'] ?? 'A4').toString(),
             isArabic: widget.isArabic,
+            blackAndWhite: !_printInColor,
           );
         } catch (e) {
           if (mounted) {
@@ -2740,9 +2752,10 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
         final pdfBytes = await VoucherPdfBuilder.buildBytes(
           voucher: selectedVoucher,
           format: pageFormat,
-          options: const VoucherPdfOptions(
+          options: VoucherPdfOptions(
             isArabic: true,
             includeAccountLines: false,
+            blackAndWhite: !_printInColor,
           ),
           settings: sp,
         );
@@ -3358,6 +3371,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
                       _printInColor = printInColor;
                       _autoOpenPrintDialog = autoOpenPrintDialog;
                     });
+                    _persistPrintStylePrefs(printInColor, paperSize);
                     Navigator.pop(context);
                     _showSnack(
                       widget.isArabic
@@ -4017,6 +4031,7 @@ class _PrintingCenterScreenState extends State<PrintingCenterScreen> {
             invoice: selectedInvoice,
             paperSize: (_getPrintSettings()['paperSize'] ?? 'A4').toString(),
             isArabic: widget.isArabic,
+            blackAndWhite: !_printInColor,
           );
         } catch (e) {
           if (mounted) {

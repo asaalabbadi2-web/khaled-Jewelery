@@ -18,6 +18,7 @@ Future<void> printInvoiceDirect({
   required Map<String, dynamic> invoice,
   String? paperSize,
   bool isArabic = true,
+  bool blackAndWhite = false,
 }) async {
   SettingsProvider? sp;
   try {
@@ -38,7 +39,7 @@ Future<void> printInvoiceDirect({
     await Printing.layoutPdf(
       name: filename(),
       onLayout: (format) async {
-        final opts = InvoicePdfOptions(isArabic: isArabic);
+        final opts = InvoicePdfOptions(isArabic: isArabic, blackAndWhite: blackAndWhite);
         return InvoicePdfBuilder.buildBytes(
           invoice: invoice,
           format: format,
