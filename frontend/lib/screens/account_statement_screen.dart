@@ -14,6 +14,7 @@ import 'package:pdf/pdf.dart' as pdf;
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:image/image.dart' as img;
 
 import '../api_service.dart';
 import '../models/account_statement_model.dart';
@@ -125,6 +126,16 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       currencySymbol: settingsProvider?.currencySymbol ?? 'ر.س',
       blackAndWhite: bw,
     );
+  }
+
+  static Uint8List _toGrayscaleBytes(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      return Uint8List.fromList(img.encodePng(img.grayscale(decoded)));
+    } catch (_) {
+      return bytes;
+    }
   }
 
   Future<Uint8List> _resizeImageBytes(Uint8List bytes, int targetSize) async {
@@ -1129,7 +1140,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       final raw = (await rootBundle.load(
         'assets/KHGL.png',
       )).buffer.asUint8List();
-      fallbackLogoBytes = await _resizeImageBytes(raw, 128);
+      var resized = await _resizeImageBytes(raw, 128);
+      fallbackLogoBytes = branding.blackAndWhite ? _toGrayscaleBytes(resized) : resized;
     } catch (_) {}
 
     // Pre-decode and resize the base64 company logo (main isolate only).
@@ -1143,7 +1155,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
             ? b64.substring(commaIdx + 1)
             : b64;
         final decoded = base64Decode(payload);
-        preloadedLogo = await _resizeImageBytes(decoded, 128);
+        var resized = await _resizeImageBytes(decoded, 128);
+        preloadedLogo = branding.blackAndWhite ? _toGrayscaleBytes(resized) : resized;
       } catch (_) {}
     }
 

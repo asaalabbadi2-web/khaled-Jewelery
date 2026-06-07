@@ -128,6 +128,9 @@ class VoucherPdfBuilder {
       fontReg = pw.Font.helvetica();
       fontBold = pw.Font.helveticaBold();
     }
+    if (options.blackAndWhite && logoBytes != null) {
+      logoBytes = PdfSarCache.toGrayscalePng(logoBytes);
+    }
     pw.MemoryImage? logoImage = logoBytes != null
         ? pw.MemoryImage(logoBytes)
         : null;

@@ -71,6 +71,17 @@ class PdfSarCache {
     }
   }
 
+  /// Convert image bytes to grayscale PNG. Returns original bytes on failure.
+  static Uint8List toGrayscalePng(Uint8List bytes) {
+    try {
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) return bytes;
+      return Uint8List.fromList(img.encodePng(img.grayscale(decoded)));
+    } catch (_) {
+      return bytes;
+    }
+  }
+
   // ── Lazy asset loaders — called from buildBytes(), never at startup ──────────
 
   /// Ensures Cairo font bytes are in cache. Fast no-op on subsequent calls.
