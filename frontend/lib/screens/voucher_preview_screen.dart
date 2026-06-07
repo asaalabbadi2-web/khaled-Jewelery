@@ -59,12 +59,15 @@ class _VoucherPreviewScreenState extends State<VoucherPreviewScreen> {
       await sp.ensureLoadedForPrint();
     } catch (_) {}
 
+    final prefs = await SharedPreferences.getInstance();
+    final bw = !(prefs.getBool('print_in_color') ?? true);
     return VoucherPdfBuilder.buildBytes(
       voucher: widget.voucherData,
       format: format,
-      options: const VoucherPdfOptions(
+      options: VoucherPdfOptions(
         isArabic: true,
         includeAccountLines: false,
+        blackAndWhite: bw,
       ),
       settings: sp,
     );

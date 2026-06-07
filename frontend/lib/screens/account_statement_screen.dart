@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart' as pdf;
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api_service.dart';
 import '../models/account_statement_model.dart';
@@ -110,6 +111,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     final companyLogoBase64 =
         (settingsProvider?.settings['company_logo_base64'] ?? '').toString();
 
+    final prefs = await SharedPreferences.getInstance();
+    final bw = !(prefs.getBool('print_in_color') ?? true);
+
     return AccountStatementPdfBranding(
       companyName: companyName,
       companyAddress: companyAddress,
@@ -119,6 +123,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       showCompanyLogo: showCompanyLogo,
       companyLogoBase64: companyLogoBase64,
       currencySymbol: settingsProvider?.currencySymbol ?? 'ر.س',
+      blackAndWhite: bw,
     );
   }
 

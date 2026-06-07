@@ -7,24 +7,32 @@ import 'package:pdf/pdf.dart';
 import 'package:printing/printing.dart';
 import 'package:provider/provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../api_service.dart';
 import '../pdf/invoice_pdf_builder.dart';
 import '../providers/settings_provider.dart';
 
+Future<bool> readPrintBlackAndWhite() async {
+  final prefs = await SharedPreferences.getInstance();
+  return !(prefs.getBool('print_in_color') ?? true);
+}
+
 Future<void> printInvoiceDirect({
   required BuildContext context,
   required Map<String, dynamic> invoice,
   String? paperSize,
   bool isArabic = true,
-  bool blackAndWhite = false,
+  bool? blackAndWhite,
 }) async {
   SettingsProvider? sp;
   try {
     sp = context.read<SettingsProvider>();
     await sp.ensureLoadedForPrint();
   } catch (_) {}
+
+  final bw = blackAndWhite ?? await readPrintBlackAndWhite();
 
   String filename() {
     final numStr = (invoice['invoice_type_id'] ?? '').toString().trim();
@@ -39,7 +47,7 @@ Future<void> printInvoiceDirect({
     await Printing.layoutPdf(
       name: filename(),
       onLayout: (format) async {
-        final opts = InvoicePdfOptions(isArabic: isArabic, blackAndWhite: blackAndWhite);
+        final opts = InvoicePdfOptions(isArabic: isArabic, blackAndWhite: bw);
         return InvoicePdfBuilder.buildBytes(
           invoice: invoice,
           format: format,
