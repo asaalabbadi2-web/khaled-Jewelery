@@ -31988,6 +31988,9 @@ def settle_office_reservation(reservation_id: int):
             wage_tax_total=0.0,
             amount_paid=paid_amount,
             gold_type='scrap',
+            is_posted=True,
+            posted_at=settlement_date,
+            posted_by=str(data.get('created_by') or 'system'),
         )
         db.session.add(purchase_invoice)
         db.session.flush()
