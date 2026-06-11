@@ -31325,8 +31325,10 @@ def _auto_consume_weight_closing(
         cash_spent += chunk_cash_value
 
         # ─── قيد تكلفة المبيعات (COGS): د/521 × ه/مخزون مالي ────────────────────
-        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense") لتعكس تكلفة الذهب المباع.
-        if journal_entry_id and chunk_cash_value > 0 and execution_type != 'expense':
+        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense" أو "office_reservation").
+        # مكاتب التسكير (office_reservation) لا تحتاج قيد COGS هنا لأن القيد الرئيسي
+        # في settle_office_reservation يُعالج المشتريات بشكل منفصل.
+        if journal_entry_id and chunk_cash_value > 0 and execution_type not in ('expense', 'office_reservation'):
             _cogs_account = Account.query.filter_by(account_number='521').first()
             if _cogs_account:
                 _karat_ln = (
@@ -31939,6 +31941,7 @@ def create_office_reservation():
                     description=f'خروج ذهب كسر للتسكير عيار {_karat_n}',
                     **{_kc: weight_grams},
                 )
+                reservation.gold_journal_entry_id = _res_gold_je.id if hasattr(reservation, 'gold_journal_entry_id') else None
                 _res_gold_je_ok = True
         except Exception as _rje_exc:
             print(f"⚠️ تحذير: تعذر إنشاء قيد الذهب عند الحجز: {_rje_exc}")
