@@ -4063,7 +4063,7 @@ def get_account_statement(account_id):
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
         .filter(*journal_filters)
-        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -4330,7 +4330,7 @@ def get_account_statement_merged(account_id):
     journal_lines = (
         JournalEntryLine.query.join(JournalEntry)
         .filter(*journal_filters)
-        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -4640,7 +4640,7 @@ def get_customer_statement(id):
         .filter(*journal_filters)
         .filter(Account.type == 'Asset')
         .filter(Account.account_number.like('12%'))
-        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -6015,7 +6015,7 @@ def get_supplier_weight_statement(supplier_id):
     opening_lines = (
         base_query
         .filter(JournalEntry.entry_type == 'افتتاحي')
-        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -6039,7 +6039,7 @@ def get_supplier_weight_statement(supplier_id):
     journal_lines = (
         base_query
         .filter(JournalEntry.entry_type != 'افتتاحي')
-        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .all()
     )
 
@@ -7509,33 +7509,6 @@ def pending_post_invoices():
             .all()
         )
 
-        # Pre-fetch approval alerts for all invoices in one query
-        inv_ids = [inv.id for inv in invoices]
-        approval_alerts = {}  # inv_id -> {'message': str, 'details': dict}
-        try:
-            from models import SystemAlert
-            alerts = (
-                SystemAlert.query
-                .filter(SystemAlert.entity_type == 'Invoice')
-                .filter(SystemAlert.entity_id.in_(inv_ids))
-                .filter(SystemAlert.alert_type == 'invoice_approval')
-                .order_by(SystemAlert.created_at.desc())
-                .all()
-            )
-            for a in alerts:
-                if a.entity_id not in approval_alerts:
-                    parsed_details = {}
-                    try:
-                        parsed_details = json.loads(a.details) if a.details else {}
-                    except Exception:
-                        pass
-                    approval_alerts[a.entity_id] = {
-                        'message': a.message or '',
-                        'details': parsed_details,
-                    }
-        except Exception:
-            pass
-
         result = []
         for inv in invoices:
             # party name
@@ -7552,57 +7525,14 @@ def pending_post_invoices():
             elif getattr(inv, 'employee', None) and inv.employee.name:
                 creator = inv.employee.name
 
-            alert_info = approval_alerts.get(inv.id, {})
-
-            # Extract karat info from karat_lines (supplier purchases)
-            karat_info = []
-            try:
-                for kl in (inv.karat_lines or []):
-                    karat_info.append({
-                        'karat': int(kl.karat or 0),
-                        'weight_grams': float(kl.weight_grams or 0),
-                        'price_per_gram': round(float(kl.gold_value_cash or 0) / float(kl.weight_grams), 2)
-                            if (kl.weight_grams or 0) > 0 else 0.0,
-                        'gold_value': float(kl.gold_value_cash or 0),
-                    })
-            except Exception:
-                pass
-
-            # Extract karat info from invoice_items (sales)
-            if not karat_info:
-                try:
-                    seen_karats: dict = {}
-                    for item in (inv.items or []):
-                        k = int(float(item.karat or 0)) if item.karat else 0
-                        if k not in seen_karats:
-                            seen_karats[k] = {'weight': 0.0, 'value': 0.0}
-                        seen_karats[k]['weight'] += float(item.weight or 0)
-                        seen_karats[k]['value'] += float(item.net or 0)
-                    for k, v in seen_karats.items():
-                        karat_info.append({
-                            'karat': k,
-                            'weight_grams': round(v['weight'], 4),
-                            'price_per_gram': round(v['value'] / v['weight'], 2) if v['weight'] > 0 else 0.0,
-                            'gold_value': round(v['value'], 2),
-                        })
-                except Exception:
-                    pass
-
             result.append({
                 'id': inv.id,
                 'invoice_number': inv.invoice_number,
                 'invoice_type': inv.invoice_type or '',
                 'total_amount': float(inv.total or 0),
-                'total_weight': float(inv.total_weight or 0),
-                'gold_type': getattr(inv, 'gold_type', None) or 'new',
-                'gold_subtotal': float(getattr(inv, 'gold_subtotal', 0) or 0),
-                'payment_method': getattr(inv, 'payment_method', None) or '',
                 'party_name': party_name,
                 'created_by_name': creator,
                 'created_at': inv.date.isoformat() if inv.date else None,
-                'karat_lines': karat_info,
-                'approval_reason_message': alert_info.get('message', ''),
-                'approval_details': alert_info.get('details', {}),
             })
 
         return jsonify({
@@ -8839,112 +8769,54 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     try:
         ip.payment_method_id = new_pm_id
 
-        # 0. Recalculate commission on InvoicePayment based on new PM
-        #    - commission_timing='invoice' → commission deducted immediately, affects profit
-        #    - commission_timing='settlement' → commission=0 here, handled later by settlement
-        new_commission_timing = str(getattr(new_pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
-        new_commission_rate = float(getattr(new_pm, 'commission_rate', 0.0) or 0.0)
-        payment_amount = float(ip.amount or 0.0)
-
-        if new_commission_timing == 'settlement':
-            new_commission_amount = 0.0
-            new_commission_vat = 0.0
-            new_net_amount = payment_amount
-        else:
-            new_commission_amount = payment_amount * (new_commission_rate / 100.0) if new_commission_rate > 0 else 0.0
-            new_commission_vat = round(new_commission_amount * 0.15, 4)
-            new_net_amount = payment_amount - new_commission_amount - new_commission_vat
-
-        ip.commission_rate = new_commission_rate
-        ip.commission_amount = round(new_commission_amount, 4)
-        ip.commission_vat = round(new_commission_vat, 4)
-        ip.net_amount = round(new_net_amount, 4)
-
-        # Recompute invoice-level commission_amount = sum of all its payments
-        try:
-            all_payments = InvoicePayment.query.filter_by(invoice_id=invoice_id).all()
-            total_commission = sum(float(p.commission_amount or 0.0) for p in all_payments)
-            invoice.commission_amount = round(total_commission, 4)
-            total_net = sum(float(p.net_amount or 0.0) for p in all_payments)
-            invoice.net_amount = round(total_net, 4)
-        except Exception:
-            pass
-
-        # 1. Update ALL linked SafeBoxTransactions (not just the first)
+        # 1. Update the linked SafeBoxTransaction safe_box_id
         if new_sb_id is not None:
-            sbts = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).all()
-            for sbt in sbts:
+            sbt = SafeBoxTransaction.query.filter_by(
+                invoice_payment_id=payment_id
+            ).first()
+            if sbt:
                 sbt.safe_box_id = new_sb_id
-            # Also catch SBTs linked by ref_type/ref_id without invoice_payment_id
-            if not sbts and old_sb_id is not None:
-                sbts_by_ref = SafeBoxTransaction.query.filter_by(
-                    ref_type='invoice_payment', ref_id=payment_id, safe_box_id=old_sb_id
-                ).all()
-                for sbt in sbts_by_ref:
-                    sbt.safe_box_id = new_sb_id
 
-        # 2. Create a correcting journal entry instead of editing posted lines.
-        #    Original entries stay untouched (audit trail preserved).
-        #    Correcting entry: Dr. new_safe_account / Cr. old_safe_account
+        # 2. Update the GL: re-point the consolidated JE line from old safe account → new safe account.
+        #    The consolidated JE (reference_type='invoice_payments') has 2 lines per payment;
+        #    the line with account_id == old_safe_account_id is the safe-box leg.
         je_line_updated = False
-        je_lines_updated = 0
-        correction_je_id = None
         if old_safe_account_id and new_safe_account_id and old_safe_account_id != new_safe_account_id:
-            # Sum the net cash amount that moved through old safe account for this invoice
-            invoice_jes = JournalEntry.query.filter(
-                JournalEntry.is_deleted == False,
-                JournalEntry.reference_type.in_(['invoice', 'invoice_payments', 'invoice_payment']),
-                JournalEntry.reference_id == int(invoice.id),
-            ).all()
-            total_net_cash = 0.0
-            for je in invoice_jes:
-                safe_lines = JournalEntryLine.query.filter(
-                    JournalEntryLine.journal_entry_id == je.id,
-                    JournalEntryLine.account_id == int(old_safe_account_id),
-                    JournalEntryLine.is_deleted == False,
-                ).all()
-                for ln in safe_lines:
-                    total_net_cash += float(ln.cash_debit or 0.0) - float(ln.cash_credit or 0.0)
-                    je_lines_updated += 1
-
-            if je_lines_updated > 0 and abs(total_net_cash) > 0.001:
-                old_pm_name = getattr(old_pm, 'name', str(old_pm_id)) if old_pm else str(old_pm_id)
-                new_pm_name = getattr(new_pm, 'name', str(new_pm_id))
-                correction_entry_number = _generate_journal_entry_number('CORR')
-                correction_je = JournalEntry(
-                    entry_number=correction_entry_number,
-                    date=datetime.now(),
-                    description=(
-                        f'تصحيح وسيلة الدفع: {invoice.invoice_number} '
-                        f'({old_pm_name} → {new_pm_name}) — {reason}'
-                    ),
-                    reference_type='payment_method_correction',
-                    reference_id=int(invoice.id),
-                    is_posted=True,
-                    posted_at=datetime.now(),
-                    posted_by=g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin',
+            marker = f'دفعة #{payment_id}'
+            consolidated_je = (
+                JournalEntry.query
+                .filter(
+                    JournalEntry.is_deleted == False,
+                    JournalEntry.reference_type == 'invoice_payments',
+                    JournalEntry.reference_id == int(invoice.id),
                 )
-                db.session.add(correction_je)
-                db.session.flush()
-                correction_je_id = correction_je.id
-
-                # Dr. new safe account (money now flows through new safe)
-                db.session.add(JournalEntryLine(
-                    journal_entry_id=correction_je.id,
-                    account_id=int(new_safe_account_id),
-                    cash_debit=round(abs(total_net_cash), 4) if total_net_cash > 0 else 0.0,
-                    cash_credit=round(abs(total_net_cash), 4) if total_net_cash < 0 else 0.0,
-                    description=f'تصحيح: {new_pm_name} — {invoice.invoice_number}',
-                ))
-                # Cr. old safe account (reverse original safe movement)
-                db.session.add(JournalEntryLine(
-                    journal_entry_id=correction_je.id,
-                    account_id=int(old_safe_account_id),
-                    cash_credit=round(abs(total_net_cash), 4) if total_net_cash > 0 else 0.0,
-                    cash_debit=round(abs(total_net_cash), 4) if total_net_cash < 0 else 0.0,
-                    description=f'عكس: {old_pm_name} — {invoice.invoice_number}',
-                ))
-                je_line_updated = True
+                .first()
+            )
+            if consolidated_je:
+                safe_line = (
+                    JournalEntryLine.query
+                    .filter(
+                        JournalEntryLine.journal_entry_id == consolidated_je.id,
+                        JournalEntryLine.account_id == int(old_safe_account_id),
+                        JournalEntryLine.is_deleted == False,
+                        JournalEntryLine.description.contains(marker),
+                    )
+                    .first()
+                )
+                if safe_line:
+                    # Adjust cached balance_cash on both accounts
+                    net_cash = float(safe_line.cash_debit or 0.0) - float(safe_line.cash_credit or 0.0)
+                    try:
+                        old_acc = Account.query.get(int(old_safe_account_id))
+                        new_acc = Account.query.get(int(new_safe_account_id))
+                        if old_acc is not None:
+                            old_acc.balance_cash = float(old_acc.balance_cash or 0.0) - net_cash
+                        if new_acc is not None:
+                            new_acc.balance_cash = float(new_acc.balance_cash or 0.0) + net_cash
+                    except Exception:
+                        pass
+                    safe_line.account_id = int(new_safe_account_id)
+                    je_line_updated = True
 
         # 3. Audit log
         try:
@@ -8962,8 +8834,6 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                     'old_safe_account_id': old_safe_account_id,
                     'new_safe_account_id': new_safe_account_id,
                     'je_line_updated': je_line_updated,
-                    'je_lines_updated': je_lines_updated,
-                    'correction_je_id': correction_je_id,
                     'reason': reason,
                 }, ensure_ascii=False),
                 ip_address=request.remote_addr,
@@ -8985,8 +8855,6 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
             'old_safe_account_id': old_safe_account_id,
             'new_safe_account_id': new_safe_account_id,
             'je_line_updated': je_line_updated,
-            'je_lines_updated': je_lines_updated,
-            'correction_je_id': correction_je_id,
         }), 200
 
     except Exception as exc:
@@ -22305,7 +22173,7 @@ def get_general_ledger_all():
     total_count = query.count()
     lines = (
         query
-        .order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
+        .order_by(JournalEntry.date.asc(), JournalEntry.id.asc(), JournalEntryLine.id.asc())
         .limit(per_page)
         .offset((page - 1) * per_page)
         .all()
@@ -23244,7 +23112,7 @@ def get_customer_balances_aging():
         query = query.filter(JournalEntry.date <= end_dt)
     
     # Order by date and id
-    lines = query.order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc()).all()
+    lines = query.order_by(JournalEntry.date.asc(), JournalEntry.id.asc()).all()
     
     # Calculate running balances
     running_cash_balance = 0
@@ -23429,7 +23297,7 @@ def get_account_ledger(account_id):
             opening_24k += (line.debit_24k or 0) - (line.credit_24k or 0)
     
     # Order by date
-    lines = query.order_by(func.date(JournalEntry.date).asc(), func.coalesce(JournalEntry.created_at, JournalEntry.date).asc(), JournalEntry.id.asc()).all()
+    lines = query.order_by(JournalEntry.date.asc(), JournalEntry.id.asc()).all()
     
     # Calculate running balances
     running_cash = opening_cash
@@ -31325,10 +31193,8 @@ def _auto_consume_weight_closing(
         cash_spent += chunk_cash_value
 
         # ─── قيد تكلفة المبيعات (COGS): د/521 × ه/مخزون مالي ────────────────────
-        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense" أو "office_reservation").
-        # مكاتب التسكير (office_reservation) لا تحتاج قيد COGS هنا لأن القيد الرئيسي
-        # في settle_office_reservation يُعالج المشتريات بشكل منفصل.
-        if journal_entry_id and chunk_cash_value > 0 and execution_type not in ('expense', 'office_reservation'):
+        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense") لتعكس تكلفة الذهب المباع.
+        if journal_entry_id and chunk_cash_value > 0 and execution_type != 'expense':
             _cogs_account = Account.query.filter_by(account_number='521').first()
             if _cogs_account:
                 _karat_ln = (
@@ -31884,69 +31750,6 @@ def create_office_reservation():
                 voucher.journal_entry_id = voucher_entry.id
             _append_safe_transactions_for_voucher(voucher, created_by=voucher.created_by)
 
-        # ─── قيد وزني عند إنشاء الحجز ──────────────────────────────────────────
-        # يُسجّل خروج الذهب من مخزوننا إلى حيازة المكتب حتى يظهر حساب المكتب
-        # مديناً للذهب (عليه ذهب) أثناء فترة الحجز، ويُصفَّر عند التسوية.
-        # مدين: وزني المكتب  — الذهب في حيازتهم (عليه)
-        # دائن: مخزون الكسر الوزني — الذهب غادر مخزوننا مؤقتاً
-        _res_gold_je_ok = False
-        try:
-            _res_inv_acc_id = _resolve_inventory_account_id_for_invoice('شراء', 'scrap')
-            _res_inv_memo_id = None
-            if _res_inv_acc_id:
-                _inv_obj = Account.query.get(_res_inv_acc_id)
-                if _inv_obj and _inv_obj.memo_account_id:
-                    _res_inv_memo_id = _inv_obj.memo_account_id
-            if not _res_inv_memo_id:
-                _res_inv_memo_id = get_account_id_by_number('7521')
-
-            _res_office_acc = Account.query.get(int(office.account_category_id))
-            _res_office_memo_id = getattr(_res_office_acc, 'memo_account_id', None) if _res_office_acc else None
-            if not _res_office_memo_id:
-                ensure_office_account(office)
-                db.session.flush()
-                _res_office_acc = Account.query.get(int(office.account_category_id))
-                _res_office_memo_id = getattr(_res_office_acc, 'memo_account_id', None) if _res_office_acc else None
-
-            if _res_inv_memo_id and _res_office_memo_id:
-                _karat_n = karat if karat in (18, 21, 22, 24) else int(get_main_karat() or 21)
-                _kd = f'debit_{_karat_n}k'
-                _kc = f'credit_{_karat_n}k'
-
-                _res_gold_je = JournalEntry(
-                    entry_number=_generate_journal_entry_number('WGT'),
-                    date=reservation_date,
-                    description=f'إرسال ذهب للحجز ({reservation.reservation_code}) - مكتب {office.name}',
-                    reference_type='office_reservation',
-                    reference_id=reservation.id,
-                    is_posted=True,
-                    posted_at=reservation_date,
-                    posted_by=str(data.get('created_by') or 'system'),
-                )
-                db.session.add(_res_gold_je)
-                db.session.flush()
-
-                # مدين: وزني المكتب — الذهب في حيازة المكتب (عليه ذهب)
-                create_dual_journal_entry(
-                    journal_entry_id=_res_gold_je.id,
-                    account_id=int(_res_office_memo_id),
-                    supplier_id=supplier.id,
-                    description=f'ذهب بحيازة مكتب التسكير عيار {_karat_n}',
-                    **{_kd: weight_grams},
-                )
-                # دائن: مخزون الكسر الوزني — الذهب غادر مخزوننا
-                create_dual_journal_entry(
-                    journal_entry_id=_res_gold_je.id,
-                    account_id=int(_res_inv_memo_id),
-                    description=f'خروج ذهب كسر للتسكير عيار {_karat_n}',
-                    **{_kc: weight_grams},
-                )
-                reservation.gold_journal_entry_id = _res_gold_je.id if hasattr(reservation, 'gold_journal_entry_id') else None
-                _res_gold_je_ok = True
-        except Exception as _rje_exc:
-            print(f"⚠️ تحذير: تعذر إنشاء قيد الذهب عند الحجز: {_rje_exc}")
-        # ────────────────────────────────────────────────────────────────────────
-
         office.total_reservations = (office.total_reservations or 0) + 1
         office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
         office.total_amount_paid = (office.total_amount_paid or 0.0) + paid_amount
@@ -31956,7 +31759,6 @@ def create_office_reservation():
 
         response = _serialize_office_reservation(reservation)
         response['purchase_invoice_id'] = reservation.purchase_invoice_id
-        response['gold_journal_entry_created'] = _res_gold_je_ok
         # Echo payment safe box (if provided via request or settings) for UI/debugging.
         payment_sb = _normalize_fk_ref(data.get('safe_box_id')) or _normalize_fk_ref(data.get('cash_safe_box_id'))
         if payment_sb is not None:
@@ -32054,9 +31856,6 @@ def settle_office_reservation(reservation_id: int):
             wage_tax_total=0.0,
             amount_paid=paid_amount,
             gold_type='scrap',
-            is_posted=True,
-            posted_at=settlement_date,
-            posted_by=str(data.get('created_by') or 'system'),
         )
         db.session.add(purchase_invoice)
         db.session.flush()
@@ -32100,13 +31899,7 @@ def settle_office_reservation(reservation_id: int):
         db.session.add(gold_entry)
         db.session.flush()
 
-        # ✅ مكاتب التسكير: تُعامل كمشتريات من عميل — Dr. مشتريات (512) / Cr. حساب المكتب.
-        inventory_account_id = _resolve_inventory_account_id_for_invoice('شراء', 'scrap')
-        if not inventory_account_id:
-            db.session.rollback()
-            return jsonify({'error': 'تعذر تحديد حساب مخزون الذهب (scrap)'}), 500
-
-        # حساب المشتريات (512 كسر / 511 جديد) — مدين نقداً عند الاستلام
+        # حساب المشتريات (512 كسر / 511 جديد) — مدين نقداً
         _purchases_key = 'purchases_gold_scrap' if getattr(reservation, 'gold_type', 'scrap') == 'scrap' else 'purchases_gold_new'
         purchases_acc_id = (
             get_account_id_for_mapping('شراء من عميل', _purchases_key)
@@ -32129,23 +31922,6 @@ def settle_office_reservation(reservation_id: int):
             db.session.rollback()
             return jsonify({'error': 'وزن الحجز غير صالح'}), 400
 
-        karat_debit = f'debit_{karat}k'
-        karat_credit = f'credit_{karat}k'
-
-        # الوزن يجب أن يذهب لحساب المذكرة (7xxxx) لا الحساب المالي (1xxx).
-        inventory_memo_acc_id = None
-        try:
-            inv_acc_obj = Account.query.get(inventory_account_id)
-            if inv_acc_obj and inv_acc_obj.memo_account_id:
-                inventory_memo_acc_id = inv_acc_obj.memo_account_id
-        except Exception:
-            inventory_memo_acc_id = None
-        if not inventory_memo_acc_id:
-            inventory_memo_acc_id = get_account_id_by_number('7521')
-        if not inventory_memo_acc_id:
-            db.session.rollback()
-            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمخزون الذهب عند التسكير'}), 500
-
         # مدين: مشتريات ذهب (512/511) — تكلفة الشراء من المكتب
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
@@ -32153,44 +31929,13 @@ def settle_office_reservation(reservation_id: int):
             cash_debit=total_amount,
             description=f'شراء ذهب تسكير عيار {karat} - مشتريات',
         )
-        # مدين: مخزون وزني (memo) — الذهب يدخل مخزوننا
-        create_dual_journal_entry(
-            journal_entry_id=gold_entry.id,
-            account_id=inventory_memo_acc_id,
-            description=f'استلام ذهب تسكير عيار {karat} - دخول وزن للمخزون',
-            **{karat_debit: weight_grams},
-        )
-
-        # IMPORTANT: office bridge account is used for cash-equivalent tracking.
-        # Weight must be posted to the memo (7xxxx) account so it maps cleanly
-        # to the office gold SafeBox (which is linked to the memo account).
+        # دائن: حساب مورد المكتب — الدفع لاحقاً من خزينة المكتب
         create_dual_journal_entry(
             journal_entry_id=gold_entry.id,
             account_id=office.account_category_id,
             cash_credit=total_amount,
             supplier_id=supplier.id,
-            description=f'ذهب لدى مكتب التسكير (قيمة نقدية مكافئة) - عيار {karat}',
-        )
-
-        office_account = Account.query.get(int(office.account_category_id))
-        office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
-        if not office_memo_id:
-            # Ensure memo exists for legacy offices.
-            ensure_office_account(office)
-            db.session.flush()
-            office_account = Account.query.get(int(office.account_category_id))
-            office_memo_id = getattr(office_account, 'memo_account_id', None) if office_account else None
-        if not office_memo_id:
-            db.session.rollback()
-            return jsonify({'error': 'تعذر تحديد الحساب الوزني (memo) لمكتب التسكير'}), 500
-
-        # دائن: وزني المكتب — الذهب يغادر المكتب بعد التنفيذ
-        create_dual_journal_entry(
-            journal_entry_id=gold_entry.id,
-            account_id=int(office_memo_id),
-            supplier_id=supplier.id,
-            description=f'خروج ذهب من مكتب التسكير (وزن) - عيار {karat}',
-            **{karat_credit: weight_grams},
+            description=f'مستحق لمكتب التسكير عيار {karat} - يُسدَّد من خزينة المكتب',
         )
         verify_dual_balance(gold_entry.id)
 
@@ -32279,21 +32024,6 @@ def cancel_office_reservation(reservation_id: int):
 
     reservation.status = 'cancelled'
     db.session.add(reservation)
-
-    # عكس قيد الذهب الوزني الذي أُنشئ عند الحجز (إرسال الذهب للمكتب).
-    # يُبحث عن القيد بالمرجع ويُحذف لأن الحجز لم يُنفَّذ ولا توجد دفعات.
-    try:
-        from models import JournalEntryLine
-        reservation_gold_entries = JournalEntry.query.filter_by(
-            reference_type='office_reservation',
-            reference_id=reservation.id,
-        ).all()
-        for je in reservation_gold_entries:
-            JournalEntryLine.query.filter_by(journal_entry_id=je.id).delete()
-            db.session.delete(je)
-    except Exception as _rev_exc:
-        print(f"⚠️ تحذير: تعذر حذف قيود الحجز الملغى {reservation_id}: {_rev_exc}")
-
     db.session.commit()
 
     return jsonify(_serialize_office_reservation(reservation)), 200
@@ -32627,7 +32357,7 @@ def get_dual_account_statement():
             end_date = datetime.strptime(end_date_str, '%Y-%m-%d')
             query = query.filter(JournalEntry.date <= end_date)
         
-        lines = query.order_by(func.date(JournalEntry.date), func.coalesce(JournalEntry.created_at, JournalEntry.date), JournalEntry.id).all()
+        lines = query.order_by(JournalEntry.date, JournalEntry.id).all()
         
         # حساب الأرصدة الجارية
         balance_cash = 0.0
@@ -34464,6 +34194,70 @@ def get_admin_dashboard():
         except Exception:
             inventory_value = None
 
+    # --- Critical alerts (unreviewed) ---
+    critical_unreviewed_count = 0
+    critical_latest = None
+    try:
+        critical_unreviewed_count = (
+            SystemAlert.query.filter(SystemAlert.severity == 'critical')
+            .filter(SystemAlert.is_reviewed.is_(False))
+            .count()
+        )
+        critical_latest = (
+            SystemAlert.query.filter(SystemAlert.severity == 'critical')
+            .filter(SystemAlert.is_reviewed.is_(False))
+            .order_by(SystemAlert.created_at.desc())
+            .first()
+        )
+        critical_latest = critical_latest.to_dict() if critical_latest else None
+    except Exception:
+        critical_unreviewed_count = 0
+        critical_latest = None
+
+    # --- Alerts: last shift closing (system-wide) ---
+    last_shift_alert = None
+    try:
+        last_close = (
+            AuditLog.query.filter_by(action='shift_closing', success=True)
+            .order_by(AuditLog.timestamp.desc())
+            .first()
+        )
+        if last_close and last_close.details:
+            try:
+                details = (
+                    json.loads(last_close.details)
+                    if isinstance(last_close.details, str)
+                    else (last_close.details or {})
+                )
+            except Exception:
+                details = {}
+
+            cash_diff = None
+            try:
+                cash_diff = float(((details.get('totals') or {}).get('total_difference')))
+            except Exception:
+                cash_diff = None
+
+            gold_pure_diff = None
+            try:
+                gold_pure_diff = float(
+                    (((details.get('gold') or {}).get('pure_24k') or {}).get('difference'))
+                )
+            except Exception:
+                gold_pure_diff = None
+
+            last_shift_alert = {
+                'entity_number': getattr(last_close, 'entity_number', None),
+                'timestamp': last_close.timestamp.isoformat()
+                if getattr(last_close, 'timestamp', None)
+                else None,
+                'user_name': getattr(last_close, 'user_name', None),
+                'cash_difference': cash_diff,
+                'gold_pure_24k_difference': gold_pure_diff,
+            }
+    except Exception:
+        last_shift_alert = None
+
     # --- Purchases today (posted only) ---
     # Include both supplier purchases and scrap purchases from customers,
     # and include return variants used in production.
@@ -34577,16 +34371,19 @@ def get_admin_dashboard():
     payables_due_7_days = 0.0
     receivables_due_7_days = 0.0
     try:
-        payables_due_7_days = float(
-            db.session.query(func.coalesce(func.sum(func.abs(Customer.balance)), 0.0))
-            .filter(Customer.customer_type == 'مورد', Customer.balance < 0)
-            .scalar() or 0.0
-        )
-        receivables_due_7_days = float(
-            db.session.query(func.coalesce(func.sum(Customer.balance), 0.0))
-            .filter(Customer.customer_type == 'عميل', Customer.balance > 0)
-            .scalar() or 0.0
-        )
+        # Get suppliers with credit balances (we owe them)
+        suppliers = Customer.query.filter(Customer.customer_type == 'مورد').all()
+        for supplier in suppliers:
+            balance = float(getattr(supplier, 'balance', 0) or 0)
+            if balance < 0:  # Negative balance means we owe them
+                payables_due_7_days += abs(balance)
+        
+        # Get customers with debit balances (they owe us)
+        customers = Customer.query.filter(Customer.customer_type == 'عميل').all()
+        for customer in customers:
+            balance = float(getattr(customer, 'balance', 0) or 0)
+            if balance > 0:  # Positive balance means they owe us
+                receivables_due_7_days += balance
     except Exception:
         payables_due_7_days = 0.0
         receivables_due_7_days = 0.0
@@ -34793,6 +34590,160 @@ def get_admin_dashboard():
         safe_boxes_enhanced = safe_boxes_summary
 
     # --- Sensitive Operations (Last 5 important actions) ---
+    sensitive_operations = []
+    try:
+        noise_actions = {
+            'login_success', 'login_failed', 'logout',
+            'forgot_password', 'forgot_username', 'password_reset_confirm',
+        }
+
+        recent_logs = (
+            AuditLog.query
+            .filter(AuditLog.success.is_(True))
+            .filter(~AuditLog.action.in_(list(noise_actions)))
+            .order_by(AuditLog.timestamp.desc())
+            .limit(8)
+            .all()
+        )
+        for log in recent_logs:
+            op_desc = {
+                # Shift closing
+                'shift_closing': 'إغلاق وردية',
+                # Posting/unposting
+                'post_invoice': 'ترحيل فاتورة',
+                'post': 'ترحيل',
+                'post_batch': 'ترحيل دفعة',
+                'unpost': 'إلغاء ترحيل',
+                # Vouchers
+                'approve_voucher': 'ترحيل سند',
+                'cancel_voucher': 'إلغاء سند',
+                'voucher_approve': 'اعتماد سند',
+                'voucher_reject': 'رفض سند',
+                'voucher_unapprove': 'إلغاء اعتماد سند',
+                'batch_voucher_approve': 'اعتماد دفعة سندات',
+                # Safety/ops
+                'delete_voucher': 'حذف سند',
+                'large_discount': 'خصم كبير',
+                'create_invoice': 'إنشاء فاتورة',
+            }.get(log.action, log.action)
+            
+            sensitive_operations.append({
+                'action': log.action,
+                'description': op_desc,
+                'user_name': getattr(log, 'user_name', None) or 'غير معروف',
+                'entity_type': getattr(log, 'entity_type', None),
+                'entity_number': getattr(log, 'entity_number', None),
+                'timestamp': log.timestamp.isoformat() if log.timestamp else None,
+                'time_ago': _time_ago(log.timestamp, now) if log.timestamp else None,
+            })
+    except Exception:
+        sensitive_operations = []
+
+    # --- Critical Alert Bar (compact) ---
+    critical_bar = []
+    try:
+        # 0) Count of unreviewed critical alerts (even if latest message missing)
+        try:
+            ccount = int(critical_unreviewed_count or 0)
+        except Exception:
+            ccount = 0
+
+        if ccount > 0:
+            critical_bar.append({
+                'severity': 'critical',
+                'message_ar': f"{ccount} تنبيهات حرجة بانتظار المراجعة",
+                'message_en': f"{ccount} critical alerts pending review",
+                'entity_type': 'SystemAlert',
+                'entity_number': None,
+            })
+
+        # 1) Latest unreviewed critical system alert
+        if isinstance(critical_latest, dict):
+            msg = (critical_latest.get('message') or critical_latest.get('title') or '').strip()
+            if msg:
+                critical_bar.append({
+                    'severity': 'critical',
+                    'message_ar': msg,
+                    'message_en': msg,
+                    'entity_type': critical_latest.get('entity_type'),
+                    'entity_number': critical_latest.get('entity_number'),
+                })
+
+        # 2) Shift closing diffs (when present)
+        if isinstance(last_shift_alert, dict):
+            cash_diff = last_shift_alert.get('cash_difference')
+            gold_diff = last_shift_alert.get('gold_pure_24k_difference')
+            entity_num = last_shift_alert.get('entity_number')
+            try:
+                cash_diff_f = float(cash_diff) if cash_diff is not None else 0.0
+            except Exception:
+                cash_diff_f = 0.0
+            try:
+                gold_diff_f = float(gold_diff) if gold_diff is not None else 0.0
+            except Exception:
+                gold_diff_f = 0.0
+
+            if abs(gold_diff_f) > 0.001:
+                critical_bar.append({
+                    'severity': 'warning',
+                    'message_ar': f"⚠️ يوجد فرق وزني (+/-{gold_diff_f:.3f} جم 24K) في إغلاق {entity_num or ''}".strip(),
+                    'message_en': f"Weight difference ({gold_diff_f:+.3f} g 24K) in shift closing {entity_num or ''}".strip(),
+                    'entity_type': 'ShiftClosing',
+                    'entity_number': entity_num,
+                })
+
+            if abs(cash_diff_f) > 0.01:
+                critical_bar.append({
+                    'severity': 'warning',
+                    'message_ar': f"⚠️ يوجد فرق نقدي ({cash_diff_f:+.2f}) في إغلاق {entity_num or ''}".strip(),
+                    'message_en': f"Cash difference ({cash_diff_f:+.2f}) in shift closing {entity_num or ''}".strip(),
+                    'entity_type': 'ShiftClosing',
+                    'entity_number': entity_num,
+                })
+
+        # 3) Low bank balance (optional threshold)
+        threshold = None
+        try:
+            raw_thr = os.getenv('BANK_LOW_BALANCE_THRESHOLD', '').strip()
+            if raw_thr:
+                threshold = float(raw_thr)
+        except Exception:
+            threshold = None
+
+        if threshold is not None:
+            for sb in safe_boxes_enhanced:
+                if (sb.get('safe_type') or '') != 'bank':
+                    continue
+                try:
+                    bal = float(sb.get('balance_cash') or 0.0)
+                except Exception:
+                    bal = 0.0
+                if bal < threshold:
+                    name = sb.get('name') or 'Bank'
+                    critical_bar.append({
+                        'severity': 'warning',
+                        'message_ar': f"⚠️ رصيد {name} تحت الحد المسموح ({bal:.2f} < {threshold:.2f})",
+                        'message_en': f"{name} balance below threshold ({bal:.2f} < {threshold:.2f})",
+                        'entity_type': 'SafeBox',
+                        'entity_number': None,
+                    })
+
+        # 4) Unposted invoices
+        try:
+            up = int(unposted_invoices_count or 0)
+        except Exception:
+            up = 0
+        if up > 0:
+            critical_bar.append({
+                'severity': 'warning',
+                'message_ar': f"⚠️ {up} فاتورة بانتظار الترحيل",
+                'message_en': f"{up} invoices pending posting",
+                'entity_type': 'Invoice',
+                'entity_number': None,
+            })
+    except Exception:
+        critical_bar = []
+
     # --- Liquidity breakdown (Cash vs Banks) ---
     cash_in_hand = 0.0
     cash_in_banks = 0.0
@@ -34832,104 +34783,114 @@ def get_admin_dashboard():
         except Exception:
             pass
 
-        # Pre-load employees once for username → name resolution.
-        _employee_name_cache: dict = {}
-        try:
-            for emp in Employee.query.with_entities(Employee.id, Employee.name).all():
-                if emp.name:
-                    _employee_name_cache[emp.id] = emp.name
-        except Exception:
-            pass
-
-        # Pre-load ALL sale+purchase invoices for the year range in ONE query.
-        # Python-side filtering per period is far cheaper than 12 round-trips.
-        _all_inv_types = list(set(list(sale_types.keys()) + list(purchase_types.keys())))
-        _year_invoices: list = []
-        _year_items_by_inv: dict = {}
-        try:
-            _year_invoices = (
-                Invoice.query
-                .filter(Invoice.invoice_type.in_(_all_inv_types))
-                .filter(Invoice.is_posted.is_(True))
-                .filter(Invoice.date >= year_start)
-                .filter(Invoice.date < tomorrow_start)
-                .all()
-            )
-            if _year_invoices:
-                _inv_ids = [inv.id for inv in _year_invoices]
-                for item in InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(_inv_ids)).all():
-                    _year_items_by_inv.setdefault(item.invoice_id, []).append(item)
-        except Exception as _cache_err:
-            print(f'[dashboard] invoice pre-cache error: {_cache_err}')
-            import traceback; traceback.print_exc()
-            _year_invoices = []
-
-        # Build username→name map once from cached users + employees.
-        _posted_by_to_name: dict = {}
-        try:
-            for u in _cached_app_users:
-                if not u.employee_id:
-                    continue
-                emp_name = _employee_name_cache.get(u.employee_id, '')
-                if not emp_name:
-                    continue
-                for key in (str(u.username or '').strip().lower(), str(u.full_name or '').strip().lower()):
-                    if key and key not in _posted_by_to_name:
-                        _posted_by_to_name[key] = emp_name
-        except Exception:
-            pass
-
         def _build_inv_summary(inv_types_dict, start, end, exclude_gold_type=None):
-            # Filters the pre-loaded _year_invoices cache — zero DB round-trips.
+            # Uses Invoice.query directly (same proven pattern as today_invoices/series_invoices).
             try:
-                inv_types_set = {str(t).strip() for t in inv_types_dict.keys() if str(t).strip()}
-                if not inv_types_set:
+                inv_types = [str(t).strip() for t in inv_types_dict.keys() if str(t).strip()]
+                if not inv_types:
                     return dict(_EMPTY_INV_SUMMARY)
 
-                rows = [
-                    inv for inv in _year_invoices
-                    if inv.invoice_type in inv_types_set
-                    and inv.date is not None
-                    and start <= inv.date < end
-                    and (not exclude_gold_type or getattr(inv, 'gold_type', None) != exclude_gold_type)
-                ]
+                q = (
+                    Invoice.query
+                    .filter(Invoice.invoice_type.in_(inv_types))
+                    .filter(Invoice.is_posted.is_(True))
+                    .filter(Invoice.date >= start)
+                    .filter(Invoice.date < end)
+                )
 
+                if exclude_gold_type:
+                    try:
+                        if _db_has_column('invoice', 'gold_type'):
+                            q = q.filter(
+                                or_(Invoice.gold_type.is_(None), Invoice.gold_type != exclude_gold_type)
+                            )
+                    except Exception:
+                        pass
+
+                rows = q.all()
                 if not rows:
                     return dict(_EMPTY_INV_SUMMARY)
 
                 total_value = 0.0
                 total_weight = 0.0
-                by_user: dict = {}
-                by_karat: dict = {}
+                by_user = {}
+                by_karat = {}
+                sign_by_id = {}
+                employee_ids = set()
+                posted_keys = set()
 
                 for inv in rows:
                     sign = float(inv_types_dict.get(inv.invoice_type, 1) or 1)
+                    sign_by_id[inv.id] = sign
+                    total_value += float(inv.total or 0) * sign
+                    total_weight += float(inv.total_weight or 0) * sign
+                    if inv.employee_id:
+                        try:
+                            employee_ids.add(int(inv.employee_id))
+                        except Exception:
+                            pass
+                    posted_raw = str(inv.posted_by or '').strip().lower()
+                    if posted_raw:
+                        posted_keys.add(posted_raw)
+
+                # Resolve display name: employee name > posted_by username fallback
+                employee_name_by_id = {}
+                if employee_ids:
+                    try:
+                        for emp in Employee.query.filter(Employee.id.in_(list(employee_ids))).all():
+                            if emp.name:
+                                employee_name_by_id[emp.id] = emp.name
+                    except Exception:
+                        pass
+
+                posted_by_to_name = {}
+                if posted_keys:
+                    try:
+                        for u in _cached_app_users:
+                            if not u.employee_id:
+                                continue
+                            emp_name = employee_name_by_id.get(u.employee_id, '')
+                            if not emp_name:
+                                continue
+                            uk = str(u.username or '').strip().lower()
+                            if uk and uk in posted_keys:
+                                posted_by_to_name[uk] = emp_name
+                            fk = str(u.full_name or '').strip().lower()
+                            if fk and fk in posted_keys and fk not in posted_by_to_name:
+                                posted_by_to_name[fk] = emp_name
+                    except Exception:
+                        pass
+
+                for inv in rows:
+                    sign = float(sign_by_id.get(inv.id, 1) or 1)
                     v = float(inv.total or 0) * sign
                     w = float(inv.total_weight or 0) * sign
-                    total_value += v
-                    total_weight += w
-
-                    # Resolve display name from caches (no DB call)
-                    if inv.employee_id and inv.employee_id in _employee_name_cache:
-                        user = _employee_name_cache[inv.employee_id]
+                    if inv.employee_id and inv.employee_id in employee_name_by_id:
+                        user = employee_name_by_id[inv.employee_id]
                     else:
                         pk = str(inv.posted_by or '').strip().lower()
-                        user = _posted_by_to_name.get(pk) or str(inv.posted_by or 'غير معروف').strip() or 'غير معروف'
+                        user = posted_by_to_name.get(pk) or str(inv.posted_by or 'غير معروف').strip() or 'غير معروف'
+                    if user not in by_user:
+                        by_user[user] = {'value': 0.0, 'weight': 0.0, 'docs': 0}
+                    by_user[user]['value'] += v
+                    by_user[user]['weight'] += w
+                    by_user[user]['docs'] += 1
 
-                    bucket = by_user.setdefault(user, {'value': 0.0, 'weight': 0.0, 'docs': 0})
-                    bucket['value'] += v
-                    bucket['weight'] += w
-                    bucket['docs'] += 1
-
-                    # Karat breakdown from pre-loaded items cache
-                    for item in _year_items_by_inv.get(inv.id, []):
+                # Karat breakdown via InvoiceItem
+                try:
+                    inv_ids = [inv.id for inv in rows]
+                    for item in InvoiceItem.query.filter(InvoiceItem.invoice_id.in_(inv_ids)).all():
+                        sign = float(sign_by_id.get(item.invoice_id, 1) or 1)
                         try:
                             k = f"{int(float(item.karat))}k" if item.karat not in (None, '') else '?'
                         except Exception:
                             k = '?'
-                        kb = by_karat.setdefault(k, {'weight': 0.0, 'value': 0.0})
-                        kb['weight'] += float(item.weight or 0) * sign
-                        kb['value'] += float(item.net or 0) * sign
+                        if k not in by_karat:
+                            by_karat[k] = {'weight': 0.0, 'value': 0.0}
+                        by_karat[k]['weight'] += float(item.weight or 0) * sign
+                        by_karat[k]['value'] += float(item.net or 0) * sign
+                except Exception:
+                    pass
 
                 return {
                     'total_value': round(total_value, 2),
@@ -34952,30 +34913,29 @@ def get_admin_dashboard():
 
         def _build_expenses_summary(start, end):
             try:
-                agg_rows = (
-                    db.session.query(
-                        AccModel.name,
-                        AccModel.account_number,
-                        func.coalesce(func.sum(JELine.cash_debit), 0.0).label('total'),
-                    )
-                    .join(JELine, JELine.account_id == AccModel.id)
+                exp_total = 0.0
+                exp_by_account: dict = {}
+                exp_rows = (
+                    db.session.query(JELine, AccModel)
+                    .join(AccModel, JELine.account_id == AccModel.id)
                     .join(JE2, JELine.journal_entry_id == JE2.id)
                     .filter(AccModel.account_number.like('5%'))
                     .filter(JE2.is_posted.is_(True))
                     .filter(JE2.date >= start)
                     .filter(JE2.date < end)
-                    .group_by(AccModel.id, AccModel.name, AccModel.account_number)
-                    .having(func.coalesce(func.sum(JELine.cash_debit), 0.0) > 0)
-                    .order_by(func.coalesce(func.sum(JELine.cash_debit), 0.0).desc())
                     .all()
                 )
-                exp_total = sum(float(r.total or 0) for r in agg_rows)
+                for line, acc in exp_rows:
+                    amt = float(line.cash_debit or 0)
+                    exp_total += amt
+                    name = (acc.name or acc.account_number or '?').strip()
+                    exp_by_account[name] = exp_by_account.get(name, 0.0) + amt
                 return {
                     'total_value': round(exp_total, 2),
-                    'by_account': [
-                        {'account': (r.name or r.account_number or '?').strip(), 'value': round(float(r.total or 0), 2)}
-                        for r in agg_rows
-                    ],
+                    'by_account': sorted(
+                        [{'account': a, 'value': round(v, 2)} for a, v in exp_by_account.items() if v > 0],
+                        key=lambda x: -x['value']
+                    ),
                 }
             except Exception:
                 return {'total_value': 0.0, 'by_account': []}
@@ -34984,13 +34944,15 @@ def get_admin_dashboard():
             """مشتريات الكسر والتسكير فقط (gold_type='scrap')."""
             try:
                 scrap_inv_types = {'شراء من عميل': 1, 'شراء': 1, 'مرتجع شراء': -1}
-                invs = [
-                    inv for inv in _year_invoices
-                    if inv.invoice_type in scrap_inv_types
-                    and getattr(inv, 'gold_type', None) == 'scrap'
-                    and inv.date is not None
-                    and start <= inv.date < end
-                ]
+                invs = (
+                    Invoice.query
+                    .filter(Invoice.invoice_type.in_(list(scrap_inv_types.keys())))
+                    .filter(Invoice.gold_type == 'scrap')
+                    .filter(Invoice.is_posted.is_(True))
+                    .filter(Invoice.date >= start)
+                    .filter(Invoice.date < end)
+                    .all()
+                )
                 total_value = 0.0
                 total_weight = 0.0
                 for inv in invs:
@@ -35098,6 +35060,13 @@ def get_admin_dashboard():
                 for row in last_7_days_purchases
             ],
         },
+        'alerts': {
+            'last_shift_closing': last_shift_alert,
+            'critical_unreviewed_count': int(critical_unreviewed_count or 0),
+            'critical_unreviewed_latest': critical_latest,
+            'unposted_invoices_count': unposted_invoices_count,
+            'critical_bar': critical_bar[:3],
+        },
         'valuation': {
             'spot_price_24k_per_gram': round(float(spot_price_24k_per_gram), 2)
             if spot_price_24k_per_gram is not None
@@ -35118,6 +35087,7 @@ def get_admin_dashboard():
             'coverage_ratio_pct': round(liquidity_coverage_ratio, 1) if liquidity_coverage_ratio is not None else None,
         },
         'safe_boxes': safe_boxes_enhanced,
+        'sensitive_operations': sensitive_operations,
         'sales_purchases_summary': sales_purchases_summary,
     }), 200
 
