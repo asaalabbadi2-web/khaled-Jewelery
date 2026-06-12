@@ -268,11 +268,32 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     // Check for unseen achievements after the first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkForAchievements();
-      _achievementCheckTimer = Timer.periodic(
-        const Duration(seconds: 30),
-        (_) => _checkForAchievements(),
-      );
+      _startAchievementTimer();
     });
+  }
+
+  void _startAchievementTimer() {
+    _achievementCheckTimer?.cancel();
+    _achievementCheckTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) {
+        if (!mounted) return;
+        _checkForAchievements();
+      },
+    );
+  }
+
+  void _startApprovalsTimer() {
+    _approvalsAutoRefreshTimer?.cancel();
+    _approvalsAutoRefreshTimer = Timer.periodic(
+      const Duration(minutes: 5),
+      (_) async {
+        if (!mounted) return;
+        final auth = context.read<AuthProvider>();
+        if (!auth.isAuthenticated) return;
+        await _loadPendingApprovalsCount();
+      },
+    );
   }
 
   // ── RouteAware: fires when a pushed screen pops back to here ──
@@ -321,11 +342,26 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
   // ── WidgetsBindingObserver: fires when app resumes from background ──
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Only refresh when the app resumes AND data is at least 2 minutes old.
-    // On web, "resumed" fires on every window-focus event, so without this
-    // guard every click-back into the browser would spam API calls and cause
-    // unnecessary full-tree rebuilds (BackdropFilter is GPU-expensive).
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      // تعليق الـ animation والـ timers لتخفيف الحمل على المعالج
+      _sunController.stop();
+      _goldPriceAutoRefreshTimer?.cancel();
+      _goldPriceAutoRefreshTimer = null;
+      _goldPriceAutoRefreshFingerprint = '';
+      _achievementCheckTimer?.cancel();
+      _achievementCheckTimer = null;
+      _approvalsAutoRefreshTimer?.cancel();
+      _approvalsAutoRefreshTimer = null;
+    } else if (state == AppLifecycleState.resumed) {
+      // استئناف الـ animation والـ timers
+      _sunController.repeat(reverse: true);
+      final settings = context.read<SettingsProvider>();
+      _syncGoldPriceAutoRefresh(settings);
+      _startAchievementTimer();
+      _startApprovalsTimer();
+      // تحديث البيانات إذا مضى على آخر تحديث أكثر من دقيقتين
       final last = _leaderboardFetchedAt;
       if (last == null || DateTime.now().difference(last) > const Duration(minutes: 2)) {
         _loadLeaderboard(period: _leaderboardPeriod);
@@ -356,7 +392,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final essentialFutures = <Future<void>>[];
       if (auth.isAuthenticated) essentialFutures.add(_loadGoldPrice());
       if (auth.isAuthenticated) essentialFutures.add(_loadSparklineData());
-      if (auth.isAuthenticated) essentialFutures.add(_loadPendingApprovalsCount());
+      if (auth.isAuthenticated) essentialFutures.add(_loadPendingApprovalsCount(startTimer: true));
       if (auth.hasPermission('safe_boxes.view')) essentialFutures.add(_loadSafeBoxes());
       final quickActions = context.read<QuickActionsProvider>();
       if (auth.isAuthenticated && quickActions.showSalesRaceCard) {
@@ -537,13 +573,11 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     }
   }
 
-  Future<void> _loadPendingApprovalsCount() async {
+  Future<void> _loadPendingApprovalsCount({bool startTimer = false}) async {
     try {
       final auth = context.read<AuthProvider>();
       if (!auth.isAuthenticated) return;
 
-      // Use the dedicated endpoint that counts actual unposted invoices so the
-      // badge stays in sync regardless of system-alert state.
       final result = await api.getPendingPostInvoices(limit: 1);
       final count = (result['total'] as num?)?.toInt() ?? 0;
 
@@ -552,18 +586,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         _pendingApprovalsCount = count;
       });
 
-      // Refresh badge periodically while screen is alive.
-      _approvalsAutoRefreshTimer?.cancel();
-      _approvalsAutoRefreshTimer = Timer.periodic(const Duration(seconds: 60), (
-        _,
-      ) async {
-        if (!mounted) return;
-        final auth = context.read<AuthProvider>();
-        if (!auth.isAuthenticated) return;
-        await _loadPendingApprovalsCount();
-      });
+      // يُنشأ الـ timer مرة واحدة فقط عند أول تحميل
+      if (startTimer) _startApprovalsTimer();
     } catch (e) {
-      // Non-blocking: badge is optional.
       debugPrint('⚠️ Failed to load approvals badge: $e');
     }
   }

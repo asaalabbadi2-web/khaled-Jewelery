@@ -18,7 +18,8 @@ class CashSafesDashboardScreen extends StatefulWidget {
   State<CashSafesDashboardScreen> createState() => _CashSafesDashboardScreenState();
 }
 
-class _CashSafesDashboardScreenState extends State<CashSafesDashboardScreen> {
+class _CashSafesDashboardScreenState extends State<CashSafesDashboardScreen>
+    with WidgetsBindingObserver {
   final ApiService _api = ApiService();
   List<SafeBoxModel> _safes = [];
   bool _isLoading = false;
@@ -28,16 +29,34 @@ class _CashSafesDashboardScreenState extends State<CashSafesDashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _loadDashboardData();
-    
-    // تحديث تلقائي كل 30 ثانية
-    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
-      _loadDashboardData(silent: true);
+    _startRefreshTimer();
+  }
+
+  void _startRefreshTimer() {
+    _refreshTimer?.cancel();
+    _refreshTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      if (mounted) _loadDashboardData(silent: true);
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _refreshTimer?.cancel();
+      _refreshTimer = null;
+    } else if (state == AppLifecycleState.resumed) {
+      _startRefreshTimer();
+      _loadDashboardData(silent: true);
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     super.dispose();
   }
