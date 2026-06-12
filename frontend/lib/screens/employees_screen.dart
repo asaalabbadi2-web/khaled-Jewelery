@@ -50,6 +50,7 @@ class _EmployeesScreenState extends State<EmployeesScreen> {
             ? null
             : _searchController.text.trim(),
         isActive: _activeFilter,
+        showAll: _activeFilter == null,
       );
       final items = payload['employees'] as List<EmployeeModel>;
       setState(() {

@@ -773,7 +773,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       final results = await Future.wait([
         _apiService.getCustomers(),
         _apiService.getSuppliers(),
-        _apiService.getEmployees(),
+        _apiService.getEmployees(isActive: true, perPage: 200),
         _apiService.getAccounts(),
         _apiService.getAppConfig(),
       ]);

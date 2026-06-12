@@ -3779,7 +3779,9 @@ class ApiService {
     int perPage = 20,
     String? search,
     String? department,
-    bool? isActive,
+    // null → active only (default), true → active, false → inactive, special: pass isActive=null with showAll=true for all
+    bool? isActive = true,
+    bool showAll = false,
   }) async {
     final queryParameters = <String, String>{
       'page': page.toString(),
@@ -3792,7 +3794,9 @@ class ApiService {
     if (department != null && department.isNotEmpty) {
       queryParameters['department'] = department;
     }
-    if (isActive != null) {
+    if (showAll) {
+      queryParameters['is_active'] = 'all';
+    } else if (isActive != null) {
       queryParameters['is_active'] = isActive ? 'true' : 'false';
     }
 

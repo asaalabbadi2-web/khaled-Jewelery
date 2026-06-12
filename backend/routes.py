@@ -5531,12 +5531,8 @@ def delete_supplier(id):
         if supplier.account_id:
             account = Account.query.get(supplier.account_id)
             if account:
-                # Optional: Check if account has transactions before deleting
-                has_transactions = JournalEntryLine.query.filter_by(account_id=account.id).first()
-                if has_transactions:
-                    return jsonify({'error': 'Cannot delete supplier with existing transactions.'}), 400
                 db.session.delete(account)
-        
+
         db.session.delete(supplier)
         db.session.commit()
         return jsonify({'result': 'success', 'action': 'deleted'})
@@ -23713,6 +23709,9 @@ def list_employees():
             query = query.filter_by(is_active=True)
         elif is_active.lower() in ['0', 'false', 'no']:
             query = query.filter_by(is_active=False)
+        # 'all' → no filter (for management screens)
+    else:
+        query = query.filter_by(is_active=True)
 
     department = request.args.get('department')
     if department:

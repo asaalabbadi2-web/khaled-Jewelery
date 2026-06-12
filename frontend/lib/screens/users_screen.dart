@@ -769,7 +769,7 @@ class _UserFormDialogState extends State<UserFormDialog> {
   Future<void> _loadEmployees() async {
     setState(() => _loadingEmployees = true);
     try {
-      final response = await ApiService().getEmployees();
+      final response = await ApiService().getEmployees(isActive: true, perPage: 200);
       final employeesData = response['employees'];
       List<EmployeeModel> employeesList = [];
 
