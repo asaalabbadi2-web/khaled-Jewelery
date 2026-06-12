@@ -23,6 +23,10 @@ backend/*.db
 backend/*.sqlite
 backend/*.sqlite3
 backend/instance/
+
+# Test coverage artifacts (regenerated locally by pytest/coverage)
+backend/.coverage
+backend/htmlcov/
 frontend/backend/
 backend/*.pid
 backend/*.log
