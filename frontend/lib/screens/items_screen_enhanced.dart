@@ -1255,6 +1255,7 @@ class _CategoriesManagementDialogState
     final nameController = TextEditingController();
     final descController = TextEditingController();
     final karatController = TextEditingController();
+    final wageController = TextEditingController();
 
     final result = await showDialog<bool>(
       context: context,
@@ -1283,6 +1284,17 @@ class _CategoriesManagementDialogState
             ),
             const SizedBox(height: 12),
             TextField(
+              controller: wageController,
+              decoration: const InputDecoration(
+                labelText: 'متوسط الأجور المصنعية/جم (اختياري)',
+                border: OutlineInputBorder(),
+                hintText: 'مثال: 15.5',
+                prefixIcon: Icon(Icons.build_circle_outlined),
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            ),
+            const SizedBox(height: 12),
+            TextField(
               controller: descController,
               decoration: const InputDecoration(
                 labelText: 'الوصف',
@@ -1308,12 +1320,14 @@ class _CategoriesManagementDialogState
     if (result == true && nameController.text.isNotEmpty) {
       setState(() => _loading = true);
       try {
+        final wageVal = double.tryParse(wageController.text.trim().replaceAll(',', '.'));
         final response = await widget.api.addCategory({
           'name': nameController.text,
           'description': descController.text,
           'karat': karatController.text.isNotEmpty
               ? karatController.text
               : null,
+          'default_wage': wageVal,
         });
         final newCategory = Category.fromJson(response);
         setState(() {
@@ -1345,6 +1359,11 @@ class _CategoriesManagementDialogState
     final nameController = TextEditingController(text: category.name);
     final descController = TextEditingController(text: category.description);
     final karatController = TextEditingController(text: category.karat ?? '');
+    final wageController = TextEditingController(
+      text: category.defaultWage != null && category.defaultWage! > 0
+          ? category.defaultWage!.toString()
+          : '',
+    );
 
     final result = await showDialog<bool>(
       context: context,
@@ -1369,6 +1388,17 @@ class _CategoriesManagementDialogState
                 hintText: '18 أو 21 أو 22 أو 24',
               ),
               keyboardType: TextInputType.number,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: wageController,
+              decoration: const InputDecoration(
+                labelText: 'متوسط الأجور المصنعية/جم (اختياري)',
+                border: OutlineInputBorder(),
+                hintText: 'مثال: 15.5',
+                prefixIcon: Icon(Icons.build_circle_outlined),
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
             ),
             const SizedBox(height: 12),
             TextField(
@@ -1397,12 +1427,14 @@ class _CategoriesManagementDialogState
     if (result == true && nameController.text.isNotEmpty) {
       setState(() => _loading = true);
       try {
+        final wageVal = double.tryParse(wageController.text.trim().replaceAll(',', '.'));
         final response = await widget.api.updateCategory(category.id!, {
           'name': nameController.text,
           'description': descController.text,
           'karat': karatController.text.isNotEmpty
               ? karatController.text
               : null,
+          'default_wage': wageVal,
         });
         final updatedCategory = Category.fromJson(response);
         setState(() {

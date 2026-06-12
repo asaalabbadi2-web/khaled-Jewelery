@@ -1585,17 +1585,26 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     final itemId = _parseInt(itemData['id']);
     String? categoryName = itemData['category_name'] as String?;
-    if ((categoryName == null || categoryName.trim().isEmpty) &&
-        categoryId != null) {
+    if (categoryId != null) {
       try {
         await _ensureCategoriesLoaded();
         final category = _categories.firstWhere(
           (c) => _parseInt(c['id']) == categoryId,
           orElse: () => <String, dynamic>{},
         );
-        final resolvedName = (category['name'] ?? '').toString().trim();
-        if (resolvedName.isNotEmpty) {
-          categoryName = resolvedName;
+        if (category.isNotEmpty) {
+          if (categoryName == null || categoryName.trim().isEmpty) {
+            final resolvedName = (category['name'] ?? '').toString().trim();
+            if (resolvedName.isNotEmpty) categoryName = resolvedName;
+          }
+          // إذا كان التصنيف يملك أجراً افتراضياً، يُطبَّق تلقائياً بغض النظر عن أجر الصنف
+          final rawCatWage = category['default_wage'];
+          final catWage = rawCatWage is num
+              ? rawCatWage.toDouble()
+              : double.tryParse('${rawCatWage ?? ''}');
+          if (catWage != null && catWage > 0) {
+            wage = catWage;
+          }
         }
       } catch (_) {
         // ignore
@@ -6752,6 +6761,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
   Map<String, dynamic>? _selectedCategory;
   late int _selectedKarat;
   String _searchQuery = '';
+  bool _wageLockedByCategory = false;
 
   @override
   void initState() {
@@ -6760,6 +6770,21 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     // pre-select all text so typing immediately replaces the default
     for (final c in [_weightController, _wageController, _countController]) {
       c.selection = TextSelection(baseOffset: 0, extentOffset: c.text.length);
+    }
+  }
+
+  void _applyCategoryDefaults(Map<String, dynamic> category) {
+    final rawWage = category['default_wage'];
+    final wage = rawWage is num ? rawWage.toDouble() : double.tryParse('${rawWage ?? ''}');
+    if (wage != null && wage > 0) {
+      _wageController.text = wage.toStringAsFixed(wage.truncateToDouble() == wage ? 0 : 2);
+      _wageLockedByCategory = true;
+    } else {
+      _wageLockedByCategory = false;
+    }
+    final categoryKarat = _tryParseCategoryKarat(category);
+    if (categoryKarat != null) {
+      _selectedKarat = categoryKarat;
     }
   }
 
@@ -6794,12 +6819,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
   void _selectFirstMatchingCategory(List<Map<String, dynamic>> options) {
     if (options.isEmpty) return;
     final first = options.first;
-    final categoryKarat = _tryParseCategoryKarat(first);
     setState(() {
       _selectedCategory = first;
-      if (categoryKarat != null) {
-        _selectedKarat = categoryKarat;
-      }
+      _applyCategoryDefaults(first);
     });
   }
 
@@ -7069,14 +7091,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                 onTap: () {
                                                   setState(() {
                                                     _selectedCategory = opt;
-                                                    final categoryKarat =
-                                                        _tryParseCategoryKarat(
-                                                          opt,
-                                                        );
-                                                    if (categoryKarat != null) {
-                                                      _selectedKarat =
-                                                          categoryKarat;
-                                                    }
+                                                    _applyCategoryDefaults(opt);
                                                   });
                                                   state.didChange(id);
                                                 },
@@ -7287,7 +7302,8 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                           Expanded(
                             child: TextFormField(
                               controller: _wageController,
-                              focusNode: _wageFocusNode,
+                              focusNode: _wageLockedByCategory ? null : _wageFocusNode,
+                              readOnly: _wageLockedByCategory,
                               keyboardType:
                                   const TextInputType.numberWithOptions(
                                     decimal: true,
@@ -7297,20 +7313,48 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                 _countFocusNode,
                                 _countController,
                               ),
-                              onTap: () =>
-                                  _wageController.selection = TextSelection(
-                                    baseOffset: 0,
-                                    extentOffset: _wageController.text.length,
-                                  ),
+                              onTap: _wageLockedByCategory
+                                  ? null
+                                  : () => _wageController.selection =
+                                        TextSelection(
+                                          baseOffset: 0,
+                                          extentOffset:
+                                              _wageController.text.length,
+                                        ),
+                              style: TextStyle(
+                                color: _wageLockedByCategory
+                                    ? theme.colorScheme.primary
+                                    : null,
+                                fontWeight: _wageLockedByCategory
+                                    ? FontWeight.bold
+                                    : null,
+                              ),
                               decoration: InputDecoration(
                                 labelText: 'المصنعية/جم',
                                 hintText: '0',
                                 border: OutlineInputBorder(
                                   borderRadius: BorderRadius.circular(12),
                                 ),
-                                prefixIcon: const Icon(Icons.build, size: 20),
+                                prefixIcon: Icon(
+                                  _wageLockedByCategory
+                                      ? Icons.lock
+                                      : Icons.build,
+                                  size: 20,
+                                  color: _wageLockedByCategory
+                                      ? theme.colorScheme.primary
+                                      : null,
+                                ),
                                 filled: true,
-                                fillColor: theme.colorScheme.surface,
+                                fillColor: _wageLockedByCategory
+                                    ? theme.colorScheme.primary.withValues(alpha: 0.07)
+                                    : theme.colorScheme.surface,
+                                helperText: _wageLockedByCategory
+                                    ? 'محدد من التصنيف'
+                                    : null,
+                                helperStyle: TextStyle(
+                                  color: theme.colorScheme.primary,
+                                  fontSize: 11,
+                                ),
                               ),
                             ),
                           ),

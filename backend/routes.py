@@ -6764,10 +6764,14 @@ def create_category():
         if existing:
             return jsonify({'error': 'التصنيف موجود بالفعل'}), 409
         
+        default_wage_raw = data.get('default_wage')
+        default_wage = float(default_wage_raw) if default_wage_raw not in (None, '', 0, '0') else None
+
         category = Category(
             name=data['name'],
             description=data.get('description'),
-            karat=data.get('karat')  # 🆕 عيار افتراضي للتصنيف
+            karat=data.get('karat'),
+            default_wage=default_wage,
         )
         
         db.session.add(category)
@@ -6801,9 +6805,13 @@ def update_category(category_id):
         if 'description' in data:
             category.description = data['description']
         
-        if 'karat' in data:  # 🆕 تحديث العيار
+        if 'karat' in data:
             category.karat = data['karat']
-        
+
+        if 'default_wage' in data:
+            raw = data['default_wage']
+            category.default_wage = float(raw) if raw not in (None, '', 0, '0') else None
+
         db.session.commit()
         return jsonify(category.to_dict())
         

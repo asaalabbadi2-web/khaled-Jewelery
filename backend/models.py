@@ -867,18 +867,20 @@ class Category(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False, unique=True)
     description = db.Column(db.String(200))
-    karat = db.Column(db.String(10), nullable=True)  # 🆕 عيار افتراضي للتصنيف
+    karat = db.Column(db.String(10), nullable=True)
+    default_wage = db.Column(db.Float, nullable=True)  # متوسط أجور مصنعية افتراضي للتصنيف
     created_at = db.Column(db.DateTime, default=datetime.now)
-    
+
     # العلاقة مع الأصناف
     items = db.relationship('Item', backref='category', lazy=True)
-    
+
     def to_dict(self):
         return {
             'id': self.id,
             'name': self.name,
             'description': self.description,
             'karat': self.karat,
+            'default_wage': self.default_wage,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'items_count': len(self.items)
         }

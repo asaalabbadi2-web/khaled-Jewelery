@@ -4,7 +4,8 @@ class Category {
   final int? id;
   final String name;
   final String? description;
-  final String? karat;  // 🆕 عيار افتراضي للتصنيف
+  final String? karat;
+  final double? defaultWage;
   final DateTime? createdAt;
   final int? itemsCount;
 
@@ -13,6 +14,7 @@ class Category {
     required this.name,
     this.description,
     this.karat,
+    this.defaultWage,
     this.createdAt,
     this.itemsCount,
   });
@@ -23,7 +25,8 @@ class Category {
       id: json['id'],
       name: json['name'] ?? '',
       description: json['description'],
-      karat: json['karat'],  // 🆕
+      karat: json['karat'],
+      defaultWage: (json['default_wage'] as num?)?.toDouble(),
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'])
           : null,
@@ -37,7 +40,8 @@ class Category {
       'id': id,
       'name': name,
       'description': description,
-      'karat': karat,  // 🆕
+      'karat': karat,
+      'default_wage': defaultWage,
     };
   }
 
@@ -47,6 +51,7 @@ class Category {
     String? name,
     String? description,
     String? karat,
+    double? defaultWage,
     DateTime? createdAt,
     int? itemsCount,
   }) {
@@ -54,7 +59,8 @@ class Category {
       id: id ?? this.id,
       name: name ?? this.name,
       description: description ?? this.description,
-      karat: karat ?? this.karat,  // 🆕
+      karat: karat ?? this.karat,
+      defaultWage: defaultWage ?? this.defaultWage,
       createdAt: createdAt ?? this.createdAt,
       itemsCount: itemsCount ?? this.itemsCount,
     );
