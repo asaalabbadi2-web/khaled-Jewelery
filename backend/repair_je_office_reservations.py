@@ -56,6 +56,16 @@ RESERVATIONS = [
         'karat': 24,
         'reservation_date': datetime(2026, 6, 10, 18, 35, 52),
     },
+    {
+        'reservation_id': 51,
+        'reservation_code': 'RES-20260611224726-0016',
+        'office_name': 'شركة الجنية العربي',
+        'settlement_je_id': 3890,
+        'cash_line_ids_to_keep': [15801, 15802],   # مشتريات + حساب المكتب فقط
+        'weight_grams': 350.0,
+        'karat': 24,
+        'reservation_date': datetime(2026, 6, 11, 19, 47, 26),
+    },
 ]
 
 # حساب وزني المخزون (مخزون الذهب ـ كسر وزني)
