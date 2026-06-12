@@ -1576,6 +1576,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
     }
 
     double wage = _parseDouble(itemData['wage']);
+    bool wageLocked = false;
 
     // تحويل آمن للوزن
     double weight = _parseDouble(itemData['weight']);
@@ -1604,6 +1605,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               : double.tryParse('${rawCatWage ?? ''}');
           if (catWage != null && catWage > 0) {
             wage = catWage;
+            wageLocked = true;
           }
         }
       } catch (_) {
@@ -1618,8 +1620,9 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
           name: itemData['name'] ?? '',
           barcode: itemData['barcode'] ?? '',
           karat: karat,
-          weight: weight, // استخدام الوزن الفعلي من قاعدة البيانات
+          weight: weight,
           wage: wage,
+          wageLocked: wageLocked,
           categoryId: categoryId,
           categoryName: categoryName,
           goldPrice24k: _goldPrice24k,
@@ -2027,6 +2030,16 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
     if (categoryId == null || weight <= 0) return;
 
+    final selectedCat = _categories.where(
+      (c) => (c['id'] is num ? (c['id'] as num).toInt() : int.tryParse('${c['id']}')) == categoryId,
+    ).firstOrNull;
+    final catWage = selectedCat != null
+        ? (selectedCat['default_wage'] is num
+            ? (selectedCat['default_wage'] as num).toDouble()
+            : double.tryParse('${selectedCat['default_wage'] ?? ''}'))
+        : null;
+    final wageIsLocked = catWage != null && catWage > 0;
+
     setState(() {
       final item = InvoiceItem(
         id: null,
@@ -2035,6 +2048,7 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         karat: selectedKarat.toDouble(),
         weight: weight,
         wage: wage,
+        wageLocked: wageIsLocked,
         count: count,
         goldPrice24k: _goldPrice24k,
         mainKarat: _settingsProvider.mainKarat,
@@ -4788,20 +4802,40 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               ),
               DataCell(
                 InkWell(
-                  onTap: () => _showEditDialog(index, 'wage', item.wage),
+                  onTap: item.wageLocked
+                      ? null
+                      : () => _showEditDialog(index, 'wage', item.wage),
                   child: Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
                       vertical: 6,
                     ),
                     decoration: BoxDecoration(
-                      color: AppColors.warning.withValues(alpha: 0.15),
+                      color: item.wageLocked
+                          ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.10)
+                          : AppColors.warning.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: AppColors.warning.withValues(alpha: 0.3),
+                        color: item.wageLocked
+                            ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.35)
+                            : AppColors.warning.withValues(alpha: 0.3),
                       ),
                     ),
-                    child: Text(item.wage.toStringAsFixed(2), style: cellStyle),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (item.wageLocked)
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4),
+                            child: Icon(
+                              Icons.lock,
+                              size: 11,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                        Text(item.wage.toStringAsFixed(2), style: cellStyle),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -6596,6 +6630,7 @@ class InvoiceItem {
   double karat;
   double weight;
   double wage; // أجور المصنعية للجرام الواحد
+  final bool wageLocked; // محدد من التصنيف — غير قابل للتعديل
   final int? categoryId;
   final String? categoryName;
   double goldPrice24k;
@@ -6622,9 +6657,10 @@ class InvoiceItem {
     required this.karat,
     required this.weight,
     required this.wage,
+    this.wageLocked = false,
     this.categoryId,
     this.categoryName,
-    this.count = 1, // 🆕 افتراضي عدد 1
+    this.count = 1,
     required this.goldPrice24k,
     required this.mainKarat,
     required this.taxRate,
