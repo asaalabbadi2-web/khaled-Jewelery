@@ -5265,6 +5265,28 @@ def add_supplier():
     if 'name' not in data or not str(data.get('name') or '').strip():
         return jsonify({'error': 'الاسم مطلوب'}), 400
 
+    # فحص التكرار: اسم مطابق أو مشابه جداً (بدون مسافات)
+    if not data.get('force', False):
+        _new_name = ' '.join(str(data['name']).strip().split())
+        _new_name_no_spaces = _new_name.replace(' ', '').lower()
+        _existing = Supplier.query.filter(
+            db.func.lower(Supplier.name) == _new_name.lower()
+        ).first()
+        if _existing:
+            return jsonify({
+                'error': f'يوجد مورد بنفس الاسم بالفعل: "{_existing.name}" (كود: {_existing.supplier_code})',
+                'existing_supplier_id': _existing.id,
+                'existing_supplier_code': _existing.supplier_code,
+            }), 409
+        # فحص التشابه الشديد (فور ناين = فورناين)
+        for _s in Supplier.query.with_entities(Supplier.id, Supplier.name, Supplier.supplier_code).all():
+            if _s.name and _s.name.replace(' ', '').lower() == _new_name_no_spaces:
+                return jsonify({
+                    'error': f'يوجد مورد بأسم مشابه جداً: "{_s.name}" (كود: {_s.supplier_code}). أرسل "force": true للتجاوز.',
+                    'similar_supplier_id': _s.id,
+                    'similar_supplier_code': _s.supplier_code,
+                }), 409
+
     try:
         # 1. توليد كود المورد تلقائياً
         supplier_code = data.get('supplier_code')
