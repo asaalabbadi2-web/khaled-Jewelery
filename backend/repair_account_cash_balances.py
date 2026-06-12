@@ -39,7 +39,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from app import app
 from models import db, Account, SafeBox
-from routes import _recalculate_account_balances_for_accounts
+from routes import _recalculate_account_balances_for_accounts, _account_weight_balance_main_karat
 
 
 def run(apply: bool):
@@ -51,7 +51,12 @@ def run(apply: bool):
         safe_boxes = [sb for sb in SafeBox.query.all() if sb.account_id]
         account_ids = sorted({sb.account_id for sb in safe_boxes})
 
-        before = {sb.account_id: Account.query.get(sb.account_id).balance_cash for sb in safe_boxes}
+        before_cash = {}
+        before_weight = {}
+        for sb in safe_boxes:
+            acc = Account.query.get(sb.account_id)
+            before_cash[sb.account_id] = acc.balance_cash or 0.0
+            before_weight[sb.account_id] = _account_weight_balance_main_karat(acc)
 
         _recalculate_account_balances_for_accounts(account_ids)
 
@@ -59,13 +64,21 @@ def run(apply: bool):
         any_change = False
         for sb in safe_boxes:
             acc = Account.query.get(sb.account_id)
-            old_cash = before[sb.account_id] or 0.0
+            old_cash = before_cash[sb.account_id] or 0.0
             new_cash = acc.balance_cash or 0.0
-            diff = round(new_cash - old_cash, 2)
-            marker = '  <-- تغيّر' if abs(diff) > 0.005 else ''
+            diff_cash = round(new_cash - old_cash, 2)
+            old_weight = before_weight[sb.account_id] or 0.0
+            new_weight = _account_weight_balance_main_karat(acc)
+            diff_weight = round(new_weight - old_weight, 6)
+            marker = ''
+            if abs(diff_cash) > 0.005:
+                marker += '  <-- نقدي تغيّر'
+            if abs(diff_weight) > 0.0005:
+                marker += '  <-- وزن تغيّر'
             if marker:
                 any_change = True
-            print(f"  [{sb.id:3}] {sb.name:40} {old_cash:>14,.2f} -> {new_cash:>14,.2f}{marker}")
+            print(f"  [{sb.id:3}] {sb.name:40} نقدي: {old_cash:>14,.2f} -> {new_cash:>14,.2f}"
+                  f" | وزن: {old_weight:>10,.3f} -> {new_weight:>10,.3f}{marker}")
 
         if apply:
             db.session.commit()
