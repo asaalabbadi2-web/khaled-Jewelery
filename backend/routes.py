@@ -18069,19 +18069,12 @@ def _recalculate_account_balances_for_accounts(account_ids):
                 account.balance_22k += (line.debit_22k or 0) - (line.credit_22k or 0)
                 account.balance_24k += (line.debit_24k or 0) - (line.credit_24k or 0)
 
-        # Voucher lines also affect cash balances
-        voucher_lines = (
-            VoucherAccountLine.query
-            .join(Voucher)
-            .filter(VoucherAccountLine.account_id == account_id)
-            .all()
-        )
-
-        for line in voucher_lines:
-            if line.line_type == 'debit':
-                account.balance_cash += (line.amount or 0)
-            else:
-                account.balance_cash -= (line.amount or 0)
+        # Note: deliberately NOT adding VoucherAccountLine amounts here.
+        # Approved vouchers already get an automatic journal entry whose
+        # lines are counted above, so summing voucher lines too would
+        # double-count their cash effect. Keeping balance_cash derived
+        # purely from journal lines also keeps it consistent with the
+        # account statement (كشف الحساب), which is computed the same way.
 
 
 def _rebuild_all_account_balances() -> dict:
@@ -18125,47 +18118,24 @@ def _rebuild_all_account_balances() -> dict:
         .all()
     )
 
-    # 3) Aggregate voucher deltas (cash only).
-    voucher_rows = (
-        db.session.query(
-            VoucherAccountLine.account_id.label('account_id'),
-            (
-                func.coalesce(func.sum(case((VoucherAccountLine.line_type == 'debit', VoucherAccountLine.amount), else_=0.0)), 0.0)
-                - func.coalesce(func.sum(case((VoucherAccountLine.line_type == 'credit', VoucherAccountLine.amount), else_=0.0)), 0.0)
-            ).label('cash'),
-        )
-        .join(Voucher)
-        .group_by(VoucherAccountLine.account_id)
-        .all()
-    )
+    # Note: deliberately NOT adding VoucherAccountLine amounts here.
+    # Approved vouchers already get an automatic journal entry whose lines
+    # are counted via journal_rows above, so summing voucher lines too would
+    # double-count their cash effect. Keeping balance_cash derived purely
+    # from journal lines also keeps it consistent with the account statement
+    # (كشف الحساب), which is computed the same way.
 
-    voucher_cash_by_account = {int(r.account_id): float(r.cash or 0.0) for r in voucher_rows if r.account_id is not None}
-
-    # 4) Apply updates (bulk).
+    # 3) Apply updates (bulk).
     updates: list[dict] = []
     for r in journal_rows:
         acc_id = int(r.account_id)
         updates.append({
             'id': acc_id,
-            'balance_cash': float(r.cash or 0.0) + float(voucher_cash_by_account.get(acc_id, 0.0)),
+            'balance_cash': float(r.cash or 0.0),
             'balance_18k': float(r.b18 or 0.0),
             'balance_21k': float(r.b21 or 0.0),
             'balance_22k': float(r.b22 or 0.0),
             'balance_24k': float(r.b24 or 0.0),
-        })
-
-    # Accounts that appear only in vouchers (no journal rows).
-    journal_account_ids = {int(r.account_id) for r in journal_rows if r.account_id is not None}
-    for acc_id, cash in voucher_cash_by_account.items():
-        if acc_id in journal_account_ids:
-            continue
-        updates.append({
-            'id': int(acc_id),
-            'balance_cash': float(cash or 0.0),
-            'balance_18k': 0.0,
-            'balance_21k': 0.0,
-            'balance_22k': 0.0,
-            'balance_24k': 0.0,
         })
 
     if updates:
@@ -18176,7 +18146,6 @@ def _rebuild_all_account_balances() -> dict:
     return {
         'updated_accounts': len(updates),
         'journal_accounts': len(journal_rows),
-        'voucher_accounts': len(voucher_cash_by_account),
         'used_is_draft_filter': _db_has_column('journal_entry', 'is_draft'),
     }
 
