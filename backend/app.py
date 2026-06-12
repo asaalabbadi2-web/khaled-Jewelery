@@ -127,6 +127,7 @@ from schema_guard import (
 	ensure_bonus_accounts,
 	ensure_unique_reservation_invoice_index,
 	ensure_category_wage_column,
+	ensure_dashboard_performance_indexes,
 )
 
 import os
@@ -336,6 +337,7 @@ with app.app_context():
 	ensure_bonus_accounts(db.engine)
 	ensure_unique_reservation_invoice_index(db.engine)
 	ensure_category_wage_column(db.engine)
+	ensure_dashboard_performance_indexes(db.engine)
 	# ensure_weight_closing_support_accounts()  # Moved to after create_tables()
 # ⚠️ ترتيب التسجيل مهم: auth_bp يجب أن يُسجل قبل api لأن auth_bp.login له أولوية
 app.register_blueprint(auth_bp, url_prefix='/api')  # 🆕 تسجيل auth & permissions routes (أولاً!)
@@ -408,6 +410,7 @@ def create_tables():
 		ensure_safe_box_transaction_stones_columns(db.engine)
 		ensure_goal_achievement_columns(db.engine)
 		ensure_unique_reservation_invoice_index(db.engine)
+		ensure_dashboard_performance_indexes(db.engine)
 
 
 # In production Docker we run under Gunicorn (`backend.wsgi:app`).

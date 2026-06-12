@@ -314,9 +314,21 @@ def ensure_journal_entry_columns(engine: Engine) -> None:
                     ("deletion_reason", "VARCHAR(500)", "NULL"),
                     ("restored_at", "DATETIME", "NULL"),
                     ("restored_by", "VARCHAR(100)", "NULL"),
+                    ("created_at", "TIMESTAMP", "NULL"),
                 ],
             )
         )
+        # Backfill created_at from date for existing rows (PostgreSQL only)
+        try:
+            with engine.connect() as conn:
+                dialect = _dialect_name(engine, conn)
+                if dialect == 'postgresql':
+                    conn.execute(text(
+                        "UPDATE journal_entry SET created_at = date WHERE created_at IS NULL"
+                    ))
+                    conn.commit()
+        except Exception:
+            pass
     except SQLAlchemyError as exc:
         LOGGER.error("Auto schema guard failed (journal_entry): %s", exc)
         return
@@ -860,3 +872,62 @@ def ensure_unique_reservation_invoice_index(engine: Engine) -> None:
                 LOGGER.info("schema_guard: created partial unique index %s", INDEX_NAME)
     except Exception as exc:
         LOGGER.error("ensure_unique_reservation_invoice_index failed: %s", exc)
+
+
+def ensure_dashboard_performance_indexes(engine: Engine) -> None:
+    """Critical indexes for admin dashboard query performance.
+
+    Without these, every dashboard load does 6+ full sequential scans on the
+    invoice table and full scans on journal_entry_line, causing 5-10s load times.
+    """
+    indexes = [
+        # Most critical: dashboard queries always filter is_posted=true + date range
+        (
+            'idx_invoice_posted_date',
+            'CREATE INDEX idx_invoice_posted_date ON invoice(date) WHERE is_posted = true',
+        ),
+        # Type + date range queries (sales/purchases summaries)
+        (
+            'idx_invoice_type_date_posted',
+            'CREATE INDEX idx_invoice_type_date_posted ON invoice(invoice_type, date) WHERE is_posted = true',
+        ),
+        # InvoiceItem karat breakdown — in() lookup on invoice_id
+        (
+            'idx_invoice_item_invoice_id',
+            'CREATE INDEX idx_invoice_item_invoice_id ON invoice_item(invoice_id)',
+        ),
+        # Customer type filter (liquidity section)
+        (
+            'idx_customer_type',
+            'CREATE INDEX idx_customer_type ON customer(customer_type)',
+        ),
+        # GoldPrice latest lookup
+        (
+            'idx_gold_price_date_desc',
+            'CREATE INDEX idx_gold_price_date_desc ON gold_price(date DESC)',
+        ),
+        # JournalEntryLine account lookup (safe box live balances)
+        (
+            'idx_jel_account_id',
+            'CREATE INDEX idx_jel_account_id ON journal_entry_line(account_id)',
+        ),
+    ]
+    try:
+        with engine.connect() as conn:
+            dialect = _dialect_name(engine, conn)
+            if dialect != 'postgresql':
+                return
+            for index_name, ddl in indexes:
+                exists = conn.execute(text(
+                    "SELECT 1 FROM pg_indexes WHERE indexname = :name"
+                ), {'name': index_name}).fetchone()
+                if not exists:
+                    try:
+                        conn.execute(text(ddl))
+                        conn.commit()
+                        LOGGER.info("schema_guard: created index %s", index_name)
+                    except Exception as exc:
+                        conn.rollback()
+                        LOGGER.warning("schema_guard: index %s failed: %s", index_name, exc)
+    except Exception as exc:
+        LOGGER.error("ensure_dashboard_performance_indexes failed: %s", exc)
