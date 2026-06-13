@@ -51,7 +51,7 @@ from routes import _generate_journal_entry_number
 
 KARATS = (18, 21, 22, 24)
 ACCOUNT_NUMBER_INVENTORY_NEW = '71300'   # مخزون الذهب المعروض للبيع وزني
-ACCOUNT_NUMBER_VALUATION_DIFF = '7600'   # فروقات تقييم وزنية
+ACCOUNT_NUMBER_VALUATION_DIFF = '733'    # فروقات تقييم الذهب وزني
 SAFE_BOX_ID = 30
 REF_TYPE = 'historical_gold_reconciliation_per_karat'
 EPS = 1e-9
