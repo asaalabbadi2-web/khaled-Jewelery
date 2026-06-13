@@ -68,6 +68,12 @@ def run(apply: bool):
             missing = []
             for line in lines:
                 entry = line.journal_entry
+                rt = (getattr(entry, 'reference_type', None) or '').strip().lower()
+                # Invoice-linked SBT rows use ref_id=invoice_id (not je.id) with
+                # ref_type like 'invoice_sale_gold_movement'/'invoice_scrap_*' —
+                # they are created elsewhere and would show as false positives here.
+                if rt == 'invoice':
+                    continue
                 w18 = (line.debit_18k or 0) - (line.credit_18k or 0)
                 w21 = (line.debit_21k or 0) - (line.credit_21k or 0)
                 w22 = (line.debit_22k or 0) - (line.credit_22k or 0)
