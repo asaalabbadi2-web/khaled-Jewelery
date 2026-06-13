@@ -26,7 +26,7 @@ fix_sale_invoice_qty_bug_reversal.py
      ومعرّف القيد العكسي، بمقدار التصحيح في حساب 760 لهذه الفاتورة.
 
 التسمية:
-  ref_type = 'historical_gold_reconciliation_invoice_reversal'
+  ref_type = 'hist_gold_recon_invoice_reversal'
 
 قبل أي --apply يُكتب تقرير كامل (JSON في backend/reports/) يحتوي تفاصيل
 كل فاتورة (المعامل لكل عيار، الأسطر العكسية) + ملخص إجمالي (رصيد حساب 760
@@ -58,7 +58,7 @@ from routes import convert_to_main_karat, _generate_journal_entry_number, _recal
 KARATS = (18, 21, 22, 24)
 ACCOUNT_NUMBER_INVENTORY_NEW = '71300'   # مخزون الذهب المعروض للبيع وزني
 SAFE_BOX_ID = 30
-REF_TYPE = 'historical_gold_reconciliation_invoice_reversal'
+REF_TYPE = 'hist_gold_recon_invoice_reversal'  # <= 40 chars (SafeBoxTransaction.ref_type limit)
 EPS = 1e-6
 
 
