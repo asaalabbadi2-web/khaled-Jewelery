@@ -50,11 +50,6 @@ def run(je_ids: list[int], apply: bool):
                 print(f"JE {je_id}: غير مرحل — تجاهل")
                 continue
 
-            existing = SafeBoxTransaction.query.filter_by(ref_type=REF_TYPE, ref_id=je_id).first()
-            if existing:
-                print(f"JE {je_id}: يوجد SBT مسبقًا (#{existing.id}) — تجاهل")
-                continue
-
             lines = [l for l in (je.lines or []) if not getattr(l, 'is_deleted', False)]
             acc_ids = list({int(l.account_id) for l in lines if l.account_id is not None})
 
@@ -75,6 +70,15 @@ def run(je_ids: list[int], apply: bool):
                 sb = safe_by_acc.get(int(line.account_id))
                 if not sb:
                     continue
+
+                # Skip if this safe box already has ANY SBT row for this JE
+                # (any ref_type) — avoids double-counting safe boxes that
+                # already got their entry via a different mechanism.
+                already = SafeBoxTransaction.query.filter_by(safe_box_id=sb.id, ref_id=je_id).count()
+                if already:
+                    print(f"JE {je_id} -> safe_box [{sb.id}] {sb.name}: يوجد SBT مسبقًا — تجاهل")
+                    continue
+
                 for direction, w18, w21, w22, w24 in [
                     ('in',  float(line.debit_18k or 0), float(line.debit_21k or 0), float(line.debit_22k or 0), float(line.debit_24k or 0)),
                     ('out', float(line.credit_18k or 0), float(line.credit_21k or 0), float(line.credit_22k or 0), float(line.credit_24k or 0)),
