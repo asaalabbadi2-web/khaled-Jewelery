@@ -22,14 +22,15 @@ from app import app
 from models import db, SafeBox, JournalEntry, JournalEntryLine, SafeBoxTransaction
 
 
-def run(safe_box_id: int):
+def run(safe_box_id: int, ids_only: bool = False):
     with app.app_context():
         sb = SafeBox.query.get(safe_box_id)
         if not sb or not sb.account_id:
             print("Safe box غير موجود أو بلا حساب مرتبط")
             return
 
-        print(f"[{sb.id}] {sb.name}  (account_id={sb.account_id})\n")
+        if not ids_only:
+            print(f"[{sb.id}] {sb.name}  (account_id={sb.account_id})\n")
 
         lines = (
             JournalEntryLine.query
@@ -41,6 +42,8 @@ def run(safe_box_id: int):
             )
             .all()
         )
+
+        missing_je_ids = []
 
         for line in lines:
             entry = line.journal_entry
@@ -63,15 +66,26 @@ def run(safe_box_id: int):
                 [rt, 'voucher', 'invoice', 'office_reservation', 'je_correction']
             )).count()
 
-            print(f"  JE id={entry.id:6} entry_number={getattr(entry, 'entry_number', None)!s:12} "
-                  f"date={getattr(entry, 'date', None)} reference_type={rt:18} "
-                  f"is_posted={getattr(entry, 'is_posted', None)} is_draft={getattr(entry, 'is_draft', None)} "
-                  f"cash={cash:>12,.2f} w18={w18:>9,.3f} w21={w21:>9,.3f} w22={w22:>9,.3f} w24={w24:>9,.3f} "
-                  f"sbt_rows_for_je={sbt_count}")
+            if sbt_count == 0 and has_w:
+                missing_je_ids.append(entry.id)
+
+            if not ids_only:
+                print(f"  JE id={entry.id:6} entry_number={getattr(entry, 'entry_number', None)!s:12} "
+                      f"date={getattr(entry, 'date', None)} reference_type={rt:18} "
+                      f"is_posted={getattr(entry, 'is_posted', None)} is_draft={getattr(entry, 'is_draft', None)} "
+                      f"cash={cash:>12,.2f} w18={w18:>9,.3f} w21={w21:>9,.3f} w22={w22:>9,.3f} w24={w24:>9,.3f} "
+                      f"sbt_rows_for_je={sbt_count}")
+
+        unique_ids = sorted(set(missing_je_ids))
+        if ids_only:
+            print(",".join(str(i) for i in unique_ids))
+        else:
+            print(f"\nJE ids بدون SBT (وزن غير صفري): {','.join(str(i) for i in unique_ids)}")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--safe-box-id', type=int, required=True)
+    parser.add_argument('--ids-only', action='store_true', help='طباعة قائمة JE ids المفقودة فقط (مفصولة بفواصل)')
     args = parser.parse_args()
-    run(args.safe_box_id)
+    run(args.safe_box_id, ids_only=args.ids_only)
