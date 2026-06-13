@@ -3088,15 +3088,19 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
             'يتجاوز المخزون المتاح ${_formatWeight(available, includeUnit: true)} '
             'لعيار ${first.key} في "${safe.name}".';
       } else {
-        final details = requestedByKarat.entries
+        // Show the actual available balance per karat for this safe box,
+        // similar to how cash safes show their available balance.
+        final availableDetails = _availableKarats
+            .map((k) => k.toInt())
+            .where((k) => availableForKarat(k) > 0.0001)
             .map(
-              (e) =>
-                  '${_formatWeight(e.value, includeUnit: true)} عيار ${e.key}',
+              (k) =>
+                  '${_formatWeight(availableForKarat(k), includeUnit: true)} عيار $k',
             )
             .join(' • ');
-        message = details.isEmpty
-            ? 'المخزون المتاح في "${safe.name}" جاهز.'
-            : 'الأوزان المدخلة في "${safe.name}": $details';
+        message = availableDetails.isEmpty
+            ? 'لا يوجد مخزون متاح في "${safe.name}".'
+            : 'الرصيد الفعلي في "${safe.name}": $availableDetails';
       }
     } else {
       final available = _getAvailableSafeCash(safe);
@@ -4115,99 +4119,6 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                                         tooltip: 'حذف هذا الحقل',
                                       ),
                                     ],
-                                  ],
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: TextFormField(
-                                        key: ValueKey(
-                                          'gold_gross_${index}_$entryIndex',
-                                        ),
-                                        initialValue: entry.grossWeight != null
-                                            ? entry.grossWeight.toString()
-                                            : '',
-                                        decoration: InputDecoration(
-                                          labelText: 'الوزن القائم',
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              8,
-                                            ),
-                                          ),
-                                        ),
-                                        keyboardType: TextInputType.number,
-                                        inputFormatters: [
-                                          NormalizeNumberFormatter(),
-                                        ],
-                                        onChanged: (value) {
-                                          setState(() {
-                                            entry.grossWeight = double.tryParse(
-                                              value,
-                                            );
-                                          });
-                                        },
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: TextFormField(
-                                        key: ValueKey(
-                                          'gold_net_${index}_$entryIndex',
-                                        ),
-                                        initialValue: entry.netWeight != null
-                                            ? entry.netWeight.toString()
-                                            : '',
-                                        decoration: InputDecoration(
-                                          labelText: 'الوزن الصافي',
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              8,
-                                            ),
-                                          ),
-                                        ),
-                                        keyboardType: TextInputType.number,
-                                        inputFormatters: [
-                                          NormalizeNumberFormatter(),
-                                        ],
-                                        onChanged: (value) {
-                                          setState(() {
-                                            entry.netWeight = double.tryParse(
-                                              value,
-                                            );
-                                          });
-                                        },
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: TextFormField(
-                                        key: ValueKey(
-                                          'gold_stones_${index}_$entryIndex',
-                                        ),
-                                        initialValue: entry.stonesWeight != null
-                                            ? entry.stonesWeight.toString()
-                                            : '',
-                                        decoration: InputDecoration(
-                                          labelText: 'وزن الأحجار',
-                                          border: OutlineInputBorder(
-                                            borderRadius: BorderRadius.circular(
-                                              8,
-                                            ),
-                                          ),
-                                        ),
-                                        keyboardType: TextInputType.number,
-                                        inputFormatters: [
-                                          NormalizeNumberFormatter(),
-                                        ],
-                                        onChanged: (value) {
-                                          setState(() {
-                                            entry.stonesWeight =
-                                                double.tryParse(value);
-                                          });
-                                        },
-                                      ),
-                                    ),
                                   ],
                                 ),
                               ],
