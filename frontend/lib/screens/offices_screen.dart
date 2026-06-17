@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/pending_approvals_dialog.dart';
 import 'add_office_screen.dart';
 
 /// شاشة قائمة مكاتب التسكير (تسكير الذهب)
@@ -248,6 +249,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
     );
 
     final busyIds = <int>{};
+    final screenContext = context;
 
     await showDialog<void>(
       context: context,
@@ -517,7 +519,7 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                                 () => busyIds.add(rid),
                                               );
                                               try {
-                                                final resp = await widget.api
+                                                await widget.api
                                                     .settleOfficeReservation(
                                                       rid,
                                                       executionPricePerGram:
@@ -529,32 +531,15 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                                       createdBy: 'flutter_app',
                                                     );
 
-                                                String? entryNumber;
-                                                if (resp['journal_entry']
-                                                    is Map) {
-                                                  final je =
-                                                      Map<String, dynamic>.from(
-                                                        resp['journal_entry']
-                                                            as Map,
-                                                      );
-                                                  entryNumber =
-                                                      je['entry_number']
-                                                          ?.toString();
-                                                }
-                                                _showMessage(
-                                                  entryNumber != null &&
-                                                          entryNumber
-                                                              .trim()
-                                                              .isNotEmpty
-                                                      ? (isAr
-                                                            ? 'تم تنفيذ الحجز - قيد: $entryNumber'
-                                                            : 'Executed - JE: $entryNumber')
-                                                      : (isAr
-                                                            ? 'تم تنفيذ الحجز'
-                                                            : 'Reservation executed'),
-                                                  isError: false,
-                                                );
                                                 await refresh();
+                                                if (screenContext.mounted) {
+                                                  Navigator.pop(context);
+                                                  await PendingApprovalsDialog.show(
+                                                    context: screenContext,
+                                                    api: widget.api,
+                                                    isArabic: isAr,
+                                                  );
+                                                }
                                               } catch (e) {
                                                 _showMessage(
                                                   isAr
