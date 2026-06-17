@@ -3,7 +3,6 @@ import 'package:provider/provider.dart';
 import '../api_service.dart';
 import '../providers/settings_provider.dart';
 import '../theme/app_theme.dart';
-import '../widgets/pending_approvals_dialog.dart';
 import 'add_office_screen.dart';
 
 /// شاشة قائمة مكاتب التسكير (تسكير الذهب)
@@ -249,7 +248,6 @@ class _OfficesScreenState extends State<OfficesScreen> {
     );
 
     final busyIds = <int>{};
-    final screenContext = context;
 
     await showDialog<void>(
       context: context,
@@ -531,15 +529,13 @@ class _OfficesScreenState extends State<OfficesScreen> {
                                                       createdBy: 'flutter_app',
                                                     );
 
+                                                _showMessage(
+                                                  isAr
+                                                      ? 'تم تنفيذ الحجز'
+                                                      : 'Reservation executed',
+                                                  isError: false,
+                                                );
                                                 await refresh();
-                                                if (screenContext.mounted) {
-                                                  Navigator.pop(context);
-                                                  await PendingApprovalsDialog.show(
-                                                    context: screenContext,
-                                                    api: widget.api,
-                                                    isArabic: isAr,
-                                                  );
-                                                }
                                               } catch (e) {
                                                 _showMessage(
                                                   isAr
