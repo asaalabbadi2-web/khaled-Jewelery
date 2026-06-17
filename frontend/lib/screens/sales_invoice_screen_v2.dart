@@ -2318,6 +2318,21 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
         'سعر البيع أقل من التكلفة وقد تحتاج الفاتورة إلى اعتماد مدير.',
       );
     }
+    if (totalWeight > 0 && _goldPrice24k > 0 && total > 0) {
+      final pricePerGram = total / totalWeight;
+      final cur = _settingsProvider.currencySymbolText;
+      if (pricePerGram > _goldPrice24k * 2) {
+        warnings.add(
+          '⚠️ سعر الجرام المحسوب ${pricePerGram.toStringAsFixed(0)} $cur أعلى بكثير من سعر السوق'
+          ' (${_goldPrice24k.toStringAsFixed(0)} $cur/جم). تأكد من صحة المبلغ والوزن.',
+        );
+      } else if (pricePerGram < _goldPrice24k * 0.15) {
+        warnings.add(
+          '⚠️ سعر الجرام المحسوب ${pricePerGram.toStringAsFixed(0)} $cur أقل بكثير من سعر السوق'
+          ' (${_goldPrice24k.toStringAsFixed(0)} $cur/جم). تأكد من صحة المبلغ والوزن.',
+        );
+      }
+    }
 
     final currency = _settingsProvider.currencySymbolText;
     final weightBreakdown = _buildWeightBreakdownLines(

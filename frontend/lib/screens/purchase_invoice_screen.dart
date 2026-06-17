@@ -2793,6 +2793,21 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         'تعذر جلب الرصيد الحالي من السيرفر. سيتم المتابعة بدون عرض رصيد تفصيلي.',
       );
     }
+    final gp24k = (_goldPrice?['price_24k'] as num?)?.toDouble() ?? 0.0;
+    if (totalWeight > 0 && gp24k > 0 && grandTotal > 0) {
+      final pricePerGram = grandTotal / totalWeight;
+      if (pricePerGram > gp24k * 2) {
+        notices.add(
+          '⚠️ سعر الجرام المحسوب ${pricePerGram.toStringAsFixed(0)} $currency أعلى بكثير من سعر السوق'
+          ' (${gp24k.toStringAsFixed(0)} $currency/جم). تأكد من صحة المبلغ والوزن.',
+        );
+      } else if (pricePerGram < gp24k * 0.15) {
+        notices.add(
+          '⚠️ سعر الجرام المحسوب ${pricePerGram.toStringAsFixed(0)} $currency أقل بكثير من سعر السوق'
+          ' (${gp24k.toStringAsFixed(0)} $currency/جم). تأكد من صحة المبلغ والوزن.',
+        );
+      }
+    }
 
     return await showAdaptiveInvoiceSummaryDialog<bool>(
           context: context,

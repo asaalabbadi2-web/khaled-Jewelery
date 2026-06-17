@@ -1316,6 +1316,20 @@ class _ScrapPurchaseInvoiceScreenState
     if (_purchaseNotesController.text.trim().isEmpty) {
       notices.add('لا توجد ملاحظات على الفاتورة.');
     }
+    if (totalWeight > 0 && _goldPrice24k > 0 && total > 0) {
+      final pricePerGram = total / totalWeight;
+      if (pricePerGram > _goldPrice24k * 2) {
+        notices.add(
+          '⚠️ سعر الجرام المحسوب ${pricePerGram.toStringAsFixed(0)} $currency أعلى بكثير من سعر السوق'
+          ' (${_goldPrice24k.toStringAsFixed(0)} $currency/جم). تأكد من صحة المبلغ والوزن.',
+        );
+      } else if (pricePerGram < _goldPrice24k * 0.15) {
+        notices.add(
+          '⚠️ سعر الجرام المحسوب ${pricePerGram.toStringAsFixed(0)} $currency أقل بكثير من سعر السوق'
+          ' (${_goldPrice24k.toStringAsFixed(0)} $currency/جم). تأكد من صحة المبلغ والوزن.',
+        );
+      }
+    }
 
     return await showAdaptiveInvoiceSummaryDialog<bool>(
           context: context,

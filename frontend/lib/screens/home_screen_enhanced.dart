@@ -1124,7 +1124,10 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       onSelected: () async {
         final result = await Navigator.push(
           context,
-          MaterialPageRoute(builder: (_) => const PurchaseInvoiceScreen()),
+          MaterialPageRoute(
+            builder: (_) =>
+                AddReturnInvoiceScreen(api: api, returnType: 'مرتجع شراء (مورد)'),
+          ),
         );
         if (result == true) await _loadAllData();
       },

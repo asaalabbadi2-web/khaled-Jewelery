@@ -7551,14 +7551,31 @@ def pending_post_invoices():
             elif getattr(inv, 'employee', None) and inv.employee.name:
                 creator = inv.employee.name
 
+            inv_type = inv.invoice_type or ''
+            if inv_type in ('شراء', 'purchase'):
+                approval_reason = 'فاتورة شراء كسر من مكتب التسكير — تحتاج اعتماد المدير قبل الترحيل'
+            elif inv_type in ('بيع', 'sale'):
+                approval_reason = 'فاتورة بيع — تحتاج اعتماد المدير قبل الترحيل'
+            elif inv_type in ('مرتجع بيع', 'sales_return'):
+                approval_reason = 'مرتجع بيع — يتطلب اعتماد المدير قبل الترحيل'
+            elif inv_type in ('شراء من عميل', 'scrap_purchase'):
+                approval_reason = 'شراء كسر من عميل — بانتظار اعتماد الترحيل'
+            elif inv_type in ('مرتجع شراء', 'purchase_return'):
+                approval_reason = 'مرتجع شراء كسر — يتطلب اعتماد المدير قبل الترحيل'
+            elif inv_type == 'scrap_sale':
+                approval_reason = 'بيع كسر — بانتظار الاعتماد'
+            else:
+                approval_reason = 'الفاتورة بانتظار الاعتماد والترحيل'
+
             result.append({
                 'id': inv.id,
                 'invoice_number': inv.invoice_number,
-                'invoice_type': inv.invoice_type or '',
+                'invoice_type': inv_type,
                 'total_amount': float(inv.total or 0),
                 'party_name': party_name,
                 'created_by_name': creator,
                 'created_at': inv.date.isoformat() if inv.date else None,
+                'approval_reason_message': approval_reason,
             })
 
         return jsonify({

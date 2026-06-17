@@ -211,7 +211,7 @@ class _AdaptiveInvoiceSummaryOverlay<T> extends StatelessWidget {
   }
 }
 
-class _InvoiceSummaryCard<T> extends StatelessWidget {
+class _InvoiceSummaryCard<T> extends StatefulWidget {
   final bool isMobile;
   final String title;
   final String? subtitle;
@@ -243,13 +243,44 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
   });
 
   @override
+  State<_InvoiceSummaryCard<T>> createState() => _InvoiceSummaryCardState<T>();
+}
+
+class _InvoiceSummaryCardState<T> extends State<_InvoiceSummaryCard<T>> {
+  final ScrollController _scrollController = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.notices.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Future.delayed(const Duration(milliseconds: 320), () {
+          if (mounted && _scrollController.hasClients) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: const Duration(milliseconds: 450),
+              curve: Curves.easeOut,
+            );
+          }
+        });
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
 
     return Container(
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * (isMobile ? 0.90 : 0.82),
+        maxHeight: MediaQuery.of(context).size.height * (widget.isMobile ? 0.90 : 0.82),
       ),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -270,12 +301,13 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
           Flexible(
             fit: FlexFit.loose,
             child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(20, isMobile ? 16 : 24, 20, 20),
+              controller: _scrollController,
+              padding: EdgeInsets.fromLTRB(20, widget.isMobile ? 16 : 24, 20, 20),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  if (isMobile)
+                  if (widget.isMobile)
                     Center(
                       child: Container(
                         width: 44,
@@ -300,7 +332,7 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
                             color: colorScheme.onSurface.withValues(alpha: 0.06),
                           ),
                         ),
-                        child: Icon(icon, color: accentColor, size: 24),
+                        child: Icon(widget.icon, color: widget.accentColor, size: 24),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -308,16 +340,16 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              title,
+                              widget.title,
                               style: theme.textTheme.titleLarge?.copyWith(
                                 fontWeight: FontWeight.w900,
                                 color: colorScheme.onSurface,
                               ),
                             ),
-                            if ((subtitle ?? '').trim().isNotEmpty) ...[
+                            if ((widget.subtitle ?? '').trim().isNotEmpty) ...[
                               const SizedBox(height: 6),
                               Text(
-                                subtitle!,
+                                widget.subtitle!,
                                 style: theme.textTheme.bodyMedium?.copyWith(
                                   color:
                                       colorScheme.onSurface.withValues(alpha: 0.60),
@@ -329,21 +361,21 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
                         ),
                       ),
                       IconButton(
-                        onPressed: () => Navigator.of(context).pop(closeValue),
+                        onPressed: () => Navigator.of(context).pop(widget.closeValue),
                         icon: const Icon(Icons.close_rounded),
                         tooltip: 'إغلاق',
                       ),
                     ],
                   ),
-                  if ((highlightMessage ?? '').trim().isNotEmpty) ...[
+                  if ((widget.highlightMessage ?? '').trim().isNotEmpty) ...[
                     const SizedBox(height: 16),
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           colors: [
-                            accentColor.withValues(alpha: 0.18),
-                            accentColor.withValues(alpha: 0.08),
+                            widget.accentColor.withValues(alpha: 0.18),
+                            widget.accentColor.withValues(alpha: 0.08),
                           ],
                           begin: Alignment.centerRight,
                           end: Alignment.centerLeft,
@@ -351,7 +383,7 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
                         borderRadius: BorderRadius.circular(20),
                       ),
                       child: Text(
-                        highlightMessage!,
+                        widget.highlightMessage!,
                         style: theme.textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w800,
                           color: colorScheme.onSurface,
@@ -369,14 +401,14 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  _InvoiceSummaryGrid(metrics: metrics),
+                  _InvoiceSummaryGrid(metrics: widget.metrics),
                   const SizedBox(height: 16),
                   _StatusCard(
-                    title: statusTitle,
-                    message: statusMessage,
-                    tone: statusTone,
+                    title: widget.statusTitle,
+                    message: widget.statusMessage,
+                    tone: widget.statusTone,
                   ),
-                  if (notices.isNotEmpty) ...[
+                  if (widget.notices.isNotEmpty) ...[
                     const SizedBox(height: 16),
                     Container(
                       padding: const EdgeInsets.all(16),
@@ -408,7 +440,7 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
                             ],
                           ),
                           const SizedBox(height: 10),
-                          ...notices.map(
+                          ...widget.notices.map(
                             (notice) => Padding(
                               padding: const EdgeInsets.only(bottom: 8),
                               child: Text(
@@ -447,7 +479,7 @@ class _InvoiceSummaryCard<T> extends StatelessWidget {
                 ),
               ],
             ),
-            child: _InvoiceSummaryActions<T>(actions: actions),
+            child: _InvoiceSummaryActions<T>(actions: widget.actions),
           ),
         ],
       ),
