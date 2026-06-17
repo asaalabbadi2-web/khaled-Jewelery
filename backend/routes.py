@@ -31191,8 +31191,9 @@ def _auto_consume_weight_closing(
         cash_spent += chunk_cash_value
 
         # ─── قيد تكلفة المبيعات (COGS): د/521 × ه/مخزون مالي ────────────────────
-        # يُسجَّل عند كل تنفيذ تسكير (ما عدا النوع "expense") لتعكس تكلفة الذهب المباع.
-        if journal_entry_id and chunk_cash_value > 0 and execution_type != 'expense':
+        # يُسجَّل عند كل تنفيذ تسكير (ما عدا "expense" و"office_reservation").
+        # office_reservation: الوزن يُتابَع عبر خزينة المكتب، لا عبر COGS مباشرة.
+        if journal_entry_id and chunk_cash_value > 0 and execution_type not in ('expense', 'office_reservation'):
             _cogs_account = Account.query.filter_by(account_number='521').first()
             if _cogs_account:
                 _karat_ln = (
