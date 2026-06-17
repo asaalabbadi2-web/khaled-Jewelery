@@ -7524,7 +7524,10 @@ def pending_post_invoices():
         limit = request.args.get('limit', 10, type=int)
         limit = max(1, min(limit, 50))  # clamp to safe range
 
-        base_q = Invoice.query.filter(Invoice.is_posted.is_(False))
+        base_q = Invoice.query.filter(
+            Invoice.is_posted.is_(False),
+            Invoice.status != 'rejected',
+        )
 
         total = base_q.count()
 
@@ -9030,6 +9033,53 @@ def approve_invoice(invoice_id: int):
         db.session.rollback()
         import traceback; traceback.print_exc()
         return jsonify({'error': 'approve_failed', 'message': str(exc)}), 500
+
+
+@api.route('/invoices/<int:invoice_id>/reject', methods=['POST'])
+@require_permission('invoice.edit')
+def reject_invoice(invoice_id: int):
+    """رفض فاتورة غير مرحّلة وإعادة الحجز المرتبط بها (إن وُجد) إلى حالة pending."""
+    invoice = Invoice.query.get(invoice_id)
+    if not invoice:
+        return jsonify({'error': 'not_found', 'message': 'الفاتورة غير موجودة'}), 404
+
+    if invoice.is_posted:
+        return jsonify({'error': 'already_posted', 'message': 'لا يمكن رفض فاتورة مرحّلة بالفعل'}), 400
+
+    if invoice.status == 'rejected':
+        return jsonify({'success': True, 'invoice': invoice.to_dict()}), 200
+
+    data = request.get_json(silent=True) or {}
+    rejection_reason = (data.get('reason') or '').strip()
+
+    try:
+        # ── إعادة الحجز المرتبط إلى pending ────────────────────────────────
+        linked_reservation = OfficeReservation.query.filter_by(
+            purchase_invoice_id=invoice_id
+        ).first()
+        if linked_reservation:
+            linked_reservation.purchase_invoice_id = None
+            linked_reservation.status = 'pending'
+            db.session.add(linked_reservation)
+
+        # ── وضع علامة رفض على الفاتورة ─────────────────────────────────────
+        invoice.status = 'rejected'
+        if rejection_reason:
+            current_notes = (getattr(invoice, 'notes', None) or '').strip()
+            invoice.notes = f'[مرفوض: {rejection_reason}]\n{current_notes}'.strip() if hasattr(invoice, 'notes') else None
+        db.session.add(invoice)
+
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'invoice': invoice.to_dict(),
+            'reservation_reset': linked_reservation.id if linked_reservation else None,
+        }), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        import traceback; traceback.print_exc()
+        return jsonify({'error': 'reject_failed', 'message': str(exc)}), 500
 
 
 @api.route('/invoices/<int:invoice_id>/unpost', methods=['POST'])
@@ -32081,6 +32131,52 @@ def cancel_office_reservation(reservation_id: int):
 
     if linked_voucher is not None:
         return jsonify({'error': 'لا يمكن إلغاء حجز مرتبط بسند دفع. قم بإلغاء السند أولاً'}), 400
+
+    # ── قيد عكسي للوزن: إعادة الذهب من المكتب إلى مخزون الكسر ──────────
+    try:
+        wgt_je = (
+            JournalEntry.query
+            .filter_by(reference_type='office_reservation', reference_id=reservation.id)
+            .filter(JournalEntry.entry_number.like('WGT-%'))
+            .filter(JournalEntry.is_deleted.is_(False))
+            .first()
+        )
+        if wgt_je:
+            orig_lines = JournalEntryLine.query.filter_by(journal_entry_id=wgt_je.id).all()
+            rev_entry = JournalEntry(
+                entry_number=_generate_journal_entry_number('WGT'),
+                date=datetime.now(),
+                description=f'إلغاء حجز ({reservation.reservation_code}) — قيد عكسي',
+                reference_type='office_reservation',
+                reference_id=reservation.id,
+                is_posted=True,
+                posted_at=datetime.now(),
+                posted_by='cancel',
+            )
+            db.session.add(rev_entry)
+            db.session.flush()
+
+            affected_account_ids = set()
+            karats = (18, 21, 22, 24)
+            for orig in orig_lines:
+                rev_kwargs = {'journal_entry_id': rev_entry.id, 'account_id': orig.account_id, 'description': orig.description}
+                for k in karats:
+                    d = getattr(orig, f'debit_{k}k') or 0.0
+                    c = getattr(orig, f'credit_{k}k') or 0.0
+                    if d:
+                        rev_kwargs[f'credit_{k}k'] = d
+                    if c:
+                        rev_kwargs[f'debit_{k}k'] = c
+                db.session.add(JournalEntryLine(**rev_kwargs))
+                affected_account_ids.add(orig.account_id)
+
+            db.session.flush()
+            if affected_account_ids:
+                _recalculate_account_balances_for_accounts(list(affected_account_ids))
+    except Exception as _exc:
+        import traceback; traceback.print_exc()
+        db.session.rollback()
+        return jsonify({'error': f'فشل إنشاء القيد العكسي: {_exc}'}), 500
 
     reservation.status = 'cancelled'
     db.session.add(reservation)

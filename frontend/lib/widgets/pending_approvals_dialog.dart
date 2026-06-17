@@ -53,6 +53,8 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
   int _total = 0;
   final Set<int> _postingIds = {};
   final Set<int> _justPostedIds = {};
+  final Set<int> _rejectingIds = {};
+  final Set<int> _justRejectedIds = {};
 
   @override
   void initState() {
@@ -144,6 +146,80 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
           behavior: SnackBarBehavior.floating,
         ),
       );
+    }
+  }
+
+  Future<void> _rejectInvoice(Map<String, dynamic> invoice) async {
+    final id = invoice['id'] as int;
+    if (_rejectingIds.contains(id)) return;
+    final isAr = widget.isArabic;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(isAr ? 'رفض الفاتورة' : 'Reject Invoice',
+            style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800)),
+        content: Text(
+          isAr
+              ? 'هل تريد رفض الفاتورة ${invoice['invoice_number']}؟\nسيعود الحجز المرتبط بها إلى حالة الانتظار.'
+              : 'Reject invoice ${invoice['invoice_number']}?\nLinked reservation will return to pending.',
+          style: const TextStyle(fontFamily: 'Cairo'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(isAr ? 'إلغاء' : 'Cancel',
+                style: const TextStyle(fontFamily: 'Cairo')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: Text(isAr ? 'رفض' : 'Reject',
+                style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _rejectingIds.add(id));
+    try {
+      await widget.api.rejectInvoice(id);
+      if (!mounted) return;
+      setState(() => _justRejectedIds.add(id));
+      await Future.delayed(const Duration(milliseconds: 280));
+      if (!mounted) return;
+      setState(() {
+        _invoices.removeWhere((inv) => inv['id'] == id);
+        _total = (_total - 1).clamp(0, 9999);
+        _rejectingIds.remove(id);
+        _justRejectedIds.remove(id);
+      });
+      widget.onCountChanged?.call();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            isAr ? 'تم رفض ${invoice['invoice_number']}' : 'Rejected ${invoice['invoice_number']}',
+            style: const TextStyle(fontFamily: 'Cairo'),
+          ),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ));
+      }
+      if (_invoices.isEmpty && mounted) {
+        await Future.delayed(const Duration(milliseconds: 300));
+        if (mounted) Navigator.of(context).pop();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _rejectingIds.remove(id));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(isAr ? 'فشل الرفض: $e' : 'Reject failed: $e',
+            style: const TextStyle(fontFamily: 'Cairo')),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ));
     }
   }
 
@@ -497,6 +573,8 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     final id = invoice['id'] as int;
     final isPosting = _postingIds.contains(id);
     final isJustPosted = _justPostedIds.contains(id);
+    final isRejecting = _rejectingIds.contains(id);
+    final isJustRejected = _justRejectedIds.contains(id);
 
     final type = (invoice['invoice_type'] ?? '').toString();
     final number = (invoice['invoice_number'] ?? '—').toString();
@@ -510,10 +588,10 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
 
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 280),
-      opacity: isJustPosted ? 0 : 1,
+      opacity: (isJustPosted || isJustRejected) ? 0 : 1,
       child: AnimatedSlide(
         duration: const Duration(milliseconds: 280),
-        offset: isJustPosted ? Offset(isAr ? 1 : -1, 0) : Offset.zero,
+        offset: (isJustPosted || isJustRejected) ? Offset(isAr ? 1 : -1, 0) : Offset.zero,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
           child: Row(
@@ -613,21 +691,31 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                         _buildActionButton(
                           label: isPosting
                               ? (isAr ? 'جارِ الترحيل...' : 'Posting...')
-                              : (isAr ? '✓ ترحيل مباشر' : '✓ Post Now'),
+                              : (isAr ? '✓ ترحيل' : '✓ Post'),
                           color: AppColors.success,
                           isPrimary: true,
                           isLoading: isPosting,
-                          onTap: isPosting ? null : () => _postInvoice(invoice),
+                          onTap: (isPosting || isRejecting) ? null : () => _postInvoice(invoice),
                         ),
                         const SizedBox(width: 6),
                         _buildActionButton(
-                          label: isAr ? 'التفاصيل' : 'Details',
+                          label: isRejecting
+                              ? (isAr ? 'جارِ الرفض...' : 'Rejecting...')
+                              : (isAr ? '✕ رفض' : '✕ Reject'),
+                          color: AppColors.error,
+                          isPrimary: false,
+                          isLoading: isRejecting,
+                          onTap: (isPosting || isRejecting) ? null : () => _rejectInvoice(invoice),
+                        ),
+                        const SizedBox(width: 6),
+                        _buildActionButton(
+                          label: isAr ? 'تفاصيل' : 'Details',
                           color: isDark
                               ? const Color(0xFFBDBDBD)
                               : const Color(0xFF616161),
                           isPrimary: false,
                           isLoading: false,
-                          onTap: isPosting ? null : () => _viewDetails(invoice),
+                          onTap: (isPosting || isRejecting) ? null : () => _viewDetails(invoice),
                         ),
                       ],
                     ),

@@ -5697,6 +5697,23 @@ class ApiService {
     throw Exception('$msg (status: ${response.statusCode})');
   }
 
+  Future<Map<String, dynamic>> rejectInvoice(int invoiceId, {String? reason}) async {
+    final response = await _authedPost(
+      Uri.parse('$_baseUrl/invoices/$invoiceId/reject'),
+      body: json.encode({'reason': reason ?? ''}),
+    );
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    Map<String, dynamic>? parsed;
+    try {
+      final decoded = json.decode(utf8.decode(response.bodyBytes));
+      if (decoded is Map<String, dynamic>) parsed = decoded;
+    } catch (_) {}
+    final msg = parsed?['message']?.toString() ?? 'فشل رفض الفاتورة';
+    throw Exception('$msg (status: ${response.statusCode})');
+  }
+
   /// Post a single journal entry
   Future<Map<String, dynamic>> postJournalEntry(
     int entryId,
