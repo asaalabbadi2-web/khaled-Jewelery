@@ -31749,6 +31749,50 @@ def create_office_reservation():
                 voucher.journal_entry_id = voucher_entry.id
             _append_safe_transactions_for_voucher(voucher, created_by=voucher.created_by)
 
+        # ── قيد الإنشاء الوزني: ذهب يغادر المخزون إلى المكتب ───────────────
+        # يُسجَّل دائماً عند إنشاء الحجز بغض النظر عن حالة الدفع.
+        # Dr. حساب وزني المورد (safe box المكتب) / Cr. مخزون كسر وزني (71310)
+        _office_weight_acc_id = None
+        try:
+            _gold_safe = getattr(supplier, 'default_safe_box', None)
+            if _gold_safe and getattr(_gold_safe, 'safe_type', None) == 'gold':
+                _office_weight_acc_id = getattr(_gold_safe, 'account_id', None)
+        except Exception:
+            pass
+
+        _inv_weight_acc = Account.query.filter_by(account_number='71310').first()
+        _inv_weight_acc_id = _inv_weight_acc.id if _inv_weight_acc else None
+
+        if _office_weight_acc_id and _inv_weight_acc_id and weight_grams > 0:
+            _wgt_entry = JournalEntry(
+                entry_number=_generate_journal_entry_number('WGT'),
+                date=reservation_date,
+                description=f'إرسال ذهب للحجز ({reservation.reservation_code}) - مكتب {office.name}',
+                reference_type='office_reservation',
+                reference_id=reservation.id,
+                is_posted=True,
+                posted_at=reservation_date,
+                posted_by=str(data.get('created_by') or 'system'),
+            )
+            db.session.add(_wgt_entry)
+            db.session.flush()
+
+            _k_dr = f'debit_{karat}k'
+            _k_cr = f'credit_{karat}k'
+            db.session.add(JournalEntryLine(
+                journal_entry_id=_wgt_entry.id,
+                account_id=_office_weight_acc_id,
+                description=f'ذهب بحيازة مكتب التسكير عيار {karat}',
+                **{_k_dr: weight_grams},
+            ))
+            db.session.add(JournalEntryLine(
+                journal_entry_id=_wgt_entry.id,
+                account_id=_inv_weight_acc_id,
+                description=f'خروج ذهب كسر للتسكير عيار {karat}',
+                **{_k_cr: weight_grams},
+            ))
+            db.session.flush()
+
         office.total_reservations = (office.total_reservations or 0) + 1
         office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
         office.total_amount_paid = (office.total_amount_paid or 0.0) + paid_amount
