@@ -7598,6 +7598,111 @@ def pending_post_invoices():
         }), 500
 
 
+@api.route('/pending-actions', methods=['GET'])
+def pending_actions():
+    """نقطة موحّدة للمعلّقات: حجوزات بانتظار التسوية + فواتير بانتظار الاعتماد"""
+    try:
+        # ── حجوزات بانتظار التسوية ──────────────────────────────────────────
+        res_query = (
+            OfficeReservation.query
+            .options(joinedload(OfficeReservation.office))
+            .filter(
+                OfficeReservation.purchase_invoice_id.is_(None),
+                OfficeReservation.status.in_(['approved', 'pending']),
+            )
+            .order_by(OfficeReservation.reservation_date.desc())
+            .limit(50)
+        )
+        reservations = res_query.all()
+        pending_reservations = []
+        for r in reservations:
+            office_name = r.office.name if r.office else ''
+            pending_reservations.append({
+                'id': r.id,
+                'reservation_code': r.reservation_code,
+                'office_id': r.office_id,
+                'office_name': office_name,
+                'karat': r.karat,
+                'weight_main_karat': float(r.weight_main_karat or 0),
+                'weight_remaining_main_karat': float(r.weight_remaining_main_karat or 0),
+                'price_per_gram': float(r.price_per_gram or 0),
+                'total_amount': float(r.total_amount or 0),
+                'paid_amount': float(r.paid_amount or 0),
+                'payment_status': r.payment_status,
+                'status': r.status,
+                'contact_person': r.contact_person or '',
+                'contact_phone': r.contact_phone or '',
+                'notes': r.notes or '',
+                'reservation_date': r.reservation_date.isoformat() if r.reservation_date else None,
+            })
+
+        # ── فواتير بانتظار الاعتماد ──────────────────────────────────────────
+        inv_query = Invoice.query.filter(
+            Invoice.is_posted.is_(False),
+            Invoice.status != 'rejected',
+        )
+        total_invoices = inv_query.count()
+        invoices = inv_query.order_by(Invoice.date.desc(), Invoice.id.desc()).limit(50).all()
+        pending_invoices = []
+        for inv in invoices:
+            party_name = ''
+            if inv.customer:
+                party_name = inv.customer.name or ''
+            elif inv.supplier:
+                party_name = inv.supplier.name or ''
+
+            creator = ''
+            if getattr(inv, 'posted_by', None):
+                creator = inv.posted_by
+            elif getattr(inv, 'employee', None) and inv.employee.name:
+                creator = inv.employee.name
+
+            inv_type = inv.invoice_type or ''
+            if inv_type in ('شراء', 'purchase'):
+                approval_reason = 'فاتورة شراء كسر من مكتب التسكير — تحتاج اعتماد المدير قبل الترحيل'
+            elif inv_type in ('بيع', 'sale'):
+                approval_reason = 'فاتورة بيع — تحتاج اعتماد المدير قبل الترحيل'
+            elif inv_type in ('مرتجع بيع', 'sales_return'):
+                approval_reason = 'مرتجع بيع — يتطلب اعتماد المدير قبل الترحيل'
+            elif inv_type in ('شراء من عميل', 'scrap_purchase'):
+                approval_reason = 'شراء كسر من عميل — بانتظار اعتماد الترحيل'
+            elif inv_type in ('مرتجع شراء', 'purchase_return'):
+                approval_reason = 'مرتجع شراء كسر — يتطلب اعتماد المدير قبل الترحيل'
+            elif inv_type == 'scrap_sale':
+                approval_reason = 'بيع كسر — بانتظار الاعتماد'
+            else:
+                approval_reason = 'الفاتورة بانتظار الاعتماد والترحيل'
+
+            pending_invoices.append({
+                'id': inv.id,
+                'invoice_number': inv.invoice_number,
+                'invoice_type': inv_type,
+                'total_amount': float(inv.total or 0),
+                'party_name': party_name,
+                'created_by_name': creator,
+                'created_at': inv.date.isoformat() if inv.date else None,
+                'approval_reason_message': approval_reason,
+            })
+
+        return jsonify({
+            'pending_reservations': pending_reservations,
+            'pending_invoices': pending_invoices,
+            'total_pending_reservations': len(pending_reservations),
+            'total_pending_invoices': total_invoices,
+        }), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'pending_reservations': [],
+            'pending_invoices': [],
+            'total_pending_reservations': 0,
+            'total_pending_invoices': 0,
+            'error': str(e),
+        }), 500
+
+
 @api.route('/invoices', methods=['GET'])
 def get_invoices():
     # Pagination parameters

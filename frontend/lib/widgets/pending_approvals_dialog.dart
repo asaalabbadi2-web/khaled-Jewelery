@@ -10,7 +10,6 @@ import '../screens/posting_management_screen.dart';
 class PendingApprovalsDialog extends StatefulWidget {
   final ApiService api;
   final bool isArabic;
-  /// يُستدعى بعد كل ترحيل ناجح لتحديث الـ badge في الرئيسية
   final VoidCallback? onCountChanged;
 
   const PendingApprovalsDialog({
@@ -20,7 +19,6 @@ class PendingApprovalsDialog extends StatefulWidget {
     this.onCountChanged,
   });
 
-  /// Helper لفتح الـ Dialog من أي مكان
   static Future<void> show({
     required BuildContext context,
     required ApiService api,
@@ -49,12 +47,26 @@ class PendingApprovalsDialog extends StatefulWidget {
 class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
   bool _loading = true;
   String? _error;
+
+  List<Map<String, dynamic>> _reservations = [];
   List<Map<String, dynamic>> _invoices = [];
-  int _total = 0;
+  int _totalReservations = 0;
+  int _totalInvoices = 0;
+
+  // Invoice action tracking
   final Set<int> _postingIds = {};
   final Set<int> _justPostedIds = {};
   final Set<int> _rejectingIds = {};
   final Set<int> _justRejectedIds = {};
+
+  // Reservation action tracking
+  final Set<int> _settlingIds = {};
+  final Set<int> _justSettledIds = {};
+  final Set<int> _cancellingIds = {};
+  final Set<int> _justCancelledIds = {};
+
+  // Expanded reservation IDs
+  final Set<int> _expandedIds = {};
 
   @override
   void initState() {
@@ -68,13 +80,19 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       _error = null;
     });
     try {
-      final result = await widget.api.getPendingPostInvoices(limit: 10);
+      final result = await widget.api.getPendingActions();
       if (!mounted) return;
       setState(() {
-        _invoices = (result['invoices'] as List? ?? [])
+        _reservations = (result['pending_reservations'] as List? ?? [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        _total = (result['total'] as num?)?.toInt() ?? 0;
+        _invoices = (result['pending_invoices'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
+        _totalReservations =
+            (result['total_pending_reservations'] as num?)?.toInt() ?? 0;
+        _totalInvoices =
+            (result['total_pending_invoices'] as num?)?.toInt() ?? 0;
         _loading = false;
       });
     } catch (e) {
@@ -86,6 +104,205 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     }
   }
 
+  int get _totalCount => _totalReservations + _totalInvoices;
+
+  // ─────────────── Reservation actions ───────────────
+
+  Future<void> _settleReservation(Map<String, dynamic> res) async {
+    final id = res['id'] as int;
+    if (_settlingIds.contains(id)) return;
+    final isAr = widget.isArabic;
+
+    final code = res['reservation_code']?.toString() ?? '';
+    final officeName = res['office_name']?.toString() ?? '';
+    final weight = (res['weight_remaining_main_karat'] as num?)?.toDouble() ?? 0.0;
+    final total = (res['total_amount'] as num?)?.toDouble() ?? 0.0;
+    final pricePerGram = (res['price_per_gram'] as num?)?.toDouble();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(
+          isAr ? 'تأكيد تسوية الحجز' : 'Confirm Settlement',
+          style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800),
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _confirmRow(isAr ? 'الكود' : 'Code', code),
+            _confirmRow(isAr ? 'المكتب' : 'Office', officeName),
+            _confirmRow(
+              isAr ? 'الوزن المتبقي' : 'Remaining Weight',
+              '${weight.toStringAsFixed(3)} جم',
+            ),
+            _confirmRow(
+              isAr ? 'الإجمالي' : 'Total',
+              '${NumberFormat('#,##0', 'en').format(total.round())} ر.س',
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isAr
+                  ? 'سيتم إنشاء فاتورة شراء وإرسالها للاعتماد.'
+                  : 'A purchase invoice will be created for approval.',
+              style: TextStyle(
+                fontFamily: 'Cairo',
+                fontSize: 12,
+                color: Colors.orange.shade700,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(isAr ? 'إلغاء' : 'Cancel',
+                style: const TextStyle(fontFamily: 'Cairo')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.success),
+            child: Text(
+              isAr ? 'تنفيذ التسوية' : 'Execute',
+              style: const TextStyle(
+                  fontFamily: 'Cairo', fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _settlingIds.add(id));
+    try {
+      await widget.api.settleOfficeReservation(
+        id,
+        executionPricePerGram: pricePerGram,
+      );
+      if (!mounted) return;
+      setState(() => _justSettledIds.add(id));
+      await Future.delayed(const Duration(milliseconds: 280));
+      if (!mounted) return;
+      setState(() {
+        _reservations.removeWhere((r) => r['id'] == id);
+        _totalReservations = (_totalReservations - 1).clamp(0, 9999);
+        _settlingIds.remove(id);
+        _justSettledIds.remove(id);
+        _expandedIds.remove(id);
+      });
+      widget.onCountChanged?.call();
+      // Reload to pick up the newly created invoice
+      await _loadList();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            isAr
+                ? 'تم تنفيذ التسوية — الفاتورة بانتظار الاعتماد'
+                : 'Settlement executed — invoice awaiting approval',
+            style: const TextStyle(fontFamily: 'Cairo'),
+          ),
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _settlingIds.remove(id));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          isAr ? 'فشل التسوية: $e' : 'Settlement failed: $e',
+          style: const TextStyle(fontFamily: 'Cairo'),
+        ),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  Future<void> _cancelReservation(Map<String, dynamic> res) async {
+    final id = res['id'] as int;
+    if (_cancellingIds.contains(id)) return;
+    final isAr = widget.isArabic;
+    final code = res['reservation_code']?.toString() ?? '';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(
+          isAr ? 'إلغاء الحجز' : 'Cancel Reservation',
+          style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800),
+        ),
+        content: Text(
+          isAr
+              ? 'هل تريد إلغاء الحجز $code؟\nسيتم إنشاء قيد وزن عكسي تلقائياً.'
+              : 'Cancel reservation $code?\nA weight reversal entry will be created automatically.',
+          style: const TextStyle(fontFamily: 'Cairo'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: Text(isAr ? 'تراجع' : 'Back',
+                style: const TextStyle(fontFamily: 'Cairo')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.error),
+            child: Text(
+              isAr ? 'إلغاء الحجز' : 'Cancel Reservation',
+              style: const TextStyle(
+                  fontFamily: 'Cairo', fontWeight: FontWeight.w800),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => _cancellingIds.add(id));
+    try {
+      await widget.api.cancelOfficeReservation(id);
+      if (!mounted) return;
+      setState(() => _justCancelledIds.add(id));
+      await Future.delayed(const Duration(milliseconds: 280));
+      if (!mounted) return;
+      setState(() {
+        _reservations.removeWhere((r) => r['id'] == id);
+        _totalReservations = (_totalReservations - 1).clamp(0, 9999);
+        _cancellingIds.remove(id);
+        _justCancelledIds.remove(id);
+        _expandedIds.remove(id);
+      });
+      widget.onCountChanged?.call();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            isAr
+                ? 'تم إلغاء الحجز وإنشاء القيد العكسي'
+                : 'Reservation cancelled with reversal entry',
+            style: const TextStyle(fontFamily: 'Cairo'),
+          ),
+          backgroundColor: AppColors.error,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cancellingIds.remove(id));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          isAr ? 'فشل الإلغاء: $e' : 'Cancel failed: $e',
+          style: const TextStyle(fontFamily: 'Cairo'),
+        ),
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+
+  // ─────────────── Invoice actions ───────────────
+
   Future<void> _postInvoice(Map<String, dynamic> invoice) async {
     final id = invoice['id'] as int;
     if (_postingIds.contains(id)) return;
@@ -94,58 +311,47 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
         Provider.of<AuthProvider>(context, listen: false).username;
 
     setState(() => _postingIds.add(id));
-
     try {
       await widget.api.postInvoice(id, postedBy);
-
       if (!mounted) return;
-
       setState(() => _justPostedIds.add(id));
       await Future.delayed(const Duration(milliseconds: 280));
-
       if (!mounted) return;
       setState(() {
         _invoices.removeWhere((inv) => inv['id'] == id);
-        _total = (_total - 1).clamp(0, 9999);
+        _totalInvoices = (_totalInvoices - 1).clamp(0, 9999);
         _postingIds.remove(id);
         _justPostedIds.remove(id);
       });
-
       widget.onCountChanged?.call();
-
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              widget.isArabic
-                  ? 'تم ترحيل ${invoice['invoice_number']}'
-                  : 'Posted ${invoice['invoice_number']}',
-              style: const TextStyle(fontFamily: 'Cairo'),
-            ),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 2),
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+            widget.isArabic
+                ? 'تم ترحيل ${invoice['invoice_number']}'
+                : 'Posted ${invoice['invoice_number']}',
+            style: const TextStyle(fontFamily: 'Cairo'),
           ),
-        );
+          backgroundColor: AppColors.success,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ));
       }
-
-      if (_invoices.isEmpty && mounted) {
+      if (_invoices.isEmpty && _reservations.isEmpty && mounted) {
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted) Navigator.of(context).pop();
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _postingIds.remove(id));
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            widget.isArabic ? 'فشل الترحيل: $e' : 'Posting failed: $e',
-            style: const TextStyle(fontFamily: 'Cairo'),
-          ),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+          widget.isArabic ? 'فشل الترحيل: $e' : 'Posting failed: $e',
+          style: const TextStyle(fontFamily: 'Cairo'),
         ),
-      );
+        backgroundColor: AppColors.error,
+        behavior: SnackBarBehavior.floating,
+      ));
     }
   }
 
@@ -157,8 +363,10 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text(isAr ? 'رفض الفاتورة' : 'Reject Invoice',
-            style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800)),
+        title: Text(
+          isAr ? 'رفض الفاتورة' : 'Reject Invoice',
+          style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800),
+        ),
         content: Text(
           isAr
               ? 'هل تريد رفض الفاتورة ${invoice['invoice_number']}؟\nسيعود الحجز المرتبط بها إلى حالة الانتظار.'
@@ -174,8 +382,11 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
             style: TextButton.styleFrom(foregroundColor: AppColors.error),
-            child: Text(isAr ? 'رفض' : 'Reject',
-                style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800)),
+            child: Text(
+              isAr ? 'رفض' : 'Reject',
+              style: const TextStyle(
+                  fontFamily: 'Cairo', fontWeight: FontWeight.w800),
+            ),
           ),
         ],
       ),
@@ -191,39 +402,41 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       if (!mounted) return;
       setState(() {
         _invoices.removeWhere((inv) => inv['id'] == id);
-        _total = (_total - 1).clamp(0, 9999);
+        _totalInvoices = (_totalInvoices - 1).clamp(0, 9999);
         _rejectingIds.remove(id);
         _justRejectedIds.remove(id);
       });
       widget.onCountChanged?.call();
+      // Reload to pick up any reservation that returned to pending
+      await _loadList();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
-            isAr ? 'تم رفض ${invoice['invoice_number']}' : 'Rejected ${invoice['invoice_number']}',
+            isAr
+                ? 'تم رفض ${invoice['invoice_number']} — الحجز عاد للانتظار'
+                : 'Rejected ${invoice['invoice_number']} — reservation reset to pending',
             style: const TextStyle(fontFamily: 'Cairo'),
           ),
           backgroundColor: AppColors.error,
           behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
+          duration: const Duration(seconds: 3),
         ));
-      }
-      if (_invoices.isEmpty && mounted) {
-        await Future.delayed(const Duration(milliseconds: 300));
-        if (mounted) Navigator.of(context).pop();
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _rejectingIds.remove(id));
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(isAr ? 'فشل الرفض: $e' : 'Reject failed: $e',
-            style: const TextStyle(fontFamily: 'Cairo')),
+        content: Text(
+          isAr ? 'فشل الرفض: $e' : 'Reject failed: $e',
+          style: const TextStyle(fontFamily: 'Cairo'),
+        ),
         backgroundColor: AppColors.error,
         behavior: SnackBarBehavior.floating,
       ));
     }
   }
 
-  void _viewDetails(Map<String, dynamic> invoice) {
+  void _viewInvoiceDetails(Map<String, dynamic> invoice) {
     final isAr = widget.isArabic;
     final reason = (invoice['approval_reason_message'] as String?) ?? '';
     final invoiceNumber = invoice['invoice_number']?.toString() ?? '';
@@ -251,16 +464,17 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
           color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: EdgeInsets.fromLTRB(20, 12, 20, MediaQuery.of(context).viewInsets.bottom + 28),
+        padding: EdgeInsets.fromLTRB(
+            20, 12, 20, MediaQuery.of(context).viewInsets.bottom + 28),
         child: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Handle bar
               Center(
                 child: Container(
-                  width: 36, height: 4,
+                  width: 36,
+                  height: 4,
                   decoration: BoxDecoration(
                     color: theme.dividerColor,
                     borderRadius: BorderRadius.circular(2),
@@ -268,102 +482,134 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                 ),
               ),
               const SizedBox(height: 14),
-              // Header
               Row(
                 children: [
                   Expanded(
                     child: Text(
                       invoiceNumber,
-                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.bold),
                     ),
                   ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: goldType == 'scrap'
-                          ? Colors.brown.withValues(alpha: 0.12)
-                          : AppColors.primaryGold.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      goldTypeLabel,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: goldType == 'scrap' ? Colors.brown : AppColors.primaryGold,
+                  if (goldType.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: goldType == 'scrap'
+                            ? Colors.brown.withValues(alpha: 0.12)
+                            : AppColors.primaryGold.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        goldTypeLabel,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: goldType == 'scrap'
+                              ? Colors.brown
+                              : AppColors.primaryGold,
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
               const SizedBox(height: 14),
-
-              // Main info
-              if (party.isNotEmpty) _detailRow(isAr ? 'الطرف' : 'Party', party, theme),
-              if (creator.isNotEmpty) _detailRow(isAr ? 'المنشئ' : 'Created by', creator, theme),
-              if (paymentMethod.isNotEmpty) _detailRow(isAr ? 'وسيلة الدفع' : 'Payment', paymentMethod, theme),
-              _detailRow(isAr ? 'إجمالي الفاتورة' : 'Total', '${total.toStringAsFixed(2)} ر.س', theme),
+              if (party.isNotEmpty)
+                _detailRow(isAr ? 'الطرف' : 'Party', party, theme),
+              if (creator.isNotEmpty)
+                _detailRow(isAr ? 'المنشئ' : 'Created by', creator, theme),
+              if (paymentMethod.isNotEmpty)
+                _detailRow(
+                    isAr ? 'وسيلة الدفع' : 'Payment', paymentMethod, theme),
+              _detailRow(isAr ? 'إجمالي الفاتورة' : 'Total',
+                  '${total.toStringAsFixed(2)} ر.س', theme),
               if (goldSubtotal > 0 && goldSubtotal != total)
-                _detailRow(isAr ? 'قيمة الذهب' : 'Gold value', '${goldSubtotal.toStringAsFixed(2)} ر.س', theme),
+                _detailRow(isAr ? 'قيمة الذهب' : 'Gold value',
+                    '${goldSubtotal.toStringAsFixed(2)} ر.س', theme),
               if (totalWeight > 0)
-                _detailRow(isAr ? 'إجمالي الوزن' : 'Total weight', '${totalWeight.toStringAsFixed(3)} جم', theme),
-
-              // Karat breakdown
+                _detailRow(isAr ? 'إجمالي الوزن' : 'Total weight',
+                    '${totalWeight.toStringAsFixed(3)} جم', theme),
               if (karatLines.isNotEmpty) ...[
                 const Divider(height: 22),
                 Text(
                   isAr ? 'تفاصيل العيارات' : 'Karat details',
-                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: theme.hintColor),
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: theme.hintColor),
                 ),
                 const SizedBox(height: 8),
                 ...karatLines.map((kl) {
                   final karat = kl['karat'] ?? 0;
-                  final weight = (kl['weight_grams'] as num?)?.toDouble() ?? 0.0;
-                  final ppg = (kl['price_per_gram'] as num?)?.toDouble() ?? 0.0;
-                  final value = (kl['gold_value'] as num?)?.toDouble() ?? 0.0;
+                  final weight =
+                      (kl['weight_grams'] as num?)?.toDouble() ?? 0.0;
+                  final ppg =
+                      (kl['price_per_gram'] as num?)?.toDouble() ?? 0.0;
+                  final value =
+                      (kl['gold_value'] as num?)?.toDouble() ?? 0.0;
                   return Padding(
                     padding: const EdgeInsets.symmetric(vertical: 4),
                     child: Row(
                       children: [
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
                             color: AppColors.primaryGold.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(4),
                           ),
-                          child: Text('${karat}k', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.primaryGold)),
+                          child: Text('${karat}k',
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.primaryGold)),
                         ),
                         const SizedBox(width: 10),
-                        Expanded(child: Text('${weight.toStringAsFixed(3)} جم', style: const TextStyle(fontSize: 12))),
-                        Text('${ppg.toStringAsFixed(2)} ر.س/جم', style: TextStyle(fontSize: 12, color: theme.hintColor)),
+                        Expanded(
+                            child: Text('${weight.toStringAsFixed(3)} جم',
+                                style: const TextStyle(fontSize: 12))),
+                        Text('${ppg.toStringAsFixed(2)} ر.س/جم',
+                            style: TextStyle(
+                                fontSize: 12, color: theme.hintColor)),
                         const SizedBox(width: 8),
-                        Text('${value.toStringAsFixed(2)} ر.س', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                        Text('${value.toStringAsFixed(2)} ر.س',
+                            style: const TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700)),
                       ],
                     ),
                   );
                 }),
               ],
-
-              // Approval reason
               const Divider(height: 22),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Icon(
-                    reason.isNotEmpty ? Icons.warning_amber_rounded : Icons.info_outline,
+                    reason.isNotEmpty
+                        ? Icons.warning_amber_rounded
+                        : Icons.info_outline,
                     size: 18,
-                    color: reason.isNotEmpty ? Colors.orange : theme.hintColor,
+                    color:
+                        reason.isNotEmpty ? Colors.orange : theme.hintColor,
                   ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
                       reason.isNotEmpty
                           ? reason
-                          : (isAr ? 'تحتاج اعتماداً قبل الترحيل' : 'Requires approval before posting'),
+                          : (isAr
+                              ? 'تحتاج اعتماداً قبل الترحيل'
+                              : 'Requires approval before posting'),
                       style: TextStyle(
                         fontSize: 13,
-                        color: reason.isNotEmpty ? Colors.orange : theme.hintColor,
-                        fontWeight: reason.isNotEmpty ? FontWeight.w600 : FontWeight.normal,
+                        color: reason.isNotEmpty
+                            ? Colors.orange
+                            : theme.hintColor,
+                        fontWeight: reason.isNotEmpty
+                            ? FontWeight.w600
+                            : FontWeight.normal,
                         height: 1.4,
                       ),
                     ),
@@ -377,30 +623,13 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     );
   }
 
-  Widget _detailRow(String label, String value, ThemeData theme) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 100,
-            child: Text(label, style: TextStyle(fontSize: 12, color: theme.hintColor)),
-          ),
-          Expanded(
-            child: Text(value, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _openPostingManagement() async {
     Navigator.of(context).pop();
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => PostingManagementScreen(isArabic: widget.isArabic),
+        builder: (_) =>
+            PostingManagementScreen(isArabic: widget.isArabic),
       ),
     );
     widget.onCountChanged?.call();
@@ -419,7 +648,7 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       backgroundColor: Colors.transparent,
       elevation: 0,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 600),
+        constraints: const BoxConstraints(maxWidth: 520, maxHeight: 640),
         child: Container(
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
@@ -463,12 +692,12 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: AppColors.error.withValues(alpha: 0.12),
+              color: AppColors.primaryGold.withValues(alpha: 0.12),
               shape: BoxShape.circle,
             ),
             child: const Icon(
               Icons.pending_actions_rounded,
-              color: AppColors.error,
+              color: AppColors.primaryGold,
               size: 22,
             ),
           ),
@@ -479,7 +708,7 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  isAr ? 'بانتظار اعتمادك' : 'Pending Your Approval',
+                  isAr ? 'المعلّقات بانتظار الإجراء' : 'Pending Actions',
                   style: TextStyle(
                     fontFamily: 'Cairo',
                     fontSize: 16,
@@ -491,9 +720,11 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                 Text(
                   _loading
                       ? (isAr ? 'جارِ التحميل...' : 'Loading...')
-                      : (isAr
-                          ? '$_total ${_total == 1 ? 'عملية تحتاج' : 'عمليات تحتاج'} مراجعتك'
-                          : '$_total ${_total == 1 ? 'item needs' : 'items need'} review'),
+                      : _totalCount == 0
+                          ? (isAr ? 'لا توجد إجراءات معلقة' : 'No pending actions')
+                          : (isAr
+                              ? '$_totalCount ${_totalCount == 1 ? 'إجراء ينتظر' : 'إجراء ينتظر'} مراجعتك'
+                              : '$_totalCount ${_totalCount == 1 ? 'item needs' : 'items need'} review'),
                   style: TextStyle(
                     fontFamily: 'Cairo',
                     fontSize: 12,
@@ -521,7 +752,7 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
 
   Widget _buildBody(ThemeData theme, bool isDark, bool isAr) {
     if (_loading) {
-      return SizedBox(
+      return const SizedBox(
         height: 200,
         child: Center(
           child: CircularProgressIndicator(
@@ -536,34 +767,400 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       return _buildErrorState(theme, isAr);
     }
 
-    if (_invoices.isEmpty) {
+    if (_reservations.isEmpty && _invoices.isEmpty) {
       return _buildEmptyState(theme, isAr);
     }
 
-    return AnimationLimiter(
-      child: ListView.separated(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-        shrinkWrap: true,
-        itemCount: _invoices.length,
-        separatorBuilder: (_, idx) => Divider(
-          height: 1,
-          color: isDark ? const Color(0xFF2D2D2D) : const Color(0xFFF0F0F0),
-        ),
-        itemBuilder: (context, index) {
-          return AnimationConfiguration.staggeredList(
-            position: index,
-            duration: const Duration(milliseconds: 240),
-            child: SlideAnimation(
-              verticalOffset: 12,
-              child: FadeInAnimation(
-                child: _buildInvoiceRow(_invoices[index], isDark, isAr),
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ── Section 1: حجوزات بانتظار التسوية ──
+          if (_reservations.isNotEmpty) ...[
+            _buildSectionHeader(
+              icon: Icons.inventory_2_outlined,
+              label: isAr
+                  ? 'حجوزات بانتظار التسوية ($_totalReservations)'
+                  : 'Pending Settlement ($_totalReservations)',
+              color: AppColors.primaryGold,
+              isDark: isDark,
+            ),
+            AnimationLimiter(
+              child: Column(
+                children: List.generate(_reservations.length, (index) {
+                  return AnimationConfiguration.staggeredList(
+                    position: index,
+                    duration: const Duration(milliseconds: 240),
+                    child: SlideAnimation(
+                      verticalOffset: 12,
+                      child: FadeInAnimation(
+                        child: _buildReservationCard(
+                            _reservations[index], isDark, isAr),
+                      ),
+                    ),
+                  );
+                }),
               ),
             ),
-          );
-        },
+          ],
+
+          // ── Separator ──
+          if (_reservations.isNotEmpty && _invoices.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Divider(
+                height: 1,
+                thickness: 1,
+                color: isDark
+                    ? const Color(0xFF3D3D3D)
+                    : const Color(0xFFEEEEEE),
+              ),
+            ),
+
+          // ── Section 2: فواتير بانتظار الاعتماد ──
+          if (_invoices.isNotEmpty) ...[
+            _buildSectionHeader(
+              icon: Icons.receipt_long_outlined,
+              label: isAr
+                  ? 'فواتير بانتظار الاعتماد ($_totalInvoices)'
+                  : 'Pending Approval ($_totalInvoices)',
+              color: AppColors.error,
+              isDark: isDark,
+            ),
+            AnimationLimiter(
+              child: Column(
+                children: List.generate(_invoices.length, (index) {
+                  return AnimationConfiguration.staggeredList(
+                    position: index,
+                    duration: const Duration(milliseconds: 240),
+                    child: SlideAnimation(
+                      verticalOffset: 12,
+                      child: FadeInAnimation(
+                        child: _buildInvoiceRow(
+                            _invoices[index], isDark, isAr),
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }
+
+  Widget _buildSectionHeader({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required bool isDark,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 15, color: color),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontFamily: 'Cairo',
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────── Reservation Card ───────────────
+
+  Widget _buildReservationCard(
+      Map<String, dynamic> res, bool isDark, bool isAr) {
+    final id = res['id'] as int;
+    final isExpanded = _expandedIds.contains(id);
+    final isSettling = _settlingIds.contains(id);
+    final isJustSettled = _justSettledIds.contains(id);
+    final isCancelling = _cancellingIds.contains(id);
+    final isJustCancelled = _justCancelledIds.contains(id);
+
+    final code = res['reservation_code']?.toString() ?? '—';
+    final officeName = res['office_name']?.toString() ?? '—';
+    final karat = res['karat']?.toString() ?? '';
+    final weight =
+        (res['weight_remaining_main_karat'] as num?)?.toDouble() ?? 0.0;
+    final total = (res['total_amount'] as num?)?.toDouble() ?? 0.0;
+    final paid = (res['paid_amount'] as num?)?.toDouble() ?? 0.0;
+    final pricePerGram = (res['price_per_gram'] as num?)?.toDouble() ?? 0.0;
+    final contactPerson = res['contact_person']?.toString() ?? '';
+    final notes = res['notes']?.toString() ?? '';
+    final reservationDate = res['reservation_date']?.toString();
+    final relativeTime = _formatRelativeTime(reservationDate, isAr);
+
+    return AnimatedOpacity(
+      duration: const Duration(milliseconds: 280),
+      opacity: (isJustSettled || isJustCancelled) ? 0 : 1,
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 280),
+        offset:
+            (isJustSettled || isJustCancelled) ? const Offset(1, 0) : Offset.zero,
+        child: InkWell(
+          onTap: () => setState(() {
+            if (isExpanded) {
+              _expandedIds.remove(id);
+            } else {
+              _expandedIds.add(id);
+            }
+          }),
+          child: Padding(
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Collapsed row ──
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    // Karat badge
+                    Container(
+                      width: 44,
+                      height: 44,
+                      decoration: BoxDecoration(
+                        color: AppColors.primaryGold.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Center(
+                        child: Text(
+                          karat.isNotEmpty ? '${karat}k' : '—',
+                          style: const TextStyle(
+                            fontFamily: 'Cairo',
+                            fontSize: 13,
+                            fontWeight: FontWeight.w800,
+                            color: AppColors.primaryGold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  code,
+                                  style: TextStyle(
+                                    fontFamily: 'Cairo',
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: isDark
+                                        ? Colors.white
+                                        : const Color(0xFF212121),
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                NumberFormat('#,##0', 'en')
+                                    .format(total.round()),
+                                style: const TextStyle(
+                                  fontFamily: 'Cairo',
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.primaryGold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 3),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '$officeName · ${weight.toStringAsFixed(3)} جم',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontFamily: 'Cairo',
+                                    fontSize: 11,
+                                    color: isDark
+                                        ? const Color(0xFFBDBDBD)
+                                        : const Color(0xFF757575),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                relativeTime,
+                                style: const TextStyle(
+                                  fontFamily: 'Cairo',
+                                  fontSize: 10.5,
+                                  color: Color(0xFF9E9E9E),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Icon(
+                      isExpanded
+                          ? Icons.keyboard_arrow_up_rounded
+                          : Icons.keyboard_arrow_down_rounded,
+                      size: 20,
+                      color: isDark
+                          ? const Color(0xFFBDBDBD)
+                          : const Color(0xFF9E9E9E),
+                    ),
+                  ],
+                ),
+
+                // ── Expanded details ──
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 220),
+                  curve: Curves.easeOut,
+                  child: isExpanded
+                      ? Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Detail rows
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: isDark
+                                      ? const Color(0xFF2A2A2A)
+                                      : const Color(0xFFF8F8F8),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Column(
+                                  children: [
+                                    _resDetailRow(
+                                      isAr ? 'السعر / جم' : 'Price/g',
+                                      '${pricePerGram.toStringAsFixed(2)} ر.س',
+                                      isDark,
+                                    ),
+                                    _resDetailRow(
+                                      isAr ? 'المدفوع' : 'Paid',
+                                      '${NumberFormat('#,##0', 'en').format(paid.round())} ر.س',
+                                      isDark,
+                                    ),
+                                    _resDetailRow(
+                                      isAr ? 'المتبقي' : 'Balance',
+                                      '${NumberFormat('#,##0', 'en').format((total - paid).round())} ر.س',
+                                      isDark,
+                                    ),
+                                    if (contactPerson.isNotEmpty)
+                                      _resDetailRow(
+                                        isAr ? 'جهة الاتصال' : 'Contact',
+                                        contactPerson,
+                                        isDark,
+                                      ),
+                                    if (notes.isNotEmpty)
+                                      _resDetailRow(
+                                        isAr ? 'ملاحظات' : 'Notes',
+                                        notes,
+                                        isDark,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              // Action buttons
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _buildActionButton(
+                                      label: isSettling
+                                          ? (isAr
+                                              ? 'جارِ التسوية...'
+                                              : 'Settling...')
+                                          : (isAr
+                                              ? 'تنفيذ التسوية'
+                                              : 'Execute Settlement'),
+                                      color: AppColors.success,
+                                      isPrimary: true,
+                                      isLoading: isSettling,
+                                      onTap: (isSettling || isCancelling)
+                                          ? null
+                                          : () => _settleReservation(res),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: _buildActionButton(
+                                      label: isCancelling
+                                          ? (isAr
+                                              ? 'جارِ الإلغاء...'
+                                              : 'Cancelling...')
+                                          : (isAr
+                                              ? 'إلغاء الحجز'
+                                              : 'Cancel Reservation'),
+                                      color: AppColors.error,
+                                      isPrimary: false,
+                                      isLoading: isCancelling,
+                                      onTap: (isSettling || isCancelling)
+                                          ? null
+                                          : () => _cancelReservation(res),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _resDetailRow(String label, String value, bool isDark) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 90,
+            child: Text(
+              label,
+              style: TextStyle(
+                fontFamily: 'Cairo',
+                fontSize: 11,
+                color: isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(
+                fontFamily: 'Cairo',
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: isDark ? Colors.white : const Color(0xFF212121),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ─────────────── Invoice Row ───────────────
 
   Widget _buildInvoiceRow(
     Map<String, dynamic> invoice,
@@ -591,13 +1188,14 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       opacity: (isJustPosted || isJustRejected) ? 0 : 1,
       child: AnimatedSlide(
         duration: const Duration(milliseconds: 280),
-        offset: (isJustPosted || isJustRejected) ? Offset(isAr ? 1 : -1, 0) : Offset.zero,
+        offset: (isJustPosted || isJustRejected)
+            ? Offset(isAr ? 1 : -1, 0)
+            : Offset.zero,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // ── type badge ──
               Container(
                 width: 44,
                 height: 44,
@@ -618,13 +1216,10 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                 ),
               ),
               const SizedBox(width: 12),
-
-              // ── row content ──
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // line 1: number + amount
                     Row(
                       children: [
                         Expanded(
@@ -654,8 +1249,6 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                       ],
                     ),
                     const SizedBox(height: 3),
-
-                    // line 2: party · creator · time
                     Row(
                       children: [
                         Expanded(
@@ -684,8 +1277,6 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                       ],
                     ),
                     const SizedBox(height: 8),
-
-                    // line 3: action buttons
                     Row(
                       children: [
                         _buildActionButton(
@@ -695,7 +1286,9 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                           color: AppColors.success,
                           isPrimary: true,
                           isLoading: isPosting,
-                          onTap: (isPosting || isRejecting) ? null : () => _postInvoice(invoice),
+                          onTap: (isPosting || isRejecting)
+                              ? null
+                              : () => _postInvoice(invoice),
                         ),
                         const SizedBox(width: 6),
                         _buildActionButton(
@@ -705,7 +1298,9 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                           color: AppColors.error,
                           isPrimary: false,
                           isLoading: isRejecting,
-                          onTap: (isPosting || isRejecting) ? null : () => _rejectInvoice(invoice),
+                          onTap: (isPosting || isRejecting)
+                              ? null
+                              : () => _rejectInvoice(invoice),
                         ),
                         const SizedBox(width: 6),
                         _buildActionButton(
@@ -715,7 +1310,9 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                               : const Color(0xFF616161),
                           isPrimary: false,
                           isLoading: false,
-                          onTap: (isPosting || isRejecting) ? null : () => _viewDetails(invoice),
+                          onTap: (isPosting || isRejecting)
+                              ? null
+                              : () => _viewInvoiceDetails(invoice),
                         ),
                       ],
                     ),
@@ -728,6 +1325,8 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       ),
     );
   }
+
+  // ─────────────── Shared widgets ───────────────
 
   Widget _buildActionButton({
     required String label,
@@ -773,6 +1372,50 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     );
   }
 
+  Widget _confirmRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 80,
+            child: Text(label,
+                style: const TextStyle(
+                    fontFamily: 'Cairo', fontSize: 12, color: Color(0xFF9E9E9E))),
+          ),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(
+                    fontFamily: 'Cairo',
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, String value, ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(label,
+                style: TextStyle(fontSize: 12, color: theme.hintColor)),
+          ),
+          Expanded(
+            child: Text(value,
+                style: const TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ─────────────── Empty / Error ───────────────
 
   Widget _buildEmptyState(ThemeData theme, bool isAr) {
@@ -797,7 +1440,7 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
           ),
           const SizedBox(height: 16),
           Text(
-            isAr ? 'كل شيء مرحّل!' : 'All caught up!',
+            isAr ? 'لا توجد إجراءات معلقة' : 'All clear!',
             style: TextStyle(
               fontFamily: 'Cairo',
               fontSize: 16,
@@ -808,13 +1451,14 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
           const SizedBox(height: 6),
           Text(
             isAr
-                ? 'لا توجد فواتير بانتظار الترحيل حالياً'
-                : 'No invoices pending approval',
+                ? 'لا توجد حجوزات أو فواتير بانتظار الإجراء'
+                : 'No reservations or invoices pending action',
             textAlign: TextAlign.center,
             style: TextStyle(
               fontFamily: 'Cairo',
               fontSize: 12,
-              color: isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
+              color:
+                  isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
             ),
           ),
         ],
@@ -828,7 +1472,8 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.error_outline_rounded, size: 40, color: AppColors.error),
+          const Icon(Icons.error_outline_rounded,
+              size: 40, color: AppColors.error),
           const SizedBox(height: 12),
           Text(
             isAr ? 'تعذر التحميل' : 'Could not load',
@@ -855,13 +1500,14 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
   // ─────────────── Footer ───────────────
 
   Widget _buildFooter(ThemeData theme, bool isDark, bool isAr) {
-    final hasMore = _total > _invoices.length;
+    final totalShown = _reservations.length + _invoices.length;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
         border: Border(
           top: BorderSide(
-            color: isDark ? const Color(0xFF3D3D3D) : const Color(0xFFEEEEEE),
+            color:
+                isDark ? const Color(0xFF3D3D3D) : const Color(0xFFEEEEEE),
           ),
         ),
       ),
@@ -870,26 +1516,29 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
         children: [
           Text(
             isAr
-                ? 'يعرض ${_invoices.length} من $_total'
-                : 'Showing ${_invoices.length} of $_total',
+                ? 'يعرض $totalShown من $_totalCount'
+                : 'Showing $totalShown of $_totalCount',
             style: TextStyle(
               fontFamily: 'Cairo',
               fontSize: 11.5,
-              color: isDark ? const Color(0xFFBDBDBD) : const Color(0xFF757575),
+              color: isDark
+                  ? const Color(0xFFBDBDBD)
+                  : const Color(0xFF757575),
               fontWeight: FontWeight.w500,
             ),
           ),
-          if (hasMore || _invoices.isNotEmpty)
+          if (_invoices.isNotEmpty)
             InkWell(
               borderRadius: BorderRadius.circular(6),
               onTap: _openPostingManagement,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      isAr ? 'فتح إدارة الترحيل' : 'Open Posting Management',
+                      isAr ? 'إدارة الترحيل' : 'Posting Management',
                       style: const TextStyle(
                         fontFamily: 'Cairo',
                         fontSize: 12,
@@ -930,13 +1579,22 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
         return (isAr ? 'شراء عميل' : 'Cust. Buy', const Color(0xFF5E35B1));
       case 'scrap_purchase':
       case 'شراء خردة':
-        return (isAr ? 'شراء كسر' : 'Scrap Buy', const Color(0xFFD84315));
+        return (
+          isAr ? 'شراء كسر' : 'Scrap Buy',
+          const Color(0xFFD84315)
+        );
       case 'مرتجع بيع':
       case 'sales_return':
-        return (isAr ? 'مرتجع بيع' : 'Sale Ret.', const Color(0xFFE53935));
+        return (
+          isAr ? 'مرتجع بيع' : 'Sale Ret.',
+          const Color(0xFFE53935)
+        );
       case 'مرتجع شراء':
       case 'purchase_return':
-        return (isAr ? 'مرتجع شراء' : 'Purch. Ret.', const Color(0xFFFB8C00));
+        return (
+          isAr ? 'مرتجع شراء' : 'Purch. Ret.',
+          const Color(0xFFFB8C00)
+        );
       default:
         return (isAr ? 'فاتورة' : 'Invoice', AppColors.darkGold);
     }

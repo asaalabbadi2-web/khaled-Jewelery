@@ -578,8 +578,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final auth = context.read<AuthProvider>();
       if (!auth.isAuthenticated) return;
 
-      final result = await api.getPendingPostInvoices(limit: 1);
-      final count = (result['total'] as num?)?.toInt() ?? 0;
+      final result = await api.getPendingActions();
+      final count = ((result['total_pending_reservations'] as num?)?.toInt() ?? 0) +
+          ((result['total_pending_invoices'] as num?)?.toInt() ?? 0);
 
       if (!mounted) return;
       setState(() {

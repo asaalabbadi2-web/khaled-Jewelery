@@ -5714,6 +5714,19 @@ class ApiService {
     throw Exception('$msg (status: ${response.statusCode})');
   }
 
+  Future<Map<String, dynamic>> getPendingActions() async {
+    final response = await _authedGet(Uri.parse('$_baseUrl/pending-actions'));
+    if (response.statusCode == 200) {
+      return json.decode(utf8.decode(response.bodyBytes));
+    }
+    return {
+      'pending_reservations': [],
+      'pending_invoices': [],
+      'total_pending_reservations': 0,
+      'total_pending_invoices': 0,
+    };
+  }
+
   /// Post a single journal entry
   Future<Map<String, dynamic>> postJournalEntry(
     int entryId,
