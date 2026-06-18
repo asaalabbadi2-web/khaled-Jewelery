@@ -62,8 +62,6 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
   // Reservation action tracking
   final Set<int> _settlingIds = {};
   final Set<int> _justSettledIds = {};
-  final Set<int> _cancellingIds = {};
-  final Set<int> _justCancelledIds = {};
 
   // Expanded reservation IDs
   final Set<int> _expandedIds = {};
@@ -212,87 +210,6 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(
           isAr ? 'فشل التسوية: $e' : 'Settlement failed: $e',
-          style: const TextStyle(fontFamily: 'Cairo'),
-        ),
-        backgroundColor: AppColors.error,
-        behavior: SnackBarBehavior.floating,
-      ));
-    }
-  }
-
-  Future<void> _cancelReservation(Map<String, dynamic> res) async {
-    final id = res['id'] as int;
-    if (_cancellingIds.contains(id)) return;
-    final isAr = widget.isArabic;
-    final code = res['reservation_code']?.toString() ?? '';
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(
-          isAr ? 'إلغاء الحجز' : 'Cancel Reservation',
-          style: const TextStyle(fontFamily: 'Cairo', fontWeight: FontWeight.w800),
-        ),
-        content: Text(
-          isAr
-              ? 'هل تريد إلغاء الحجز $code؟\nسيتم إنشاء قيد وزن عكسي تلقائياً.'
-              : 'Cancel reservation $code?\nA weight reversal entry will be created automatically.',
-          style: const TextStyle(fontFamily: 'Cairo'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: Text(isAr ? 'تراجع' : 'Back',
-                style: const TextStyle(fontFamily: 'Cairo')),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            style: TextButton.styleFrom(foregroundColor: AppColors.error),
-            child: Text(
-              isAr ? 'إلغاء الحجز' : 'Cancel Reservation',
-              style: const TextStyle(
-                  fontFamily: 'Cairo', fontWeight: FontWeight.w800),
-            ),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    setState(() => _cancellingIds.add(id));
-    try {
-      await widget.api.cancelOfficeReservation(id);
-      if (!mounted) return;
-      setState(() => _justCancelledIds.add(id));
-      await Future.delayed(const Duration(milliseconds: 280));
-      if (!mounted) return;
-      setState(() {
-        _reservations.removeWhere((r) => r['id'] == id);
-        _totalReservations = (_totalReservations - 1).clamp(0, 9999);
-        _cancellingIds.remove(id);
-        _justCancelledIds.remove(id);
-        _expandedIds.remove(id);
-      });
-      widget.onCountChanged?.call();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-            isAr
-                ? 'تم إلغاء الحجز وإنشاء القيد العكسي'
-                : 'Reservation cancelled with reversal entry',
-            style: const TextStyle(fontFamily: 'Cairo'),
-          ),
-          backgroundColor: AppColors.error,
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ));
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _cancellingIds.remove(id));
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-          isAr ? 'فشل الإلغاء: $e' : 'Cancel failed: $e',
           style: const TextStyle(fontFamily: 'Cairo'),
         ),
         backgroundColor: AppColors.error,
@@ -886,8 +803,6 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
     final isExpanded = _expandedIds.contains(id);
     final isSettling = _settlingIds.contains(id);
     final isJustSettled = _justSettledIds.contains(id);
-    final isCancelling = _cancellingIds.contains(id);
-    final isJustCancelled = _justCancelledIds.contains(id);
 
     final code = res['reservation_code']?.toString() ?? '—';
     final officeName = res['office_name']?.toString() ?? '—';
@@ -904,11 +819,10 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
 
     return AnimatedOpacity(
       duration: const Duration(milliseconds: 280),
-      opacity: (isJustSettled || isJustCancelled) ? 0 : 1,
+      opacity: isJustSettled ? 0 : 1,
       child: AnimatedSlide(
         duration: const Duration(milliseconds: 280),
-        offset:
-            (isJustSettled || isJustCancelled) ? const Offset(1, 0) : Offset.zero,
+        offset: isJustSettled ? const Offset(1, 0) : Offset.zero,
         child: InkWell(
           onTap: () => setState(() {
             if (isExpanded) {
@@ -1076,44 +990,14 @@ class _PendingApprovalsDialogState extends State<PendingApprovalsDialog> {
                               ),
                               const SizedBox(height: 10),
                               // Action buttons
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: _buildActionButton(
-                                      label: isSettling
-                                          ? (isAr
-                                              ? 'جارِ التسوية...'
-                                              : 'Settling...')
-                                          : (isAr
-                                              ? 'تنفيذ التسوية'
-                                              : 'Execute Settlement'),
-                                      color: AppColors.success,
-                                      isPrimary: true,
-                                      isLoading: isSettling,
-                                      onTap: (isSettling || isCancelling)
-                                          ? null
-                                          : () => _settleReservation(res),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Expanded(
-                                    child: _buildActionButton(
-                                      label: isCancelling
-                                          ? (isAr
-                                              ? 'جارِ الإلغاء...'
-                                              : 'Cancelling...')
-                                          : (isAr
-                                              ? 'إلغاء الحجز'
-                                              : 'Cancel Reservation'),
-                                      color: AppColors.error,
-                                      isPrimary: false,
-                                      isLoading: isCancelling,
-                                      onTap: (isSettling || isCancelling)
-                                          ? null
-                                          : () => _cancelReservation(res),
-                                    ),
-                                  ),
-                                ],
+                              _buildActionButton(
+                                label: isSettling
+                                    ? (isAr ? 'جارِ التسوية...' : 'Settling...')
+                                    : (isAr ? 'تنفيذ التسوية' : 'Execute Settlement'),
+                                color: AppColors.success,
+                                isPrimary: true,
+                                isLoading: isSettling,
+                                onTap: isSettling ? null : () => _settleReservation(res),
                               ),
                             ],
                           ),
