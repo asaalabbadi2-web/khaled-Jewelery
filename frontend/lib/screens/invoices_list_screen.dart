@@ -3909,7 +3909,9 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  isAr ? 'ذهب كسر — عيار $karat' : 'Scrap Gold — ${karat}k',
+                                  karat == '24'
+                                      ? (isAr ? 'ذهب صافي — عيار 24' : 'Pure Gold — 24k')
+                                      : (isAr ? 'ذهب كسر — عيار $karat' : 'Scrap Gold — ${karat}k'),
                                   style: textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
                                 ),
                                 const SizedBox(height: 6),
