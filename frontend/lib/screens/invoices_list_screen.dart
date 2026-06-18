@@ -3721,6 +3721,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
         ? (invoice['items'] as List)
         : const [];
 
+    final karatLines = (invoice['karat_lines'] is List)
+        ? (invoice['karat_lines'] as List)
+        : const [];
+
     final payments = (invoice['payments'] is List)
         ? (invoice['payments'] as List)
         : const [];
@@ -3882,7 +3886,53 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                     ),
                     const SizedBox(height: 8),
 
-                    if (items.isEmpty)
+                    if (items.isEmpty && karatLines.isNotEmpty)
+                      ...karatLines.map((raw) {
+                        final kl = raw is Map
+                            ? raw.map((k, v) => MapEntry(k.toString(), v))
+                            : <String, dynamic>{};
+                        final karat = kl['karat']?.toString() ?? '';
+                        final weight = (kl['weight_grams'] as num?)?.toDouble() ?? 0.0;
+                        final pricePerGram = (kl['price_per_gram'] as num?)?.toDouble() ?? 0.0;
+                        final goldValue = (kl['gold_value'] as num?)?.toDouble() ?? 0.0;
+                        final fmt = NumberFormat('#,##0.###', 'en');
+                        final fmtCash = NumberFormat('#,##0.00', 'en');
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          elevation: 0,
+                          color: colorScheme.surfaceContainerHighest.withValues(
+                            alpha: theme.brightness == Brightness.dark ? 0.35 : 0.6,
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  isAr ? 'ذهب كسر — عيار $karat' : 'Scrap Gold — ${karat}k',
+                                  style: textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    if (karat.isNotEmpty)
+                                      _buildInfoChip(label: isAr ? 'عيار: $karat' : 'Karat: $karat', colorScheme: colorScheme),
+                                    if (weight > 0)
+                                      _buildInfoChip(label: isAr ? 'وزن: ${fmt.format(weight)} جم' : 'Weight: ${fmt.format(weight)} g', colorScheme: colorScheme),
+                                    if (pricePerGram > 0)
+                                      _buildInfoChip(label: isAr ? 'سعر/جم: ${fmtCash.format(pricePerGram)}' : 'Price/g: ${fmtCash.format(pricePerGram)}', colorScheme: colorScheme),
+                                    if (goldValue > 0)
+                                      _buildInfoChip(label: isAr ? 'القيمة: ${fmtCash.format(goldValue)}' : 'Value: ${fmtCash.format(goldValue)}', colorScheme: colorScheme),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      })
+                    else if (items.isEmpty)
                       Text(
                         isAr ? 'لا توجد أصناف' : 'No items',
                         style: textTheme.bodyMedium?.copyWith(
