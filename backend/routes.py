@@ -10968,22 +10968,27 @@ def _ensure_gold24k_commission_revenue_account():
     was assigned on first creation (avoids clashes across dev/prod DBs).
     Production account number: 4110.
     """
+    # البحث برقم الحساب الإنتاجي أولاً
+    by_number = Account.query.filter_by(account_number='4110').first()
+    if by_number:
+        return by_number.id
+
+    # ثم بالاسم (للـ dev أو بيئات أخرى)
     acct_name = 'إيرادات عمولة السداد بذهب صافي'
-    existing = Account.query.filter_by(name=acct_name).first()
-    if existing:
-        return existing.id
+    by_name = Account.query.filter_by(name=acct_name).first()
+    if by_name:
+        return by_name.id
 
     parent = Account.query.filter_by(account_number='41').first()
     if not parent:
         parent = Account.query.filter_by(account_number='4').first()
-    # Prefer 4110 (production number); fall back to first free candidate
     chosen_number = None
     for candidate in ('4110', '4111', '4112', '4113', '4120'):
         if not Account.query.filter_by(account_number=candidate).first():
             chosen_number = candidate
             break
     if not chosen_number:
-        chosen_number = '4110'  # fallback
+        chosen_number = '4110'
 
     account = Account(
         account_number=chosen_number,
