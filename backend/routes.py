@@ -10960,39 +10960,6 @@ def _ensure_manufacturing_wage_expense_account():
     return account.id
 
 
-def _ensure_gold24k_inventory_weight_account():
-    """Find or create مخزون ذهب صافي عيار 24 وزني under 7130 (المخزون وزني).
-
-    Uses name-first lookup so the account is found regardless of which number
-    was assigned on first creation (avoids clashes across dev/prod DBs).
-    """
-    acct_name = 'مخزون ذهب صافي عيار 24 وزني'
-    existing = Account.query.filter_by(name=acct_name).first()
-    if existing:
-        return existing.id
-
-    parent = Account.query.filter_by(account_number='7130').first()
-    # Find the first free account number in the 71350-71390 range
-    chosen_number = None
-    for candidate in ('71350', '71360', '71370', '71380', '71390'):
-        if not Account.query.filter_by(account_number=candidate).first():
-            chosen_number = candidate
-            break
-    if not chosen_number:
-        chosen_number = '71350'  # fallback; flush will catch any duplicate
-
-    account = Account(
-        account_number=chosen_number,
-        name=acct_name,
-        type='asset',
-        transaction_type='gold',
-        tracks_weight=True,
-        parent_id=parent.id if parent else None,
-    )
-    db.session.add(account)
-    db.session.flush()
-    return account.id
-
 
 def _ensure_gold24k_commission_revenue_account():
     """Find or create إيرادات عمولة السداد بذهب صافي under 42 (إيرادات أخرى).
@@ -11033,15 +11000,17 @@ def _ensure_gold24k_commission_revenue_account():
 
 def _create_gold24k_settlement_entries(invoice, posted_by: str = 'system'):
     """
-    Create two JEs for a purchase invoice settled with 24k gold.
+    Create the commission JE for a purchase invoice settled with 24k gold.
 
-    JE 1 (weight): Dr. Supplier weight memo account / Cr. 71330 (مخزون ذهب صافي)
-    JE 2 (commission): Dr. Supplier cash account / Cr. 420 (إيرادات عمولة السداد بذهب صافي)
-
-    Both JEs are created with is_posted=False so that posting_routes' auto-post loop
-    picks them up immediately after this function returns (reference_type='invoice').
+    The weight movement is already handled by the existing gold settlement
+    system (SafeBoxTransactions + weight JEs from gold_settlements).
+    We only add: Dr. Supplier cash account / Cr. إيرادات عمولة السداد بذهب صافي
     """
-    if not invoice.gold24k_settlement or not invoice.gold24k_weight:
+    if not invoice.gold24k_settlement or not invoice.gold24k_commission_total:
+        return
+
+    commission_total = float(invoice.gold24k_commission_total or 0)
+    if commission_total <= 0:
         return
 
     supplier = Supplier.query.get(invoice.supplier_id) if invoice.supplier_id else None
@@ -11049,76 +11018,36 @@ def _create_gold24k_settlement_entries(invoice, posted_by: str = 'system'):
         return
 
     supplier_cash_account_id = supplier.account_id
-    supplier_weight_account_id = None
-    if supplier_cash_account_id:
-        acct = Account.query.get(supplier_cash_account_id)
-        if acct:
-            supplier_weight_account_id = acct.memo_account_id
-
-    inventory_24k_account_id = _ensure_gold24k_inventory_weight_account()
     revenue_account_id = _ensure_gold24k_commission_revenue_account()
 
+    if not supplier_cash_account_id or not revenue_account_id:
+        return
+
     weight = float(invoice.gold24k_weight or 0)
-    commission_total = float(invoice.gold24k_commission_total or 0)
+    je_commission = JournalEntry(
+        entry_number=_generate_journal_entry_number(entry_date=invoice.date),
+        date=invoice.date,
+        description=f'عمولة السداد بذهب صافي — فاتورة #{invoice.invoice_number} ({weight:.3f} جم × {invoice.gold24k_commission_per_gram:.2f} ر.س)',
+        reference_type='invoice',
+        reference_id=invoice.id,
+        is_posted=False,
+        created_by=posted_by,
+    )
+    db.session.add(je_commission)
+    db.session.flush()
 
-    entry_number_weight = _generate_journal_entry_number(entry_date=invoice.date)
-    entry_number_commission = _generate_journal_entry_number(entry_date=invoice.date)
-
-    if supplier_weight_account_id and inventory_24k_account_id:
-        je_weight = JournalEntry(
-            entry_number=entry_number_weight,
-            date=invoice.date,
-            description=f'سداد فاتورة #{invoice.invoice_number} بذهب صافي عيار 24 — {weight:.3f} جم',
-            reference_type='invoice',
-            reference_id=invoice.id,
-            is_posted=False,
-            created_by=posted_by,
-        )
-        db.session.add(je_weight)
-        db.session.flush()
-
-        db.session.add(JournalEntryLine(
-            journal_entry_id=je_weight.id,
-            account_id=supplier_weight_account_id,
-            debit_24k=weight,
-            credit_24k=0,
-            cash_debit=0,
-            cash_credit=0,
-        ))
-        db.session.add(JournalEntryLine(
-            journal_entry_id=je_weight.id,
-            account_id=inventory_24k_account_id,
-            debit_24k=0,
-            credit_24k=weight,
-            cash_debit=0,
-            cash_credit=0,
-        ))
-
-    if supplier_cash_account_id and revenue_account_id and commission_total > 0:
-        je_commission = JournalEntry(
-            entry_number=entry_number_commission,
-            date=invoice.date,
-            description=f'عمولة السداد بذهب صافي — فاتورة #{invoice.invoice_number} ({weight:.3f} جم × {invoice.gold24k_commission_per_gram:.2f} ر.س)',
-            reference_type='invoice',
-            reference_id=invoice.id,
-            is_posted=False,
-            created_by=posted_by,
-        )
-        db.session.add(je_commission)
-        db.session.flush()
-
-        db.session.add(JournalEntryLine(
-            journal_entry_id=je_commission.id,
-            account_id=supplier_cash_account_id,
-            cash_debit=commission_total,
-            cash_credit=0,
-        ))
-        db.session.add(JournalEntryLine(
-            journal_entry_id=je_commission.id,
-            account_id=revenue_account_id,
-            cash_debit=0,
-            cash_credit=commission_total,
-        ))
+    db.session.add(JournalEntryLine(
+        journal_entry_id=je_commission.id,
+        account_id=supplier_cash_account_id,
+        cash_debit=commission_total,
+        cash_credit=0,
+    ))
+    db.session.add(JournalEntryLine(
+        journal_entry_id=je_commission.id,
+        account_id=revenue_account_id,
+        cash_debit=0,
+        cash_credit=commission_total,
+    ))
 
 
 def get_inventory_average_cost(karat):
@@ -26960,50 +26889,20 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
             description=line_data.get('description'),
         ))
 
-    # عمولة السداد بذهب صافي — إنشاء قيدَي الوزن والعمولة مرتبطَين بالسند
+    # عمولة السداد بذهب صافي — قيد العمولة فقط (حركة الوزن مدعومة من سطور السند)
     if data.get('gold24k_settlement') and voucher.voucher_type == 'payment' and voucher.supplier_id:
         try:
             g24_weight = float(data.get('gold24k_weight') or 0)
             g24_commission_per_gram = float(data.get('gold24k_commission_per_gram') or 0)
             g24_commission_total = float(data.get('gold24k_commission_total') or 0)
 
-            if g24_weight > 0:
+            if g24_commission_total > 0:
                 supplier = Supplier.query.get(voucher.supplier_id)
                 if supplier:
                     supplier_cash_account_id = supplier.account_id
-                    supplier_weight_account_id = None
-                    if supplier_cash_account_id:
-                        acct = Account.query.get(supplier_cash_account_id)
-                        if acct:
-                            supplier_weight_account_id = acct.memo_account_id
-
-                    inventory_24k_account_id = _ensure_gold24k_inventory_weight_account()
                     revenue_account_id = _ensure_gold24k_commission_revenue_account()
 
-                    if supplier_weight_account_id and inventory_24k_account_id:
-                        je_weight = JournalEntry(
-                            entry_number=_generate_journal_entry_number(entry_date=voucher.date),
-                            date=voucher.date,
-                            description=f'سداد سند #{voucher.voucher_number} بذهب صافي عيار 24 — {g24_weight:.3f} جم',
-                            reference_type='voucher',
-                            reference_id=voucher.id,
-                            is_posted=False,
-                            created_by=data.get('created_by', 'system'),
-                        )
-                        db.session.add(je_weight)
-                        db.session.flush()
-                        db.session.add(JournalEntryLine(
-                            journal_entry_id=je_weight.id,
-                            account_id=supplier_weight_account_id,
-                            debit_24k=g24_weight, credit_24k=0, cash_debit=0, cash_credit=0,
-                        ))
-                        db.session.add(JournalEntryLine(
-                            journal_entry_id=je_weight.id,
-                            account_id=inventory_24k_account_id,
-                            debit_24k=0, credit_24k=g24_weight, cash_debit=0, cash_credit=0,
-                        ))
-
-                    if supplier_cash_account_id and revenue_account_id and g24_commission_total > 0:
+                    if supplier_cash_account_id and revenue_account_id:
                         je_commission = JournalEntry(
                             entry_number=_generate_journal_entry_number(entry_date=voucher.date),
                             date=voucher.date,
