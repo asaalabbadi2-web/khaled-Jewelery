@@ -206,6 +206,21 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   final List<double> _availableKarats = const [24, 22, 21, 18];
 
+  // عمولة السداد بذهب صافي
+  bool _gold24kSettlement = false;
+  final TextEditingController _gold24kWeightController =
+      TextEditingController(text: '0.000');
+  final TextEditingController _gold24kCommissionPerGramController =
+      TextEditingController(text: '0.00');
+  double get _gold24kCommissionTotal {
+    final w = double.tryParse(_gold24kWeightController.text) ?? 0.0;
+    final c = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
+    return w * c;
+  }
+
+  bool get _showGold24kSection =>
+      widget.voucherType == 'صرف' && _partyType == 'supplier';
+
   String get _currencySymbol =>
       context.read<SettingsProvider>().currencySymbolText;
 
@@ -630,6 +645,8 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     _descriptionController.dispose();
     _notesController.dispose();
     _receiverNameController.dispose();
+    _gold24kWeightController.dispose();
+    _gold24kCommissionPerGramController.dispose();
     super.dispose();
   }
 
@@ -2534,6 +2551,98 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     );
   }
 
+  Widget _buildGold24kSettlementCard() {
+    final theme = Theme.of(context);
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.verified, color: theme.colorScheme.tertiary, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'عمولة السداد بذهب صافي',
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Switch(
+                  value: _gold24kSettlement,
+                  onChanged: (val) => setState(() {
+                    _gold24kSettlement = val;
+                    if (!val) {
+                      _gold24kWeightController.text = '0.000';
+                      _gold24kCommissionPerGramController.text = '0.00';
+                    }
+                  }),
+                ),
+              ],
+            ),
+            if (_gold24kSettlement) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _gold24kWeightController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'وزن الذهب الصافي (جم)',
+                        border: OutlineInputBorder(),
+                        suffixText: 'جم',
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _gold24kCommissionPerGramController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: const InputDecoration(
+                        labelText: 'العمولة / جم (ر.س)',
+                        border: OutlineInputBorder(),
+                        suffixText: 'ر.س',
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.tertiaryContainer.withOpacity(0.4),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('إجمالي العمولة المستحقة:', style: theme.textTheme.bodyMedium),
+                    Text(
+                      '${_gold24kCommissionTotal.toStringAsFixed(2)} ر.س',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.tertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildAccountLinesHeader() {
     return Row(
       children: [
@@ -3531,6 +3640,16 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         'account_lines': allAccountLines,
       };
 
+      // عمولة السداد بذهب صافي
+      if (_showGold24kSection && _gold24kSettlement) {
+        final w24 = double.tryParse(_gold24kWeightController.text) ?? 0.0;
+        final c24 = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
+        voucherData['gold24k_settlement'] = true;
+        voucherData['gold24k_weight'] = double.parse(w24.toStringAsFixed(3));
+        voucherData['gold24k_commission_per_gram'] = double.parse(c24.toStringAsFixed(2));
+        voucherData['gold24k_commission_total'] = double.parse((w24 * c24).toStringAsFixed(2));
+      }
+
       // Add party
       if (_partyType == 'customer') {
         voucherData['customer_id'] = _selectedCustomerId;
@@ -4197,6 +4316,10 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       _buildReceiverCard(),
       const SizedBox(height: 12),
       _buildAttachmentsCard(),
+      if (_showGold24kSection) ...[
+        const SizedBox(height: 12),
+        _buildGold24kSettlementCard(),
+      ],
     ]);
 
     // تم نقل المساعد السريع إلى أعلى الشاشة

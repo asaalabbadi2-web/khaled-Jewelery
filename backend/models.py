@@ -1029,6 +1029,12 @@ class Invoice(db.Model):
     profit_gold = db.Column(db.Float, default=0.0)  # الربح بالذهب (جم)
     profit_weight_price_per_gram = db.Column(db.Float, default=0.0)  # سعر التحويل المستخدم للربح الوزني
 
+    # عمولة السداد بذهب صافي (عيار 24)
+    gold24k_settlement = db.Column(db.Boolean, default=False)
+    gold24k_weight = db.Column(db.Float, default=0.0)           # الوزن المسلَّم بعيار 24
+    gold24k_commission_per_gram = db.Column(db.Float, default=0.0)  # العمولة / جم
+    gold24k_commission_total = db.Column(db.Float, default=0.0)     # إجمالي العمولة
+
     # 🆕 قالب الطباعة الخاص بهذه الفاتورة (Preset key from Template Studio)
     # مثال: a4_portrait, a5_portrait, thermal_80x200
     print_template_preset_key = db.Column(db.String(64), nullable=True)

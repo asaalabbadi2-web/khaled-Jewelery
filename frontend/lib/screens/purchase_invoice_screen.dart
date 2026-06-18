@@ -116,6 +116,18 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   final List<_GoldSettlementLine> _goldSettlementLines =
       <_GoldSettlementLine>[];
 
+  // عمولة السداد بذهب صافي (عيار 24)
+  bool _gold24kSettlement = false;
+  final TextEditingController _gold24kWeightController =
+      TextEditingController(text: '0.000');
+  final TextEditingController _gold24kCommissionPerGramController =
+      TextEditingController(text: '0.00');
+  double get _gold24kCommissionTotal {
+    final w = double.tryParse(_gold24kWeightController.text) ?? 0.0;
+    final c = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
+    return w * c;
+  }
+
   bool get _isGoldSettlementContext =>
       _settlementMode == _PurchaseSettlementMode.partial ||
       _settlementMode == _PurchaseSettlementMode.barter;
@@ -622,6 +634,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _selectedGoldSafeBoxId = null;
       _selectedGoldPaidKarat = _mainKaratFromSettings();
       _applyTotals(_KaratTotals.zero);
+      _gold24kSettlement = false;
+      _gold24kWeightController.text = '0.000';
+      _gold24kCommissionPerGramController.text = '0.00';
     });
   }
 
@@ -787,6 +802,9 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
             },
           )
           .toList(),
+      'gold24k_settlement': _gold24kSettlement,
+      'gold24k_weight': _gold24kWeightController.text,
+      'gold24k_commission_per_gram': _gold24kCommissionPerGramController.text,
     };
   }
 
@@ -994,6 +1012,12 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
         _karatLines = restoredKaratLines;
         _inlineItems = restoredInlineItems;
+
+        _gold24kSettlement = payload['gold24k_settlement'] == true;
+        _gold24kWeightController.text =
+            (payload['gold24k_weight'] ?? '0.000').toString();
+        _gold24kCommissionPerGramController.text =
+            (payload['gold24k_commission_per_gram'] ?? '0.00').toString();
       });
 
       _clearIncompatibleGoldSettlementSafes();
@@ -1336,6 +1360,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   void dispose() {
     _cashPaidController.dispose();
     _goldPaidWeightController.dispose();
+    _gold24kWeightController.dispose();
+    _gold24kCommissionPerGramController.dispose();
     for (final line in _goldSettlementLines) {
       line.dispose();
     }
@@ -2495,6 +2521,16 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       payload['safe_box_id'] = _selectedSafeBoxId;
     }
 
+    // عمولة السداد بذهب صافي
+    if (_gold24kSettlement) {
+      final w24 = double.tryParse(_gold24kWeightController.text) ?? 0.0;
+      final c24 = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
+      payload['gold24k_settlement'] = true;
+      payload['gold24k_weight'] = _round(w24, 3);
+      payload['gold24k_commission_per_gram'] = _round(c24, 2);
+      payload['gold24k_commission_total'] = _round(w24 * c24, 2);
+    }
+
     return payload;
   }
 
@@ -2929,6 +2965,8 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       ],
       const SizedBox(height: 24),
       _buildPaymentSection(),
+      const SizedBox(height: 24),
+      _buildGold24kSettlementSection(),
     ];
 
     final rightColumn = <Widget>[
@@ -3972,6 +4010,102 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           style: const TextStyle(color: Colors.black54),
         ),
       ],
+    );
+  }
+
+  Widget _buildGold24kSettlementSection() {
+    final theme = Theme.of(context);
+    final isAr = Localizations.localeOf(context).languageCode == 'ar';
+    return Card(
+      elevation: 1,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.verified, color: theme.colorScheme.tertiary, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  isAr ? 'عمولة السداد بذهب صافي' : 'Pure Gold Settlement Commission',
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
+                ),
+                const Spacer(),
+                Switch(
+                  value: _gold24kSettlement,
+                  onChanged: (val) => setState(() {
+                    _gold24kSettlement = val;
+                    if (!val) {
+                      _gold24kWeightController.text = '0.000';
+                      _gold24kCommissionPerGramController.text = '0.00';
+                    }
+                  }),
+                ),
+              ],
+            ),
+            if (_gold24kSettlement) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _gold24kWeightController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        labelText: isAr ? 'وزن الذهب الصافي (جم)' : 'Pure Gold Weight (g)',
+                        border: const OutlineInputBorder(),
+                        suffixText: 'جم',
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _gold24kCommissionPerGramController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        labelText: isAr ? 'العمولة / جم (ر.س)' : 'Commission/g (SAR)',
+                        border: const OutlineInputBorder(),
+                        suffixText: 'ر.س',
+                        isDense: true,
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.tertiaryContainer.withOpacity(0.4),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      isAr ? 'إجمالي العمولة المستحقة:' : 'Total Commission:',
+                      style: theme.textTheme.bodyMedium,
+                    ),
+                    Text(
+                      '${_gold24kCommissionTotal.toStringAsFixed(2)} ر.س',
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.tertiary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 

@@ -2101,7 +2101,24 @@ def post_invoice(invoice_id):
             _create_deferred_payment_entries(invoice, posted_by=posted_by)
         except Exception as _def_err:
             print(f"[post_invoice] خطأ في إنشاء قيود الدفع المؤجل: {_def_err}")
-        
+
+        # ✅ قيود السداد بذهب صافي عيار 24 (وزن + عمولة)
+        if getattr(invoice, 'gold24k_settlement', False):
+            try:
+                from routes import _create_gold24k_settlement_entries
+                _create_gold24k_settlement_entries(invoice, posted_by=posted_by)
+                # ترحيل القيود التي أُنشئت للتو (is_posted=False مع reference_type='invoice')
+                now_ts2 = datetime.now()
+                new_jes = JournalEntry.query.filter_by(
+                    reference_type='invoice', reference_id=invoice_id, is_posted=False
+                ).filter(JournalEntry.is_deleted == False).all()
+                for _je2 in new_jes:
+                    _je2.is_posted = True
+                    _je2.posted_at = now_ts2
+                    _je2.posted_by = posted_by
+            except Exception as _g24_err:
+                print(f"[post_invoice] خطأ في قيود السداد بذهب صافي: {_g24_err}")
+
         db.session.commit()
         
         # 📋 تسجيل في Audit Log
@@ -3327,7 +3344,16 @@ def approve_voucher(voucher_id):
         voucher.journal_entry_id = journal_entry.id
 
         _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
-        
+
+        # ترحيل قيود عمولة الذهب الصافي المرتبطة بهذا السند (is_posted=False)
+        now_ts3 = datetime.now()
+        for _linked_je in JournalEntry.query.filter_by(
+            reference_type='voucher', reference_id=voucher_id, is_posted=False
+        ).filter(JournalEntry.is_deleted == False).all():
+            _linked_je.is_posted = True
+            _linked_je.posted_at = now_ts3
+            _linked_je.posted_by = approved_by
+
         # تسجيل العملية
         AuditLog.log_action(
             user_name=approved_by,

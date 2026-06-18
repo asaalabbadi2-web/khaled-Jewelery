@@ -849,6 +849,27 @@ def ensure_category_wage_column(engine: Engine) -> None:
     _log_added(columns_added)
 
 
+def ensure_invoice_gold24k_columns(engine: Engine) -> None:
+    """Add gold24k settlement fields to invoice table if missing."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "invoice",
+                [
+                    ("gold24k_settlement", "BOOLEAN", "0"),
+                    ("gold24k_weight", "FLOAT", "0"),
+                    ("gold24k_commission_per_gram", "FLOAT", "0"),
+                    ("gold24k_commission_total", "FLOAT", "0"),
+                ],
+            )
+        )
+        _log_added(columns_added)
+    except Exception as exc:
+        LOGGER.error("ensure_invoice_gold24k_columns failed: %s", exc)
+
+
 def ensure_unique_reservation_invoice_index(engine: Engine) -> None:
     """Partial unique index: each invoice can only be linked to one reservation.
     Allows multiple NULLs (unsettled reservations).
