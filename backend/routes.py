@@ -10962,28 +10962,28 @@ def _ensure_manufacturing_wage_expense_account():
 
 
 def _ensure_gold24k_commission_revenue_account():
-    """Find or create إيرادات عمولة السداد بذهب صافي under 42 (إيرادات أخرى).
+    """Find or create إيرادات عمولة السداد بذهب صافي under 41 (إيرادات النشاط).
 
     Uses name-first lookup so the account is found regardless of which number
     was assigned on first creation (avoids clashes across dev/prod DBs).
-    Production chart: 42 exists, 420 is free.
+    Production account number: 4110.
     """
     acct_name = 'إيرادات عمولة السداد بذهب صافي'
     existing = Account.query.filter_by(name=acct_name).first()
     if existing:
         return existing.id
 
-    parent = Account.query.filter_by(account_number='42').first()
+    parent = Account.query.filter_by(account_number='41').first()
     if not parent:
         parent = Account.query.filter_by(account_number='4').first()
-    # Find the first free account number under 42x
+    # Prefer 4110 (production number); fall back to first free candidate
     chosen_number = None
-    for candidate in ('420', '421', '422', '4220', '4221'):
+    for candidate in ('4110', '4111', '4112', '4113', '4120'):
         if not Account.query.filter_by(account_number=candidate).first():
             chosen_number = candidate
             break
     if not chosen_number:
-        chosen_number = '420'  # fallback
+        chosen_number = '4110'  # fallback
 
     account = Account(
         account_number=chosen_number,
