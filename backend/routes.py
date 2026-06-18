@@ -10960,14 +10960,38 @@ def _ensure_manufacturing_wage_expense_account():
     return account.id
 
 
-def _ensure_gold24k_commission_revenue_account():
-    """Ensure a dedicated revenue account for gold 24k settlement commission exists."""
-    target_number = '420'
+def _ensure_gold24k_inventory_weight_account():
+    """Ensure a dedicated weight-tracking account for pure 24k gold inventory exists."""
+    target_number = '71350'
     cached = get_account_id_by_number(target_number)
     if cached:
         return cached
 
-    parent = Account.query.filter_by(account_number='42').first()
+    parent = Account.query.filter_by(account_number='7130').first()
+    if not parent:
+        parent = Account.query.filter_by(account_number='713').first()
+    account = Account(
+        account_number=target_number,
+        name='مخزون ذهب صافي عيار 24 وزني',
+        type='asset',
+        transaction_type='gold',
+        tracks_weight=True,
+        parent_id=parent.id if parent else None,
+    )
+    db.session.add(account)
+    db.session.flush()
+    _ACCOUNT_NUMBER_CACHE[target_number] = account.id
+    return account.id
+
+
+def _ensure_gold24k_commission_revenue_account():
+    """Ensure a dedicated revenue account for gold 24k settlement commission exists."""
+    target_number = '431'
+    cached = get_account_id_by_number(target_number)
+    if cached:
+        return cached
+
+    parent = Account.query.filter_by(account_number='43').first()
     if not parent:
         parent = Account.query.filter_by(account_number='4').first()
     account = Account(
@@ -11008,7 +11032,7 @@ def _create_gold24k_settlement_entries(invoice, posted_by: str = 'system'):
         if acct:
             supplier_weight_account_id = acct.memo_account_id
 
-    inventory_24k_account_id = get_account_id_by_number('71330')
+    inventory_24k_account_id = _ensure_gold24k_inventory_weight_account()
     revenue_account_id = _ensure_gold24k_commission_revenue_account()
 
     weight = float(invoice.gold24k_weight or 0)
@@ -11035,16 +11059,16 @@ def _create_gold24k_settlement_entries(invoice, posted_by: str = 'system'):
             account_id=supplier_weight_account_id,
             debit_24k=weight,
             credit_24k=0,
-            debit=0,
-            credit=0,
+            cash_debit=0,
+            cash_credit=0,
         ))
         db.session.add(JournalEntryLine(
             journal_entry_id=je_weight.id,
             account_id=inventory_24k_account_id,
             debit_24k=0,
             credit_24k=weight,
-            debit=0,
-            credit=0,
+            cash_debit=0,
+            cash_credit=0,
         ))
 
     if supplier_cash_account_id and revenue_account_id and commission_total > 0:
@@ -11063,14 +11087,14 @@ def _create_gold24k_settlement_entries(invoice, posted_by: str = 'system'):
         db.session.add(JournalEntryLine(
             journal_entry_id=je_commission.id,
             account_id=supplier_cash_account_id,
-            debit=commission_total,
-            credit=0,
+            cash_debit=commission_total,
+            cash_credit=0,
         ))
         db.session.add(JournalEntryLine(
             journal_entry_id=je_commission.id,
             account_id=revenue_account_id,
-            debit=0,
-            credit=commission_total,
+            cash_debit=0,
+            cash_credit=commission_total,
         ))
 
 
@@ -26930,7 +26954,7 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
                         if acct:
                             supplier_weight_account_id = acct.memo_account_id
 
-                    inventory_24k_account_id = get_account_id_by_number('71330')
+                    inventory_24k_account_id = _ensure_gold24k_inventory_weight_account()
                     revenue_account_id = _ensure_gold24k_commission_revenue_account()
 
                     if supplier_weight_account_id and inventory_24k_account_id:
@@ -26948,12 +26972,12 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
                         db.session.add(JournalEntryLine(
                             journal_entry_id=je_weight.id,
                             account_id=supplier_weight_account_id,
-                            debit_24k=g24_weight, credit_24k=0, debit=0, credit=0,
+                            debit_24k=g24_weight, credit_24k=0, cash_debit=0, cash_credit=0,
                         ))
                         db.session.add(JournalEntryLine(
                             journal_entry_id=je_weight.id,
                             account_id=inventory_24k_account_id,
-                            debit_24k=0, credit_24k=g24_weight, debit=0, credit=0,
+                            debit_24k=0, credit_24k=g24_weight, cash_debit=0, cash_credit=0,
                         ))
 
                     if supplier_cash_account_id and revenue_account_id and g24_commission_total > 0:
@@ -26971,12 +26995,12 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
                         db.session.add(JournalEntryLine(
                             journal_entry_id=je_commission.id,
                             account_id=supplier_cash_account_id,
-                            debit=g24_commission_total, credit=0,
+                            cash_debit=g24_commission_total, cash_credit=0,
                         ))
                         db.session.add(JournalEntryLine(
                             journal_entry_id=je_commission.id,
                             account_id=revenue_account_id,
-                            debit=0, credit=g24_commission_total,
+                            cash_debit=0, cash_credit=g24_commission_total,
                         ))
         except Exception as _g24_err:
             print(f"[_upsert_voucher] خطأ في قيود السداد بذهب صافي: {_g24_err}")
