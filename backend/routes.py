@@ -10961,18 +10961,29 @@ def _ensure_manufacturing_wage_expense_account():
 
 
 def _ensure_gold24k_inventory_weight_account():
-    """Ensure a dedicated weight-tracking account for pure 24k gold inventory exists."""
-    target_number = '71350'
-    cached = get_account_id_by_number(target_number)
-    if cached:
-        return cached
+    """Find or create مخزون ذهب صافي عيار 24 وزني under 7130 (المخزون وزني).
+
+    Uses name-first lookup so the account is found regardless of which number
+    was assigned on first creation (avoids clashes across dev/prod DBs).
+    """
+    acct_name = 'مخزون ذهب صافي عيار 24 وزني'
+    existing = Account.query.filter_by(name=acct_name).first()
+    if existing:
+        return existing.id
 
     parent = Account.query.filter_by(account_number='7130').first()
-    if not parent:
-        parent = Account.query.filter_by(account_number='713').first()
+    # Find the first free account number in the 71350-71390 range
+    chosen_number = None
+    for candidate in ('71350', '71360', '71370', '71380', '71390'):
+        if not Account.query.filter_by(account_number=candidate).first():
+            chosen_number = candidate
+            break
+    if not chosen_number:
+        chosen_number = '71350'  # fallback; flush will catch any duplicate
+
     account = Account(
-        account_number=target_number,
-        name='مخزون ذهب صافي عيار 24 وزني',
+        account_number=chosen_number,
+        name=acct_name,
         type='asset',
         transaction_type='gold',
         tracks_weight=True,
@@ -10980,23 +10991,36 @@ def _ensure_gold24k_inventory_weight_account():
     )
     db.session.add(account)
     db.session.flush()
-    _ACCOUNT_NUMBER_CACHE[target_number] = account.id
     return account.id
 
 
 def _ensure_gold24k_commission_revenue_account():
-    """Ensure a dedicated revenue account for gold 24k settlement commission exists."""
-    target_number = '431'
-    cached = get_account_id_by_number(target_number)
-    if cached:
-        return cached
+    """Find or create إيرادات عمولة السداد بذهب صافي under 42 (إيرادات أخرى).
 
-    parent = Account.query.filter_by(account_number='43').first()
+    Uses name-first lookup so the account is found regardless of which number
+    was assigned on first creation (avoids clashes across dev/prod DBs).
+    Production chart: 42 exists, 420 is free.
+    """
+    acct_name = 'إيرادات عمولة السداد بذهب صافي'
+    existing = Account.query.filter_by(name=acct_name).first()
+    if existing:
+        return existing.id
+
+    parent = Account.query.filter_by(account_number='42').first()
     if not parent:
         parent = Account.query.filter_by(account_number='4').first()
+    # Find the first free account number under 42x
+    chosen_number = None
+    for candidate in ('420', '421', '422', '4220', '4221'):
+        if not Account.query.filter_by(account_number=candidate).first():
+            chosen_number = candidate
+            break
+    if not chosen_number:
+        chosen_number = '420'  # fallback
+
     account = Account(
-        account_number=target_number,
-        name='إيرادات عمولة السداد بذهب صافي',
+        account_number=chosen_number,
+        name=acct_name,
         type='revenue',
         transaction_type='cash',
         tracks_weight=False,
@@ -11004,7 +11028,6 @@ def _ensure_gold24k_commission_revenue_account():
     )
     db.session.add(account)
     db.session.flush()
-    _ACCOUNT_NUMBER_CACHE[target_number] = account.id
     return account.id
 
 

@@ -118,14 +118,25 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
 
   // عمولة السداد بذهب صافي (عيار 24)
   bool _gold24kSettlement = false;
-  final TextEditingController _gold24kWeightController =
-      TextEditingController(text: '0.000');
   final TextEditingController _gold24kCommissionPerGramController =
       TextEditingController(text: '0.00');
+
+  // الوزن الإجمالي لسطور عيار 24 في التسوية الذهبية
+  double get _gold24kTotalWeight {
+    double total = 0.0;
+    for (final line in _goldSettlementLines) {
+      if (_effectiveGoldSettlementLineKarat(line) == 24) {
+        total += _goldSettlementLineWeight(line);
+      }
+    }
+    return total;
+  }
+
+  bool get _has24kSettlementLines => _gold24kTotalWeight > 0;
+
   double get _gold24kCommissionTotal {
-    final w = double.tryParse(_gold24kWeightController.text) ?? 0.0;
     final c = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
-    return w * c;
+    return _gold24kTotalWeight * c;
   }
 
   bool get _isGoldSettlementContext =>
@@ -635,7 +646,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       _selectedGoldPaidKarat = _mainKaratFromSettings();
       _applyTotals(_KaratTotals.zero);
       _gold24kSettlement = false;
-      _gold24kWeightController.text = '0.000';
       _gold24kCommissionPerGramController.text = '0.00';
     });
   }
@@ -803,7 +813,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           )
           .toList(),
       'gold24k_settlement': _gold24kSettlement,
-      'gold24k_weight': _gold24kWeightController.text,
       'gold24k_commission_per_gram': _gold24kCommissionPerGramController.text,
     };
   }
@@ -1014,8 +1023,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
         _inlineItems = restoredInlineItems;
 
         _gold24kSettlement = payload['gold24k_settlement'] == true;
-        _gold24kWeightController.text =
-            (payload['gold24k_weight'] ?? '0.000').toString();
         _gold24kCommissionPerGramController.text =
             (payload['gold24k_commission_per_gram'] ?? '0.00').toString();
       });
@@ -1360,7 +1367,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
   void dispose() {
     _cashPaidController.dispose();
     _goldPaidWeightController.dispose();
-    _gold24kWeightController.dispose();
     _gold24kCommissionPerGramController.dispose();
     for (final line in _goldSettlementLines) {
       line.dispose();
@@ -2521,14 +2527,13 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       payload['safe_box_id'] = _selectedSafeBoxId;
     }
 
-    // عمولة السداد بذهب صافي
-    if (_gold24kSettlement) {
-      final w24 = double.tryParse(_gold24kWeightController.text) ?? 0.0;
+    // عمولة السداد بذهب صافي — الوزن يُحسب من سطور التسوية (karat=24)
+    if (_gold24kSettlement && _gold24kTotalWeight > 0) {
       final c24 = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
       payload['gold24k_settlement'] = true;
-      payload['gold24k_weight'] = _round(w24, 3);
+      payload['gold24k_weight'] = _round(_gold24kTotalWeight, 3);
       payload['gold24k_commission_per_gram'] = _round(c24, 2);
-      payload['gold24k_commission_total'] = _round(w24 * c24, 2);
+      payload['gold24k_commission_total'] = _round(_gold24kTotalWeight * c24, 2);
     }
 
     return payload;
@@ -2965,8 +2970,10 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       ],
       const SizedBox(height: 24),
       _buildPaymentSection(),
-      const SizedBox(height: 24),
-      _buildGold24kSettlementSection(),
+      if (_has24kSettlementLines) ...[
+        const SizedBox(height: 24),
+        _buildGold24kSettlementSection(),
+      ],
     ];
 
     final rightColumn = <Widget>[
@@ -4037,46 +4044,42 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                   value: _gold24kSettlement,
                   onChanged: (val) => setState(() {
                     _gold24kSettlement = val;
-                    if (!val) {
-                      _gold24kWeightController.text = '0.000';
-                      _gold24kCommissionPerGramController.text = '0.00';
-                    }
+                    if (!val) _gold24kCommissionPerGramController.text = '0.00';
                   }),
                 ),
               ],
             ),
             if (_gold24kSettlement) ...[
+              const SizedBox(height: 8),
+              // وزن عيار 24 محسوب تلقائياً من سطور التسوية
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('وزن عيار 24 من سطور الدفع:',
+                        style: theme.textTheme.bodySmall),
+                    Text('${_gold24kTotalWeight.toStringAsFixed(3)} جم',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
               const SizedBox(height: 12),
-              Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _gold24kWeightController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: InputDecoration(
-                        labelText: isAr ? 'وزن الذهب الصافي (جم)' : 'Pure Gold Weight (g)',
-                        border: const OutlineInputBorder(),
-                        suffixText: 'جم',
-                        isDense: true,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: TextField(
-                      controller: _gold24kCommissionPerGramController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: InputDecoration(
-                        labelText: isAr ? 'العمولة / جم (ر.س)' : 'Commission/g (SAR)',
-                        border: const OutlineInputBorder(),
-                        suffixText: 'ر.س',
-                        isDense: true,
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                ],
+              TextField(
+                controller: _gold24kCommissionPerGramController,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: isAr ? 'العمولة / جم (ر.س)' : 'Commission/g (SAR)',
+                  border: const OutlineInputBorder(),
+                  suffixText: 'ر.س',
+                  isDense: true,
+                ),
+                onChanged: (_) => setState(() {}),
               ),
               const SizedBox(height: 10),
               Container(
