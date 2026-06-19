@@ -269,6 +269,8 @@ def ensure_voucher_print_columns(engine: Engine) -> None:
                 [
                     ("employee_id", "INTEGER", "NULL"),
                     ("receiver_name", "VARCHAR(200)", "NULL"),
+                    ("karat_diff_earn_total", "FLOAT", "0"),
+                    ("karat_diff_pay_total", "FLOAT", "0"),
                 ],
             )
         )
@@ -868,6 +870,31 @@ def ensure_invoice_gold24k_columns(engine: Engine) -> None:
         _log_added(columns_added)
     except Exception as exc:
         LOGGER.error("ensure_invoice_gold24k_columns failed: %s", exc)
+
+
+def ensure_invoice_karat_diff_columns(engine: Engine) -> None:
+    """Add karat-diff settlement fields to invoice table if missing."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "invoice",
+                [
+                    ("karat_diff_settlement", "BOOLEAN", "0"),
+                    ("karat_diff_owed_karat", "FLOAT", "0"),
+                    ("karat_diff_paid_karat", "FLOAT", "0"),
+                    ("karat_diff_weight", "FLOAT", "0"),
+                    ("karat_diff_per_gram", "FLOAT", "0"),
+                    ("karat_diff_total", "FLOAT", "0"),
+                    ("karat_diff_earn_total", "FLOAT", "0"),
+                    ("karat_diff_pay_total", "FLOAT", "0"),
+                ],
+            )
+        )
+        _log_added(columns_added)
+    except Exception as exc:
+        LOGGER.error("ensure_invoice_karat_diff_columns failed: %s", exc)
 
 
 def ensure_unique_reservation_invoice_index(engine: Engine) -> None:

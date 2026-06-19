@@ -23,6 +23,9 @@ class GoldLineEntryModel {
   double? grossWeight;
   double? netWeight;
   double? stonesWeight;
+  // عمولة / رسوم فرق العيار لكل سطر
+  double commissionPerGram;
+  String commissionDirection; // '' = بدون | 'earn' = عمولة | 'pay' = رسوم
 
   GoldLineEntryModel({
     this.amount = 0,
@@ -30,7 +33,11 @@ class GoldLineEntryModel {
     this.grossWeight,
     this.netWeight,
     this.stonesWeight,
+    this.commissionPerGram = 0,
+    this.commissionDirection = '',
   });
+
+  double get commissionTotal => amount * commissionPerGram;
 
   Map<String, dynamic> toJson() => {
     'amount': amount,
@@ -55,6 +62,50 @@ class GoldLineEntryModel {
       grossWeight: toDouble(map['gross_weight']),
       netWeight: toDouble(map['net_weight']),
       stonesWeight: toDouble(map['stones_weight']),
+      commissionPerGram: toDouble(map['commission_per_gram']) ?? 0,
+      commissionDirection: (map['commission_direction'] as String?) ?? '',
+    );
+  }
+}
+
+class _CommissionToggleButton extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final Color? color;
+  final VoidCallback onTap;
+
+  const _CommissionToggleButton({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final effectiveColor = color ?? theme.colorScheme.onSurfaceVariant;
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: selected ? effectiveColor.withOpacity(0.15) : Colors.transparent,
+          border: Border.all(
+            color: selected ? effectiveColor : theme.colorScheme.outlineVariant,
+            width: selected ? 1.5 : 1,
+          ),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+            color: selected ? effectiveColor : theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -206,32 +257,6 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
 
   final List<double> _availableKarats = const [24, 22, 21, 18];
 
-  // عمولة السداد بذهب صافي
-  bool _gold24kSettlement = false;
-  final TextEditingController _gold24kCommissionPerGramController =
-      TextEditingController(text: '0.00');
-
-  // الوزن الإجمالي لسطور عيار 24 في السند
-  double get _gold24kTotalWeight {
-    double total = 0.0;
-    for (final line in _accountLines) {
-      if (line.amountType != 'gold') continue;
-      for (final entry in line.goldEntries) {
-        if ((entry.karat ?? _mainKarat.toDouble()) == 24.0) {
-          total += entry.amount;
-        }
-      }
-    }
-    return total;
-  }
-
-  double get _gold24kCommissionTotal {
-    final c = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
-    return _gold24kTotalWeight * c;
-  }
-
-  bool get _showGold24kSection =>
-      widget.voucherType == 'صرف' && _partyType == 'supplier' && _gold24kTotalWeight > 0;
 
   String get _currencySymbol =>
       context.read<SettingsProvider>().currencySymbolText;
@@ -657,7 +682,6 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     _descriptionController.dispose();
     _notesController.dispose();
     _receiverNameController.dispose();
-    _gold24kCommissionPerGramController.dispose();
     super.dispose();
   }
 
@@ -2562,90 +2586,76 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     );
   }
 
-  Widget _buildGold24kSettlementCard() {
+  Widget _buildGoldEntryCommissionRow(GoldLineEntryModel entry) {
     final theme = Theme.of(context);
-    return Card(
-      elevation: 1,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.verified, color: theme.colorScheme.tertiary, size: 20),
-                const SizedBox(width: 8),
-                Text(
-                  'عمولة السداد بذهب صافي',
-                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.bold),
-                ),
-                const Spacer(),
-                Switch(
-                  value: _gold24kSettlement,
-                  onChanged: (val) => setState(() {
-                    _gold24kSettlement = val;
-                    if (!val) _gold24kCommissionPerGramController.text = '0.00';
-                  }),
-                ),
-              ],
-            ),
-            if (_gold24kSettlement) ...[
-              const SizedBox(height: 8),
-              // وزن عيار 24 محسوب تلقائياً من سطور الحسابات
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surfaceContainerHighest.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('وزن عيار 24 من سطور السند:',
-                        style: theme.textTheme.bodySmall),
-                    Text('${_gold24kTotalWeight.toStringAsFixed(3)} جم',
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(fontWeight: FontWeight.bold)),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _gold24kCommissionPerGramController,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(
-                  labelText: 'العمولة / جم (ر.س)',
-                  border: OutlineInputBorder(),
-                  suffixText: 'ر.س',
+    final hasCommission = entry.commissionDirection.isNotEmpty;
+    final isEarn = entry.commissionDirection == 'earn';
+    final total = entry.commissionTotal;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 6),
+      child: Row(
+        children: [
+          _CommissionToggleButton(
+            label: 'بدون',
+            selected: !hasCommission,
+            onTap: () => setState(() {
+              entry.commissionDirection = '';
+              entry.commissionPerGram = 0;
+            }),
+          ),
+          const SizedBox(width: 4),
+          _CommissionToggleButton(
+            label: 'عمولة',
+            selected: entry.commissionDirection == 'earn',
+            color: theme.colorScheme.tertiary,
+            onTap: () => setState(() => entry.commissionDirection = 'earn'),
+          ),
+          const SizedBox(width: 4),
+          _CommissionToggleButton(
+            label: 'رسوم',
+            selected: entry.commissionDirection == 'pay',
+            color: theme.colorScheme.error,
+            onTap: () => setState(() => entry.commissionDirection = 'pay'),
+          ),
+          if (hasCommission) ...[
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 90,
+              child: TextFormField(
+                initialValue: entry.commissionPerGram > 0
+                    ? entry.commissionPerGram.toStringAsFixed(2)
+                    : '',
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: InputDecoration(
+                  labelText: 'ر.س/جم',
+                  border: const OutlineInputBorder(),
                   isDense: true,
+                  suffixText: 'ر.س',
+                  labelStyle: TextStyle(
+                    fontSize: 11,
+                    color: isEarn
+                        ? theme.colorScheme.tertiary
+                        : theme.colorScheme.error,
+                  ),
                 ),
-                onChanged: (_) => setState(() {}),
+                onChanged: (v) => setState(
+                    () => entry.commissionPerGram = double.tryParse(v) ?? 0),
               ),
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.tertiaryContainer.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text('إجمالي العمولة المستحقة:', style: theme.textTheme.bodyMedium),
-                    Text(
-                      '${_gold24kCommissionTotal.toStringAsFixed(2)} ر.س',
-                      style: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.bold,
-                        color: theme.colorScheme.tertiary,
-                      ),
-                    ),
-                  ],
-                ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              '= ${total.toStringAsFixed(2)} ر.س',
+              style: theme.textTheme.bodySmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: isEarn
+                    ? theme.colorScheme.tertiary
+                    : theme.colorScheme.error,
               ),
-            ],
+            ),
           ],
-        ),
+        ],
       ),
     );
   }
@@ -3647,13 +3657,21 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         'account_lines': allAccountLines,
       };
 
-      // عمولة السداد بذهب صافي — الوزن محسوب من سطور الحسابات (karat=24)
-      if (_showGold24kSection && _gold24kSettlement && _gold24kTotalWeight > 0) {
-        final c24 = double.tryParse(_gold24kCommissionPerGramController.text) ?? 0.0;
-        voucherData['gold24k_settlement'] = true;
-        voucherData['gold24k_weight'] = double.parse(_gold24kTotalWeight.toStringAsFixed(3));
-        voucherData['gold24k_commission_per_gram'] = double.parse(c24.toStringAsFixed(2));
-        voucherData['gold24k_commission_total'] = double.parse(_gold24kCommissionTotal.toStringAsFixed(2));
+      // عمولة / رسوم فرق العيار — احتساب per-line
+      {
+        double earnTotal = 0.0;
+        double payTotal = 0.0;
+        for (final line in _accountLines) {
+          if (line.amountType != 'gold') continue;
+          for (final entry in line.goldEntries) {
+            if (entry.commissionDirection.isEmpty || entry.amount <= 0) continue;
+            final amt = double.parse((entry.amount * entry.commissionPerGram).toStringAsFixed(2));
+            if (entry.commissionDirection == 'earn') earnTotal += amt;
+            if (entry.commissionDirection == 'pay') payTotal += amt;
+          }
+        }
+        if (earnTotal > 0) voucherData['karat_diff_earn_total'] = double.parse(earnTotal.toStringAsFixed(2));
+        if (payTotal > 0) voucherData['karat_diff_pay_total'] = double.parse(payTotal.toStringAsFixed(2));
       }
 
       // Add party
@@ -4246,6 +4264,11 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                                     ],
                                   ],
                                 ),
+                                // صف العمولة / الرسوم لكل سطر ذهب
+                                if (widget.voucherType == 'payment' &&
+                                    _partyType == 'supplier' &&
+                                    entry.amount > 0)
+                                  _buildGoldEntryCommissionRow(entry),
                               ],
                             ),
                           ),
@@ -4322,10 +4345,6 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       _buildReceiverCard(),
       const SizedBox(height: 12),
       _buildAttachmentsCard(),
-      if (_showGold24kSection) ...[
-        const SizedBox(height: 12),
-        _buildGold24kSettlementCard(),
-      ],
     ]);
 
     // تم نقل المساعد السريع إلى أعلى الشاشة

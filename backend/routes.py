@@ -11055,6 +11055,111 @@ def _create_gold24k_settlement_entries(invoice, posted_by: str = 'system'):
     ))
 
 
+def _ensure_karat_diff_expense_account():
+    """Find or create رسوم السداد بعيار أقل. Production number: 5240."""
+    by_number = Account.query.filter_by(account_number='5240').first()
+    if by_number:
+        return by_number.id
+
+    acct_name = 'رسوم السداد بعيار أقل'
+    by_name = Account.query.filter_by(name=acct_name).first()
+    if by_name:
+        return by_name.id
+
+    parent = Account.query.filter_by(account_number='52').first()
+    if not parent:
+        parent = Account.query.filter_by(account_number='5').first()
+
+    chosen_number = None
+    for candidate in ('5240', '5241', '5242', '5250'):
+        if not Account.query.filter_by(account_number=candidate).first():
+            chosen_number = candidate
+            break
+    if not chosen_number:
+        chosen_number = '5240'
+
+    account = Account(
+        account_number=chosen_number,
+        name=acct_name,
+        type='expense',
+        transaction_type='cash',
+        tracks_weight=False,
+        parent_id=parent.id if parent else None,
+    )
+    db.session.add(account)
+    db.session.flush()
+    return account.id
+
+
+def _create_karat_diff_settlement_entries(invoice, posted_by: str = 'system'):
+    """
+    Create commission/fee JEs for per-line karat-difference settlement.
+
+    earn_total > 0 → company EARNS  → Dr. Supplier / Cr. إيرادات 4110
+    pay_total  > 0 → company PAYS   → Dr. مصروف 5240 / Cr. Supplier
+    """
+    earn_total = float(getattr(invoice, 'karat_diff_earn_total', 0) or 0)
+    pay_total = float(getattr(invoice, 'karat_diff_pay_total', 0) or 0)
+
+    if earn_total <= 0 and pay_total <= 0:
+        return
+
+    supplier = Supplier.query.get(invoice.supplier_id) if invoice.supplier_id else None
+    if not supplier or not supplier.account_id:
+        return
+    supplier_cash_id = supplier.account_id
+
+    if earn_total > 0:
+        revenue_acct_id = _ensure_gold24k_commission_revenue_account()
+        if revenue_acct_id:
+            je = JournalEntry(
+                entry_number=_generate_journal_entry_number(entry_date=invoice.date),
+                date=invoice.date,
+                description=f'عمولة فرق العيار — فاتورة #{invoice.invoice_number}',
+                reference_type='invoice',
+                reference_id=invoice.id,
+                is_posted=False,
+                created_by=posted_by,
+            )
+            db.session.add(je)
+            db.session.flush()
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=supplier_cash_id,
+                cash_debit=earn_total, cash_credit=0,
+            ))
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=revenue_acct_id,
+                cash_debit=0, cash_credit=earn_total,
+            ))
+
+    if pay_total > 0:
+        expense_acct_id = _ensure_karat_diff_expense_account()
+        if expense_acct_id:
+            je = JournalEntry(
+                entry_number=_generate_journal_entry_number(entry_date=invoice.date),
+                date=invoice.date,
+                description=f'رسوم فرق العيار — فاتورة #{invoice.invoice_number}',
+                reference_type='invoice',
+                reference_id=invoice.id,
+                is_posted=False,
+                created_by=posted_by,
+            )
+            db.session.add(je)
+            db.session.flush()
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=expense_acct_id,
+                cash_debit=pay_total, cash_credit=0,
+            ))
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=supplier_cash_id,
+                cash_debit=0, cash_credit=pay_total,
+            ))
+
+
 def get_inventory_average_cost(karat):
     """
     حساب متوسط تكلفة المخزون لعيار معين (Weighted Average Cost)
@@ -13475,13 +13580,24 @@ def add_invoice():
         except Exception:
             pass
 
-        # --- عمولة السداد بذهب صافي (عيار 24) ---
+        # --- عمولة السداد بذهب صافي (عيار 24) — قديم، يُبقى للتوافق ---
         try:
             if data.get('gold24k_settlement'):
                 new_invoice.gold24k_settlement = True
                 new_invoice.gold24k_weight = _to_float_request(data.get('gold24k_weight', 0.0))
                 new_invoice.gold24k_commission_per_gram = _to_float_request(data.get('gold24k_commission_per_gram', 0.0))
                 new_invoice.gold24k_commission_total = _to_float_request(data.get('gold24k_commission_total', 0.0))
+        except Exception:
+            pass
+
+        # --- عمولة / رسوم فرق العيار — per-line aggregation ---
+        try:
+            earn = _to_float_request(data.get('karat_diff_earn_total', 0.0))
+            pay = _to_float_request(data.get('karat_diff_pay_total', 0.0))
+            if earn > 0:
+                new_invoice.karat_diff_earn_total = earn
+            if pay > 0:
+                new_invoice.karat_diff_pay_total = pay
         except Exception:
             pass
 
@@ -14693,11 +14809,19 @@ def add_invoice():
             )
             total_weight_sold = sum(w for w in gold_by_karat.values() if w > 0)
             invoice_total_tax = new_invoice.total_tax or 0.0
+
+            # رسوم وسائل الدفع: نقرأ من InvoicePayment مباشرة لأن timing=settlement
+            # يُصفّر commission_amount المحلي لكن الرسوم مُخزنة بشكل صحيح في InvoicePayment
+            _total_pm_fees = round(
+                sum(float(p.commission_amount or 0) for p in (new_invoice.payments or [])), 2
+            )
+            new_invoice.commission_amount = _total_pm_fees
+
             profit_cash = (
                 new_invoice.total
                 - invoice_total_tax
                 - (new_invoice.total_cost or 0.0)
-                - (commission_amount or 0.0)
+                - _total_pm_fees
             )
             profit_gold = (profit_cash / _direct_price_main) if _direct_price_main > 0 else 0
             new_invoice.profit_cash = round(profit_cash, 2)
@@ -26798,6 +26922,14 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
         'gold24k_weight',
         'gold24k_commission_per_gram',
         'gold24k_commission_total',
+        'karat_diff_settlement',
+        'karat_diff_owed_karat',
+        'karat_diff_paid_karat',
+        'karat_diff_weight',
+        'karat_diff_per_gram',
+        'karat_diff_total',
+        'karat_diff_earn_total',
+        'karat_diff_pay_total',
     }
     unknown_keys = sorted(set(data.keys()) - allowed_keys)
     if unknown_keys:
@@ -26931,6 +27063,10 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
                         ))
         except Exception as _g24_err:
             print(f"[_upsert_voucher] خطأ في قيود السداد بذهب صافي: {_g24_err}")
+
+    # عمولة / رسوم فرق العيار — تخزين فقط، القيود تُنشأ عند الاعتماد
+    voucher.karat_diff_earn_total = float(data.get('karat_diff_earn_total') or 0)
+    voucher.karat_diff_pay_total = float(data.get('karat_diff_pay_total') or 0)
 
     return None
 
@@ -27134,6 +27270,19 @@ def approve_voucher(voucher_id):
 
         # Ledger: append SafeBoxTransaction rows for any safe-box lines
         _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
+
+        # رحّل كل القيود المرتبطة بالسند (gold24k وغيرها)
+        _now = datetime.now()
+        for _je in JournalEntry.query.filter_by(
+            reference_type='voucher', reference_id=voucher_id, is_posted=False
+        ).filter(JournalEntry.is_deleted == False).all():
+            _je.is_posted = True
+            _je.posted_at = _now
+            _je.posted_by = approved_by
+
+        # أنشئ وارحّل قيود عمولة / رسوم فرق العيار
+        from posting_routes import _create_and_post_karat_diff_entries_for_voucher
+        _create_and_post_karat_diff_entries_for_voucher(voucher, approved_by)
 
         # Audit log
         try:

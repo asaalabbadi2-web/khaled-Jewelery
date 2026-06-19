@@ -128,6 +128,7 @@ from schema_guard import (
 	ensure_unique_reservation_invoice_index,
 	ensure_category_wage_column,
 	ensure_invoice_gold24k_columns,
+	ensure_invoice_karat_diff_columns,
 	ensure_dashboard_performance_indexes,
 )
 
@@ -339,6 +340,7 @@ with app.app_context():
 	ensure_unique_reservation_invoice_index(db.engine)
 	ensure_category_wage_column(db.engine)
 	ensure_invoice_gold24k_columns(db.engine)
+	ensure_invoice_karat_diff_columns(db.engine)
 	ensure_dashboard_performance_indexes(db.engine)
 	# ensure_weight_closing_support_accounts()  # Moved to after create_tables()
 # ⚠️ ترتيب التسجيل مهم: auth_bp يجب أن يُسجل قبل api لأن auth_bp.login له أولوية
@@ -413,6 +415,7 @@ def create_tables():
 		ensure_goal_achievement_columns(db.engine)
 		ensure_unique_reservation_invoice_index(db.engine)
 		ensure_invoice_gold24k_columns(db.engine)
+		ensure_invoice_karat_diff_columns(db.engine)
 		ensure_dashboard_performance_indexes(db.engine)
 
 

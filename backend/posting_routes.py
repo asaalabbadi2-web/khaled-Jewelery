@@ -2102,22 +2102,34 @@ def post_invoice(invoice_id):
         except Exception as _def_err:
             print(f"[post_invoice] خطأ في إنشاء قيود الدفع المؤجل: {_def_err}")
 
-        # ✅ قيود السداد بذهب صافي عيار 24 (وزن + عمولة)
+        # ✅ قيود السداد بذهب صافي عيار 24 — قديم، يُبقى للتوافق
         if getattr(invoice, 'gold24k_settlement', False):
             try:
                 from routes import _create_gold24k_settlement_entries
                 _create_gold24k_settlement_entries(invoice, posted_by=posted_by)
-                # ترحيل القيود التي أُنشئت للتو (is_posted=False مع reference_type='invoice')
-                now_ts2 = datetime.now()
-                new_jes = JournalEntry.query.filter_by(
-                    reference_type='invoice', reference_id=invoice_id, is_posted=False
-                ).filter(JournalEntry.is_deleted == False).all()
-                for _je2 in new_jes:
-                    _je2.is_posted = True
-                    _je2.posted_at = now_ts2
-                    _je2.posted_by = posted_by
             except Exception as _g24_err:
                 print(f"[post_invoice] خطأ في قيود السداد بذهب صافي: {_g24_err}")
+
+        # ✅ قيود عمولة / رسوم فرق العيار — per-line
+        _kd_earn = float(getattr(invoice, 'karat_diff_earn_total', 0) or 0)
+        _kd_pay = float(getattr(invoice, 'karat_diff_pay_total', 0) or 0)
+        if _kd_earn > 0 or _kd_pay > 0:
+            try:
+                from routes import _create_karat_diff_settlement_entries
+                _create_karat_diff_settlement_entries(invoice, posted_by=posted_by)
+            except Exception as _kd_err:
+                print(f"[post_invoice] خطأ في قيود فرق العيار: {_kd_err}")
+
+        # ترحيل أي قيود أُنشئت للتو (عمولات / رسوم)
+        if getattr(invoice, 'gold24k_settlement', False) or _kd_earn > 0 or _kd_pay > 0:
+            now_ts2 = datetime.now()
+            new_jes = JournalEntry.query.filter_by(
+                reference_type='invoice', reference_id=invoice_id, is_posted=False
+            ).filter(JournalEntry.is_deleted == False).all()
+            for _je2 in new_jes:
+                _je2.is_posted = True
+                _je2.posted_at = now_ts2
+                _je2.posted_by = posted_by
 
         db.session.commit()
         
@@ -3288,6 +3300,87 @@ def get_rejected_vouchers():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
+def _create_and_post_karat_diff_entries_for_voucher(voucher, posted_by: str):
+    """
+    ينشئ ويُرحّل فوراً قيود عمولة/رسوم فرق العيار للسند عند الاعتماد.
+    earn_total > 0 → Dr. Supplier / Cr. إيرادات 4110
+    pay_total  > 0 → Dr. مصروف 5240 / Cr. Supplier
+    """
+    from routes import (
+        _ensure_gold24k_commission_revenue_account,
+        _ensure_karat_diff_expense_account,
+        _generate_journal_entry_number,
+    )
+    earn_total = float(getattr(voucher, 'karat_diff_earn_total', 0) or 0)
+    pay_total = float(getattr(voucher, 'karat_diff_pay_total', 0) or 0)
+    print(f'[karat_diff] voucher={voucher.voucher_number} earn={earn_total} pay={pay_total} supplier_id={voucher.supplier_id}')
+    if earn_total <= 0 and pay_total <= 0:
+        print(f'[karat_diff] SKIP — لا عمولة')
+        return
+
+    supplier = Supplier.query.get(voucher.supplier_id) if voucher.supplier_id else None
+    if not supplier or not supplier.account_id:
+        print(f'[karat_diff] SKIP — لا مورد أو لا حساب للمورد')
+        return
+    supplier_cash_id = supplier.account_id
+    now_ts = datetime.now()
+
+    if earn_total > 0:
+        revenue_acct_id = _ensure_gold24k_commission_revenue_account()
+        if revenue_acct_id:
+            je = JournalEntry(
+                entry_number=_generate_journal_entry_number(entry_date=voucher.date),
+                date=voucher.date,
+                description=f'عمولة فرق العيار — سند #{voucher.voucher_number}',
+                reference_type='voucher',
+                reference_id=voucher.id,
+                is_posted=True,
+                posted_at=now_ts,
+                posted_by=posted_by,
+                created_by=posted_by,
+            )
+            db.session.add(je)
+            db.session.flush()
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=supplier_cash_id,
+                cash_debit=earn_total, cash_credit=0,
+            ))
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=revenue_acct_id,
+                cash_debit=0, cash_credit=earn_total,
+            ))
+            print(f'[karat_diff] ✅ قيد عمولة أُنشئ: {je.entry_number}  مبلغ={earn_total}')
+
+    if pay_total > 0:
+        expense_acct_id = _ensure_karat_diff_expense_account()
+        if expense_acct_id:
+            je = JournalEntry(
+                entry_number=_generate_journal_entry_number(entry_date=voucher.date),
+                date=voucher.date,
+                description=f'رسوم فرق العيار — سند #{voucher.voucher_number}',
+                reference_type='voucher',
+                reference_id=voucher.id,
+                is_posted=True,
+                posted_at=now_ts,
+                posted_by=posted_by,
+                created_by=posted_by,
+            )
+            db.session.add(je)
+            db.session.flush()
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=expense_acct_id,
+                cash_debit=pay_total, cash_credit=0,
+            ))
+            db.session.add(JournalEntryLine(
+                journal_entry_id=je.id,
+                account_id=supplier_cash_id,
+                cash_debit=0, cash_credit=pay_total,
+            ))
+
+
 @posting_bp.route('/vouchers/approve/<int:voucher_id>', methods=['POST'])
 @require_permission('voucher.approve')
 def approve_voucher(voucher_id):
@@ -3326,6 +3419,16 @@ def approve_voucher(voucher_id):
             voucher.approved_at = datetime.now()
             voucher.approved_by = approved_by
             _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
+            # ترحيل قيود gold24k المرتبطة
+            _now_ts = datetime.now()
+            for _je in JournalEntry.query.filter_by(
+                reference_type='voucher', reference_id=voucher_id, is_posted=False
+            ).filter(JournalEntry.is_deleted == False).all():
+                _je.is_posted = True
+                _je.posted_at = _now_ts
+                _je.posted_by = approved_by
+            # إنشاء وترحيل قيود فرق العيار
+            _create_and_post_karat_diff_entries_for_voucher(voucher, approved_by)
             db.session.commit()
             return jsonify({
                 'success': True,
@@ -3345,7 +3448,7 @@ def approve_voucher(voucher_id):
 
         _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
 
-        # ترحيل قيود عمولة الذهب الصافي المرتبطة بهذا السند (is_posted=False)
+        # ترحيل قيود عمولة الذهب الصافي المرتبطة بهذا السند (gold24k)
         now_ts3 = datetime.now()
         for _linked_je in JournalEntry.query.filter_by(
             reference_type='voucher', reference_id=voucher_id, is_posted=False
@@ -3353,6 +3456,9 @@ def approve_voucher(voucher_id):
             _linked_je.is_posted = True
             _linked_je.posted_at = now_ts3
             _linked_je.posted_by = approved_by
+
+        # إنشاء وترحيل قيود فرق العيار فور الاعتماد
+        _create_and_post_karat_diff_entries_for_voucher(voucher, approved_by)
 
         # تسجيل العملية
         AuditLog.log_action(
@@ -3536,6 +3642,18 @@ def approve_vouchers_batch():
                 voucher.approved_by = approved_by
 
                 _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
+
+                # ترحيل قيود العمولات/الرسوم المرتبطة (gold24k + karat_diff)
+                _now_ts = datetime.now()
+                for _je in JournalEntry.query.filter_by(
+                    reference_type='voucher', reference_id=voucher_id, is_posted=False
+                ).filter(JournalEntry.is_deleted == False).all():
+                    _je.is_posted = True
+                    _je.posted_at = _now_ts
+                    _je.posted_by = approved_by
+
+                # إنشاء وترحيل قيود فرق العيار
+                _create_and_post_karat_diff_entries_for_voucher(voucher, approved_by)
 
                 db.session.commit()
                 approved_count += 1

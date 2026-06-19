@@ -1035,6 +1035,16 @@ class Invoice(db.Model):
     gold24k_commission_per_gram = db.Column(db.Float, default=0.0)  # العمولة / جم
     gold24k_commission_total = db.Column(db.Float, default=0.0)     # إجمالي العمولة
 
+    # عمولة / رسوم فرق العيار (شاملة — تدعم الاتجاهين)
+    karat_diff_settlement = db.Column(db.Boolean, default=False)
+    karat_diff_owed_karat = db.Column(db.Float, default=0.0)
+    karat_diff_paid_karat = db.Column(db.Float, default=0.0)
+    karat_diff_weight = db.Column(db.Float, default=0.0)
+    karat_diff_per_gram = db.Column(db.Float, default=0.0)
+    karat_diff_total = db.Column(db.Float, default=0.0)
+    karat_diff_earn_total = db.Column(db.Float, default=0.0)   # عمولة تكسبها الشركة (مدين للمورد)
+    karat_diff_pay_total = db.Column(db.Float, default=0.0)    # رسوم تدفعها الشركة (دائن للمورد)
+
     # 🆕 قالب الطباعة الخاص بهذه الفاتورة (Preset key from Template Studio)
     # مثال: a4_portrait, a5_portrait, thermal_80x200
     print_template_preset_key = db.Column(db.String(64), nullable=True)
@@ -2488,7 +2498,11 @@ class Voucher(db.Model):
 
     # اسم المستلم المطبوع على السند
     receiver_name = db.Column(db.String(200), nullable=True)
-    
+
+    # عمولة / رسوم فرق العيار — per-line aggregation
+    karat_diff_earn_total = db.Column(db.Float, default=0.0)  # عمولة تكسبها الشركة
+    karat_diff_pay_total = db.Column(db.Float, default=0.0)   # رسوم تدفعها الشركة
+
     # معلومات المستخدم الذي أنشأ السند
     created_by = db.Column(db.String(100), nullable=True)
     
