@@ -30627,6 +30627,12 @@ def _create_clearing_settlement_voucher(
             key=lambda x: x.created_at or datetime.min,
         )
         # Look up already-settled amounts so partial settlements are handled correctly.
+        # Only count SettlementLine rows whose voucher is still approved: a
+        # cancelled/rejected voucher's lines must not keep suppressing
+        # re-settlement of the same invoice payment (this is exactly what
+        # under-allocated AV-2026-00133 — IP 1547 looked "940 already settled"
+        # from two since-cancelled vouchers, AV-130/AV-131, that were reversed
+        # minutes before AV-133 ran).
         _all_ids = [ip.id for ip in ip_rows]
         _prev_settled: dict = {}
         if _all_ids:
@@ -30635,7 +30641,9 @@ def _create_clearing_settlement_voucher(
                     SettlementLine.invoice_payment_id,
                     func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
                 )
+                .join(Voucher, Voucher.id == SettlementLine.voucher_id)
                 .filter(SettlementLine.invoice_payment_id.in_(_all_ids))
+                .filter(Voucher.status == 'approved')
                 .group_by(SettlementLine.invoice_payment_id)
                 .all()
             )

@@ -66,9 +66,23 @@ def run(safe_box_id: int):
         for sl in sl_rows_for_ips:
             sl_by_ip[sl.invoice_payment_id].append(sl)
 
+        # حالة كل سند لمس أي IP هنا — سطر SettlementLine تابع لسند ملغى/مرفوض
+        # لا يُحسَب كتغطية حقيقية، يطابق نفس فلتر status='approved' المُضاف
+        # حديثاً لـ _prev_settled داخل _create_clearing_settlement_voucher.
+        _touched_voucher_ids = {sl.voucher_id for sl in sl_rows_for_ips}
+        voucher_status_by_id = {
+            v.id: v.status
+            for v in Voucher.query.filter(Voucher.id.in_(_touched_voucher_ids)).all()
+        } if _touched_voucher_ids else {}
+
         ip_report = []
         for ip in ips:
-            covered = round(sum(sl.amount_settled for sl in sl_by_ip.get(ip.id, [])), 2)
+            all_sl = sl_by_ip.get(ip.id, [])
+            approved_sl = [sl for sl in all_sl if voucher_status_by_id.get(sl.voucher_id) == 'approved']
+            covered = round(sum(sl.amount_settled for sl in approved_sl), 2)
+            excluded_non_approved = round(
+                sum(sl.amount_settled for sl in all_sl) - sum(sl.amount_settled for sl in approved_sl), 2
+            )
             amount = round(float(ip.amount or 0), 2)
             remaining = round(amount - covered, 2)
             if remaining <= EPS:
@@ -83,9 +97,11 @@ def run(safe_box_id: int):
                 'created_at': ip.created_at.isoformat() if ip.created_at else None,
                 'amount': amount,
                 'covered_by_settlement_line': covered,
+                'excluded_non_approved_settlement_amount': excluded_non_approved,
                 'remaining': remaining,
                 'coverage_status': status,
-                'covering_voucher_ids': sorted({sl.voucher_id for sl in sl_by_ip.get(ip.id, [])}),
+                'covering_voucher_ids': sorted({sl.voucher_id for sl in all_sl}),
+                'covering_voucher_ids_approved_only': sorted({sl.voucher_id for sl in approved_sl}),
             })
 
         # ── 2) تجميع يومي (بحسب يوم إنشاء الدفعة) ────────────────────────────
@@ -163,6 +179,7 @@ def run(safe_box_id: int):
                 'voucher_id': v.id,
                 'voucher_number': v.voucher_number,
                 'voucher_type': v.voucher_type,
+                'status': v.status,
                 'date': v.date.isoformat() if v.date else None,
                 'created_at': v.created_at.isoformat() if v.created_at else None,
                 'reference_type': v.reference_type,
