@@ -30366,7 +30366,15 @@ def _create_clearing_settlement_voucher(
     if settlement_dt is None:
         settlement_dt = datetime.now()
 
-    clearing_safe_box = SafeBox.query.get(clearing_safe_box_id)
+    # قفل صف خزينة المقاصة هنا (لا في أي مستدعٍ) كي يحصل كل المستدعين
+    # (سكدولر، API اليدوي، أي مستدعٍ مستقبلي) على نفس الحماية ضد تشغيل
+    # متزامن يقرأ "المتبقي الحالي" قبل أن يلتزم تشغيل آخر تغييراته —
+    # يُحرَّر تلقائياً عند commit/rollback في المستدعي.
+    clearing_safe_box = (
+        SafeBox.query.filter_by(id=clearing_safe_box_id)
+        .with_for_update()
+        .first()
+    )
     if not clearing_safe_box or not clearing_safe_box.is_active:
         raise ValueError('not_found:clearing_safe_box')
 
@@ -30655,6 +30663,20 @@ def _create_clearing_settlement_voucher(
                 commission_vat=round(fee_vat * ratio, 2),
             ))
             remaining_gross = round(remaining_gross - amount_to_settle, 2)
+
+        # Invariant: when the caller asks us to link specific invoice
+        # payments, the SettlementLine total we actually created must equal
+        # gross_amount. If the given invoice_payment_ids can't absorb the
+        # full gross_amount (e.g. a manual entry listing fewer/smaller IPs
+        # than the amount entered), reject the whole voucher instead of
+        # silently crediting cash with no matching SettlementLine — that
+        # silent gap is exactly what produced AV-2026-00133's unexplained
+        # +6050 (credited 19710, SettlementLine totalled only 13660).
+        if remaining_gross > 0.01:
+            raise ValueError(
+                f'settlement_line_coverage_mismatch:requested={gross_amount:.2f},'
+                f'unallocated={remaining_gross:.2f}'
+            )
 
     return {
         'success': True,
