@@ -616,6 +616,8 @@ class ClearingSettlementScheduler:
                         )
 
                         try:
+                            PaymentMethod.query.filter_by(id=pm.id).with_for_update().first()
+
                             voucher_result = _create_clearing_settlement_voucher(
                                 clearing_safe_box_id=clearing_sb.id,
                                 bank_safe_box_id=bank_sb.id,
@@ -762,6 +764,12 @@ class ClearingSettlementScheduler:
                         )
 
                         try:
+                            # قفل صف وسيلة الدفع لحجب أي تشغيل متزامن آخر (يدوي أو
+                            # جدولة متراكبة) عن نفس (pm_id + يوم) خلال نافذة
+                            # الفحص-ثم-الإنشاء، يُحرَّر تلقائياً عند commit/rollback
+                            # أدناه.
+                            PaymentMethod.query.filter_by(id=pm.id).with_for_update().first()
+
                             voucher_result = _create_clearing_settlement_voucher(
                                 clearing_safe_box_id=clearing_sb.id,
                                 bank_safe_box_id=bank_sb.id,
@@ -774,6 +782,7 @@ class ClearingSettlementScheduler:
                                 description_override=description,
                                 notes=f'auto_settlement:day={settle_day.isoformat()}',
                                 ensure_unique_reference=True,
+                                allow_continuation=True,
                                 invoice_payment_ids=day_ip_ids if day_ip_ids else None,
                             )
                             if voucher_result.get('skipped'):

@@ -2470,7 +2470,16 @@ class Voucher(db.Model):
     # معرف المرجع (رقم الفاتورة أو السند المرتبط)
     reference_id = db.Column(db.Integer, nullable=True)
     
-    # رقم المرجع (للعرض)
+    # رقم المرجع (للعرض) — غير فريد، لا يوجد عليه DB constraint.
+    # لـ reference_type='clearing_settlement': يمثّل مجموعة تسوية منطقية
+    # (pm_id + يوم/أسبوع الاستحقاق)، لا سنداً واحداً بعينه. أكثر من سند
+    # يمكن أن يتشارك نفس reference_number عند "استكمال" تسوية جزئية سابقة
+    # (انظر allow_continuation في _create_clearing_settlement_voucher بـ
+    # routes.py) — كل سند منها مستقل تماماً (id/journal_entry/اعتماد خاص به)،
+    # و reference_number هنا مفتاح تجميع فقط، لا معرّف فريد.
+    # reference_number is NOT unique. For clearing_settlement it represents a
+    # logical settlement grouping key (pm_id + settle period), not a single
+    # voucher — multiple independent vouchers may share it on continuation.
     reference_number = db.Column(db.String(50), nullable=True)
     
     # القيد المحاسبي المرتبط

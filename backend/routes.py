@@ -30287,11 +30287,30 @@ def _create_clearing_settlement_voucher(
     description_override=None,
     notes=None,
     ensure_unique_reference: bool = False,
+    allow_continuation: bool = False,
     invoice_payment_ids=None,
 ):
     """Core implementation for clearing settlement.
 
     This is shared between the HTTP endpoint and the scheduler job.
+
+    allow_continuation: only meaningful when ensure_unique_reference=True and a
+    prior voucher with this reference already exists. The caller must have
+    already independently confirmed (from SettlementLine-based remaining-due
+    data, not from voucher existence) that a genuine unsettled amount remains
+    for this reference's period — e.g. the scheduler's daily loop checks
+    _compute_due_for_day() > 0 before ever reaching this call. A prior voucher
+    means that period was attempted before, not that it was fully covered:
+    gross_amount can be capped by running_balance/running_cap mid-loop, which
+    deliberately leaves the newest IPs of that period without a SettlementLine
+    so they stay visible as pending. When allow_continuation is True, this
+    function creates a new, independent voucher (own id/journal entry/
+    approval — the prior voucher is never modified) reusing the same
+    reference_number as a grouping label, and records which prior voucher(s)
+    it continues in `notes` for traceability (non-authoritative — nothing
+    depends on that text). Defaults to False so every other caller (manual
+    HTTP trigger, per-transaction path) keeps today's exact skip-on-duplicate
+    behavior.
     """
     if not clearing_safe_box_id or not bank_safe_box_id:
         raise ValueError('missing_required_fields')
@@ -30361,12 +30380,14 @@ def _create_clearing_settlement_voucher(
         raise ValueError('invalid_safe_type:bank')
 
     # Optional idempotency for scheduler jobs
+    prior_vouchers_same_reference = []
     if ensure_unique_reference and reference_number:
-        existing = Voucher.query.filter_by(
+        prior_vouchers_same_reference = Voucher.query.filter_by(
             reference_type='clearing_settlement',
             reference_number=reference_number,
-        ).first()
-        if existing:
+        ).order_by(Voucher.id.asc()).all()
+        if prior_vouchers_same_reference and not allow_continuation:
+            existing = prior_vouchers_same_reference[0]
             return {
                 'success': True,
                 'voucher': existing.to_dict(),
@@ -30374,6 +30395,10 @@ def _create_clearing_settlement_voucher(
                 'skipped': True,
                 'skip_reason': 'already_exists',
             }
+        # allow_continuation=True: a prior voucher for this reference exists,
+        # but the caller has already confirmed (via SettlementLine-based
+        # remaining-due data) that a genuine unsettled amount remains. Fall
+        # through and create a new, independent voucher — see docstring.
 
     # HARD GUARD (anti double-deduction):
     # If the clearing safe box is the default safe for one or more payment methods,
@@ -30495,6 +30520,17 @@ def _create_clearing_settlement_voucher(
             f'(إجمالي {gross_amount:.2f}، عمولة {fee_amount:.2f}، صافي {net_amount:.2f})'
         )
 
+    final_notes = (notes or '').strip()
+    if prior_vouchers_same_reference:
+        # تتبّع نصي بحت (غير معتمَد من أي منطق) — للتدقيق البشري فقط:
+        # رقم الدفعة وأسلاف نفس المرجع محسوبان من السندات الموجودة، لا قيمة مخزَّنة منفصلة.
+        prior_numbers = ', '.join(v.voucher_number for v in prior_vouchers_same_reference)
+        continuation_note = (
+            f'دفعة تكميلية #{len(prior_vouchers_same_reference) + 1} لمرجع {reference_number} '
+            f'— يتبع: {prior_numbers}'
+        )
+        final_notes = f'{final_notes}\n{continuation_note}'.strip()
+
     voucher = Voucher(
         voucher_number=voucher_number,
         voucher_type='adjustment',
@@ -30503,7 +30539,7 @@ def _create_clearing_settlement_voucher(
         reference_type='clearing_settlement',
         reference_id=clearing_safe_box_id,
         reference_number=reference_number,
-        notes=(notes or '').strip() or None,
+        notes=final_notes or None,
         created_by=created_by,
         status='approved',
         approved_by=created_by,
