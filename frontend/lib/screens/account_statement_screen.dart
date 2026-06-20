@@ -65,6 +65,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
   final ScrollController _contentScrollController = ScrollController();
   final ScrollController _horizontalController = ScrollController();
   final ScrollController _verticalController = ScrollController();
+  final GlobalKey _stickyHeaderKey = GlobalKey();
+  double _stickyHeaderMeasuredHeight = 240;
 
   int _viewMode = 0; // 0: dual, 1: gold, 2: cash
   _StatementDisplayMode _displayMode = _StatementDisplayMode.table;
@@ -1308,9 +1310,9 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Measure toolbar + totals bar height after first frame
         final toolbarWidget = _buildToolbar(constraints.maxWidth);
         final totalsWidget = _buildFilteredTotalsBar();
+        _measureStickyHeaderHeight();
 
         return RefreshIndicator(
           onRefresh: _fetchAccountStatement,
@@ -1329,23 +1331,27 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
               // ── Sticky: Filter toolbar + totals bar ─────────────────
               SliverPersistentHeader(
                 pinned: true,
+                floating: true,
                 delegate: _PinnedWidgetDelegate(
-                  height: _stickyHeaderHeight(constraints.maxWidth),
-                  child: Material(
-                    elevation: 2,
-                    color: Theme.of(context).scaffoldBackgroundColor,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                          child: toolbarWidget,
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
-                          child: totalsWidget,
-                        ),
-                      ],
+                  height: _stickyHeaderMeasuredHeight,
+                  child: KeyedSubtree(
+                    key: _stickyHeaderKey,
+                    child: Material(
+                      elevation: 2,
+                      color: Theme.of(context).scaffoldBackgroundColor,
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                            child: toolbarWidget,
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 6, 16, 8),
+                            child: totalsWidget,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -1370,13 +1376,17 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
                         _buildLineCard(filteredLines[index], mainKarat),
                   ),
                 )
-              else
-                SliverFillRemaining(
+              else ...[
+                SliverToBoxAdapter(
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
+                    padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
                     child: _buildStatementTable(),
                   ),
                 ),
+                SliverToBoxAdapter(
+                  child: _buildClosingBreakdownSliver(mainKarat),
+                ),
+              ],
             ],
           ),
         );
@@ -1384,18 +1394,18 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     );
   }
 
-  /// Estimated height for the pinned sticky header.
-  /// On narrow screens the toolbar wraps into more rows so we allow more space.
-  double _stickyHeaderHeight(double maxWidth) {
-    // toolbar rows:
-    //   row 1: results badge + filters badge + clear button  ≈ 46
-    //   row 2: search + date range + type dropdown          ≈ 52
-    //   row 3: view mode + karat + movement chip + export   ≈ 52
-    // totals bar                                            ≈ 54
-    // padding (top 8 + bottom 8 + 6 between)               ≈ 22
-    if (maxWidth < 420) return 310;
-    if (maxWidth < 600) return 280;
-    return 240;
+  void _measureStickyHeaderHeight() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final renderObject = _stickyHeaderKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox) return;
+      final measuredHeight = renderObject.size.height;
+      if (measuredHeight <= 0) return;
+      if ((measuredHeight - _stickyHeaderMeasuredHeight).abs() < 0.5) return;
+      setState(() {
+        _stickyHeaderMeasuredHeight = measuredHeight;
+      });
+    });
   }
 
 
@@ -1603,10 +1613,24 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     }
 
     final isCompact = maxWidth < 720;
-    final cardsPerRow = isCompact ? 1 : (cards.length == 4 ? 2 : 3);
-    final cardWidth = isCompact
-        ? maxWidth
-        : (maxWidth - (12 * (cardsPerRow - 1))) / cardsPerRow;
+
+    if (isCompact) {
+      // Cards scroll horizontally as one row instead of stacking full-width,
+      // so they don't push the table/list far below the fold on small screens.
+      return SizedBox(
+        height: 180,
+        child: ListView.separated(
+          scrollDirection: Axis.horizontal,
+          itemCount: cards.length,
+          separatorBuilder: (_, _) => const SizedBox(width: 12),
+          itemBuilder: (_, index) =>
+              SizedBox(width: 280, child: cards[index]),
+        ),
+      );
+    }
+
+    final cardsPerRow = cards.length == 4 ? 2 : 3;
+    final cardWidth = (maxWidth - (12 * (cardsPerRow - 1))) / cardsPerRow;
 
     return Wrap(
       spacing: 12,
@@ -1636,6 +1660,7 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
 
   Widget _buildToolbar(double maxWidth) {
     final isNarrow = maxWidth < 500;
+    final isCompact = maxWidth < 700;
 
     // View-mode labels
     const viewModeLabels = {0: 'مزدوج', 1: 'ذهب فقط', 2: 'نقدي فقط'};
@@ -1656,10 +1681,8 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
           Row(
             children: [
               Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  crossAxisAlignment: WrapCrossAlignment.center,
+                child: _buildFilterRow(
+                  isCompact: isCompact,
                   children: [
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -1707,13 +1730,11 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
             ],
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          _buildFilterRow(
+            isCompact: isCompact,
             children: [
               SizedBox(
-                width: 420,
+                width: isNarrow ? 180 : (isCompact ? 240 : 420),
                 child: TextField(
                   controller: _searchController,
                   decoration: InputDecoration(
@@ -1852,6 +1873,31 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
     );
   }
 
+  Widget _buildFilterRow({
+    required bool isCompact,
+    required List<Widget> children,
+  }) {
+    if (!isCompact) {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: children,
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            children[i],
+          ],
+        ],
+      ),
+    );
+  }
+
   Widget _buildExportMenu() {
     return ElevatedButton.icon(
       onPressed: _isExporting ? null : _showExportSheet,
@@ -1960,17 +2006,18 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       );
     }
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Expanded(
-          child: Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Scrollbar(
-              controller: _horizontalController,
+    final tableHeight = (MediaQuery.sizeOf(context).height * 0.55).clamp(
+      320.0,
+      640.0,
+    );
+
+    return SizedBox(
+      height: tableHeight,
+      child: Card(
+        elevation: 2,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        child: Scrollbar(
+          controller: _horizontalController,
               thumbVisibility: true,
               notificationPredicate: (notification) =>
                   notification.metrics.axis == Axis.horizontal,
@@ -2243,9 +2290,14 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
               ),
             ),
           ),
-        ),
-        if (_statement != null) _buildClosingBreakdown(mainKarat),
-      ],
+        );
+  }
+
+  Widget _buildClosingBreakdownSliver(double mainKarat) {
+    if (_statement == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+      child: _buildClosingBreakdown(mainKarat),
     );
   }
 

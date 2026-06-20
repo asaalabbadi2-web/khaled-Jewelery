@@ -2382,7 +2382,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       case 'home':
         tab = _buildHomeTabContent(isAr);
       case 'invoices':
-        tab = InvoicesListScreen(isArabic: isAr);
+        tab = InvoicesListScreen(isArabic: isAr, embedded: true);
       case 'customers':
         tab = CustomersScreen(api: api, isArabic: isAr);
       case 'items':

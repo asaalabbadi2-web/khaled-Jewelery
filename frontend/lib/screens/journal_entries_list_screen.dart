@@ -10,7 +10,7 @@ import '../app_route_observer.dart';
 import '../providers/auth_provider.dart';
 import '../providers/settings_provider.dart';
 import '../utils/currency_utils.dart' as cu;
-import '../widgets/account_picker_sheet.dart';
+import '../widgets/widgets.dart';
 import 'journal_entry_form.dart';
 
 enum _JournalEntriesListView { table, cards }
@@ -33,7 +33,8 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _contentScrollController = ScrollController();
   final ScrollController _tableHorizontalController = ScrollController();
-  final GlobalKey _topChromeKey = GlobalKey();
+  final GlobalKey _toolbarKey = GlobalKey();
+  double _toolbarHeight = 160;
 
   List<Map<String, dynamic>> _entries = const [];
   List<Map<String, dynamic>> _accounts = const [];
@@ -65,8 +66,6 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
 
   _JournalEntriesListView _viewMode = _JournalEntriesListView.table;
   Timer? _searchDebounce;
-  double _topChromeHeight = 0;
-  double _topChromeCollapseOffset = 0;
 
   String get _currencySymbol =>
       context.read<SettingsProvider>().currencySymbolText;
@@ -79,7 +78,6 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
         setState(() {});
       }
     });
-    _contentScrollController.addListener(_onContentScroll);
     _loadEntries();
   }
 
@@ -120,45 +118,6 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
         _mainKarat = nextMainKarat;
       });
     }
-  }
-
-  void _onContentScroll() {
-    final nextOffset = _contentScrollController.hasClients
-        ? _contentScrollController.offset.clamp(0.0, _topChromeHeight)
-        : 0.0;
-    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
-      return;
-    }
-    setState(() {
-      _topChromeCollapseOffset = nextOffset;
-    });
-  }
-
-  void _measureTopChrome() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      final context = _topChromeKey.currentContext;
-      if (context == null) {
-        return;
-      }
-      final renderObject = context.findRenderObject();
-      if (renderObject is! RenderBox) {
-        return;
-      }
-      final screenHeight = MediaQuery.of(this.context).size.height;
-      final height = renderObject.size.height.clamp(0.0, screenHeight * 0.38);
-      if (height <= 0 || (height - _topChromeHeight).abs() < 0.5) {
-        return;
-      }
-      setState(() {
-        _topChromeHeight = height;
-        if (_topChromeCollapseOffset > height) {
-          _topChromeCollapseOffset = height;
-        }
-      });
-    });
   }
 
   Map<String, dynamic> _stringKeyMap(dynamic raw) {
@@ -897,79 +856,113 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     bool emphasize = false,
   }) {
     final theme = Theme.of(context);
-    return ConstrainedBox(
-      constraints: const BoxConstraints(minWidth: 180, maxWidth: 250),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          gradient: emphasize
-              ? LinearGradient(
-                  colors: [
-                    color.withValues(alpha: 0.14),
-                    theme.colorScheme.surface,
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                )
-              : null,
-          color: emphasize ? null : theme.colorScheme.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: color.withValues(alpha: emphasize ? 0.28 : 0.16),
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.05),
-              blurRadius: 14,
-              offset: const Offset(0, 6),
-            ),
-          ],
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
+
+    final card = Container(
+      padding: EdgeInsets.all(isCompact ? 10 : 14),
+      decoration: BoxDecoration(
+        gradient: emphasize
+            ? LinearGradient(
+                colors: [
+                  color.withValues(alpha: 0.14),
+                  theme.colorScheme.surface,
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : null,
+        color: emphasize ? null : theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(isCompact ? 14 : 18),
+        border: Border.all(
+          color: color.withValues(alpha: emphasize ? 0.28 : 0.16),
         ),
-        child: Row(
-          children: [
-            Container(
-              width: 42,
-              height: 42,
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: color, size: 20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: isCompact ? MainAxisSize.min : MainAxisSize.max,
+        children: [
+          Container(
+            width: isCompact ? 30 : 42,
+            height: isCompact ? 30 : 42,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(isCompact ? 9 : 12),
             ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w700,
+            child: Icon(icon, color: color, size: isCompact ? 15 : 20),
+          ),
+          SizedBox(width: isCompact ? 8 : 10),
+          isCompact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  context.read<SettingsProvider>().buildText(
-                    value,
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
-                      color: color,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurface.withValues(
-                        alpha: 0.62,
+                    context.read<SettingsProvider>().buildText(
+                      value,
+                      style: theme.textTheme.titleSmall?.copyWith(
+                        fontWeight: emphasize
+                            ? FontWeight.w900
+                            : FontWeight.w800,
+                        color: color,
                       ),
                     ),
+                  ],
+                )
+              : Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      context.read<SettingsProvider>().buildText(
+                        value,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: emphasize
+                              ? FontWeight.w900
+                              : FontWeight.w800,
+                          color: color,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurface.withValues(
+                            alpha: 0.62,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-          ],
-        ),
+                ),
+        ],
       ),
+    );
+
+    if (isCompact) {
+      return SizedBox(width: 170, child: card);
+    }
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minWidth: 180, maxWidth: 250),
+      child: card,
     );
   }
 
@@ -985,90 +978,101 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     final totalCash = _asDouble(_currentSummary['total_cash']);
     final totalGold = _asDouble(_currentSummary['total_gold_main_karat']);
 
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: [
-        _buildSummaryCard(
-          title: widget.isArabic ? 'إجمالي القيود' : 'Entries',
-          value: '$totalEntries',
-          subtitle: widget.isArabic
-              ? 'بعد الفلاتر الحالية'
-              : 'After current filters',
-          icon: Icons.receipt_long_outlined,
-          color: Theme.of(context).colorScheme.primary,
-        ),
-        _buildSummaryCard(
-          title: widget.isArabic ? 'قيود مرحلة' : 'Posted',
-          value: '$postedCount',
-          subtitle: widget.isArabic ? 'مرتبطة بالأرصدة' : 'Affects balances',
-          icon: Icons.verified_outlined,
-          color: Colors.green,
-        ),
-        _buildSummaryCard(
-          title: widget.isArabic ? 'قيود غير مرحلة' : 'Unposted',
-          value: '$unpostedCount',
-          subtitle: widget.isArabic ? 'جاهزة للمراجعة' : 'Ready for review',
-          icon: Icons.pending_actions_outlined,
-          color: Colors.orange,
-        ),
-        _buildSummaryCard(
-          title: widget.isArabic ? 'إجمالي النقد' : 'Total cash',
-          value: _formatCash(totalCash),
-          subtitle: widget.isArabic
-              ? 'على النتائج المطابقة'
-              : 'Across matching results',
-          icon: Icons.payments_outlined,
-          color: Colors.blue,
-        ),
-        _buildSummaryCard(
-          title: widget.isArabic ? 'إجمالي الذهب' : 'Total gold',
-          value: _formatGold(totalGold),
-          subtitle: widget.isArabic
-              ? 'بالمكافئ على العيار الرئيسي $_mainKarat'
-              : 'Main karat equivalent $_mainKarat',
-          icon: Icons.scale_outlined,
-          color: const Color(0xFFD4A017),
-          emphasize: true,
-        ),
-      ],
+    final cards = [
+      _buildSummaryCard(
+        title: widget.isArabic ? 'إجمالي القيود' : 'Entries',
+        value: '$totalEntries',
+        subtitle: widget.isArabic
+            ? 'بعد الفلاتر الحالية'
+            : 'After current filters',
+        icon: Icons.receipt_long_outlined,
+        color: Theme.of(context).colorScheme.primary,
+      ),
+      _buildSummaryCard(
+        title: widget.isArabic ? 'قيود مرحلة' : 'Posted',
+        value: '$postedCount',
+        subtitle: widget.isArabic ? 'مرتبطة بالأرصدة' : 'Affects balances',
+        icon: Icons.verified_outlined,
+        color: Colors.green,
+      ),
+      _buildSummaryCard(
+        title: widget.isArabic ? 'قيود غير مرحلة' : 'Unposted',
+        value: '$unpostedCount',
+        subtitle: widget.isArabic ? 'جاهزة للمراجعة' : 'Ready for review',
+        icon: Icons.pending_actions_outlined,
+        color: Colors.orange,
+      ),
+      _buildSummaryCard(
+        title: widget.isArabic ? 'إجمالي النقد' : 'Total cash',
+        value: _formatCash(totalCash),
+        subtitle: widget.isArabic
+            ? 'على النتائج المطابقة'
+            : 'Across matching results',
+        icon: Icons.payments_outlined,
+        color: Colors.blue,
+      ),
+      _buildSummaryCard(
+        title: widget.isArabic ? 'إجمالي الذهب' : 'Total gold',
+        value: _formatGold(totalGold),
+        subtitle: widget.isArabic
+            ? 'بالمكافئ على العيار الرئيسي $_mainKarat'
+            : 'Main karat equivalent $_mainKarat',
+        icon: Icons.scale_outlined,
+        color: const Color(0xFFD4A017),
+        emphasize: true,
+      ),
+    ];
+
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
+    if (!isCompact) {
+      return Wrap(spacing: 10, runSpacing: 10, children: cards);
+    }
+
+    return SizedBox(
+      height: 72,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: cards.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (_, index) => cards[index],
+      ),
     );
   }
 
-  Widget _buildCollapsibleTopChrome() {
-    final content = KeyedSubtree(
-      key: _topChromeKey,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-        child: _buildStatisticsSection(),
-      ),
-    );
+  void _measureToolbarHeight() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final renderObject = _toolbarKey.currentContext?.findRenderObject();
+      if (renderObject is! RenderBox) return;
+      final measuredHeight = renderObject.size.height;
+      if (measuredHeight <= 0) return;
+      if ((measuredHeight - _toolbarHeight).abs() < 0.5) return;
+      setState(() {
+        _toolbarHeight = measuredHeight;
+      });
+    });
+  }
 
-    _measureTopChrome();
-
-    if (_topChromeHeight <= 0) {
-      return content;
-    }
-
-    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
-    final visibleHeight = (_topChromeHeight - collapse).clamp(
-      0.0,
-      _topChromeHeight,
-    );
-    if (visibleHeight <= 0) {
-      return const SizedBox.shrink();
-    }
-
-    return ClipRect(
-      child: SizedBox(
-        height: visibleHeight,
-        child: OverflowBox(
-          alignment: Alignment.topCenter,
-          minHeight: _topChromeHeight,
-          maxHeight: _topChromeHeight,
-          child: Transform.translate(
-            offset: Offset(0, -collapse),
-            child: content,
+  Widget _buildPinnedToolbarSliver() {
+    final theme = Theme.of(context);
+    final maxHeight = MediaQuery.of(context).size.height * 0.28;
+    _measureToolbarHeight();
+    return SliverPersistentHeader(
+      pinned: true,
+      floating: true,
+      delegate: PinnedHeaderDelegate(
+        height: _toolbarHeight.clamp(0.0, maxHeight),
+        backgroundColor: theme.scaffoldBackgroundColor,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: maxHeight),
+          child: SingleChildScrollView(
+            child: KeyedSubtree(
+              key: _toolbarKey,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: _buildManagementToolbar(),
+              ),
+            ),
           ),
         ),
       ),
@@ -1104,6 +1108,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
 
   Widget _buildManagementToolbar() {
     final theme = Theme.of(context);
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
 
     return Container(
       padding: const EdgeInsets.all(12),
@@ -1120,9 +1125,8 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
           Row(
             children: [
               Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                child: _buildFilterRow(
+                  isCompact: isCompact,
                   children: [
                     _statusChip(
                       value: 'all',
@@ -1153,9 +1157,8 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
             ],
           ),
           const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          _buildFilterRow(
+            isCompact: isCompact,
             children: [
               SizedBox(
                 width: 430,
@@ -1512,6 +1515,31 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterRow({
+    required bool isCompact,
+    required List<Widget> children,
+  }) {
+    if (!isCompact) {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: children,
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            children[i],
+          ],
         ],
       ),
     );
@@ -2023,7 +2051,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
                       onRefresh: () =>
                           _loadEntries(page: _currentPage, forceRefresh: true),
                       child: ListView.builder(
-                        controller: _contentScrollController,
+                        primary: true,
                         padding: EdgeInsets.zero,
                         physics: const AlwaysScrollableScrollPhysics(),
                         itemCount: _entries.length,
@@ -2608,7 +2636,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     return RefreshIndicator(
       onRefresh: () => _loadEntries(page: _currentPage, forceRefresh: true),
       child: ListView(
-        controller: _contentScrollController,
+        primary: true,
         padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
         children: [
           ..._entries.map(_buildEntryCard),
@@ -2659,20 +2687,19 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
             ),
           ],
         ),
-        body: Column(
-            children: [
-              _buildCollapsibleTopChrome(),
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.28,
-                ),
-                child: SingleChildScrollView(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                    child: _buildManagementToolbar(),
-                  ),
-                ),
+        body: NestedScrollView(
+          controller: _contentScrollController,
+          headerSliverBuilder: (context, innerBoxIsScrolled) => [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                child: _buildStatisticsSection(),
               ),
+            ),
+            _buildPinnedToolbarSliver(),
+          ],
+          body: Column(
+            children: [
               if (_isLoading && _entries.isNotEmpty)
                 const Padding(
                   padding: EdgeInsets.only(top: 8),
@@ -2680,6 +2707,7 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
                 ),
               Expanded(child: _buildBody()),
             ],
+          ),
         ),
       ),
     );

@@ -17,6 +17,7 @@ import 'voucher_details_screen.dart';
 import 'add_voucher_screen.dart';
 import '../theme/app_theme.dart' as theme;
 import '../providers/auth_provider.dart';
+import '../widgets/widgets.dart';
 import 'package:provider/provider.dart';
 
 class VouchersListScreen extends StatefulWidget {
@@ -34,7 +35,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   final ScrollController _scrollController = ScrollController();
   final ScrollController _voucherTableHorizontalController = ScrollController();
   final TextEditingController _searchController = TextEditingController();
-  final GlobalKey _topChromeKey = GlobalKey();
+  final GlobalKey _toolbarKey = GlobalKey();
 
   List<dynamic> _vouchers = [];
   Map<String, dynamic> _currentSummary = const {};
@@ -60,8 +61,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   String _sortBy = 'date';
   bool _sortAscending = false;
   _VoucherListView _viewMode = _VoucherListView.table;
-  double _topChromeHeight = 0;
-  double _topChromeCollapseOffset = 0;
+  double _toolbarHeight = 96;
 
   final NumberFormat _currencyFormat = NumberFormat('#,##0.00', 'ar');
   final NumberFormat _goldFormat = NumberFormat('#,##0.000', 'ar');
@@ -73,7 +73,6 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(_onTabChanged);
-    _scrollController.addListener(_onContentScroll);
     _searchController.addListener(_onSearchChanged);
 
     // Avoid 403 spam for users without vouchers permissions
@@ -101,33 +100,18 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     super.dispose();
   }
 
-  void _onContentScroll() {
-    final nextOffset = _scrollController.hasClients
-        ? _scrollController.offset.clamp(0.0, _topChromeHeight)
-        : 0.0;
-    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
-      return;
-    }
-    setState(() {
-      _topChromeCollapseOffset = nextOffset;
-    });
-  }
-
-  void _measureTopChrome() {
+  void _measureToolbarHeight() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final context = _topChromeKey.currentContext;
+      final context = _toolbarKey.currentContext;
       if (context == null) return;
       final renderObject = context.findRenderObject();
       if (renderObject is! RenderBox) return;
       final measuredHeight = renderObject.size.height;
       if (measuredHeight <= 0) return;
-      if ((measuredHeight - _topChromeHeight).abs() < 0.5) return;
+      if ((measuredHeight - _toolbarHeight).abs() < 0.5) return;
       setState(() {
-        _topChromeHeight = measuredHeight;
-        if (_topChromeCollapseOffset > measuredHeight) {
-          _topChromeCollapseOffset = measuredHeight;
-        }
+        _toolbarHeight = measuredHeight;
       });
     });
   }
@@ -692,110 +676,88 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       return _buildErrorState(themeData);
     }
 
-    return LayoutBuilder(
-      builder: (context, constraints) => Column(
-        children: [
-          ConstrainedBox(
+    return NestedScrollView(
+      controller: _scrollController,
+      headerSliverBuilder: (context, innerBoxIsScrolled) => [
+        SliverToBoxAdapter(
+          child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: constraints.maxHeight * 0.45,
+              maxHeight: MediaQuery.sizeOf(context).height * 0.45,
             ),
-            child: _buildCollapsibleTopChrome(themeData),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: _buildManagementToolbar(themeData),
-          ),
-        Expanded(
-          child: _viewMode == _VoucherListView.table
-              ? Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                  child: Column(
-                    children: [
-                      Expanded(
-                        child: _vouchers.isEmpty
-                            ? _buildEmptyState(themeData)
-                            : _buildVoucherTable(themeData),
-                      ),
-                      Padding(
-                        padding: EdgeInsets.only(
-                          top: 8,
-                          bottom: MediaQuery.of(context).padding.bottom + 8,
-                        ),
-                        child: _buildPaginationStrip(themeData),
-                      ),
-                    ],
-                  ),
-                )
-              : RefreshIndicator(
-                  onRefresh: _refresh,
-                  color: theme.AppColors.primaryGold,
-                  displacement: 80,
-                  child: ListView(
-                    controller: _scrollController,
-                    physics: const AlwaysScrollableScrollPhysics(),
-                    padding: EdgeInsets.only(
-                      left: 16,
-                      top: 8,
-                      right: 16,
-                      bottom: MediaQuery.of(context).padding.bottom + 24,
-                    ),
-                    children: [
-                      if (_isLoading && _vouchers.isNotEmpty)
-                        _buildPaginationLoader(),
-                      if (_vouchers.isEmpty)
-                        _buildEmptyState(themeData)
-                      else
-                        _buildResultsSection(themeData),
-                      _buildPaginationStrip(themeData),
-                    ],
-                  ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildHeaderSection(themeData),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                  child: _buildSummarySection(themeData),
                 ),
+              ],
+            ),
+          ),
         ),
-        ],
-      ),
+        _buildPinnedToolbarSliver(themeData),
+      ],
+      body: _viewMode == _VoucherListView.table
+          ? Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Column(
+                children: [
+                  Expanded(
+                    child: _vouchers.isEmpty
+                        ? _buildEmptyState(themeData)
+                        : _buildVoucherTable(themeData),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.only(
+                      top: 8,
+                      bottom: MediaQuery.of(context).padding.bottom + 8,
+                    ),
+                    child: _buildPaginationStrip(themeData),
+                  ),
+                ],
+              ),
+            )
+          : RefreshIndicator(
+              onRefresh: _refresh,
+              color: theme.AppColors.primaryGold,
+              displacement: 80,
+              child: ListView(
+                primary: true,
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.only(
+                  left: 16,
+                  top: 8,
+                  right: 16,
+                  bottom: MediaQuery.of(context).padding.bottom + 24,
+                ),
+                children: [
+                  if (_isLoading && _vouchers.isNotEmpty)
+                    _buildPaginationLoader(),
+                  if (_vouchers.isEmpty)
+                    _buildEmptyState(themeData)
+                  else
+                    _buildResultsSection(themeData),
+                  _buildPaginationStrip(themeData),
+                ],
+              ),
+            ),
     );
   }
 
-  Widget _buildCollapsibleTopChrome(ThemeData themeData) {
-    final content = KeyedSubtree(
-      key: _topChromeKey,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildHeaderSection(themeData),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-            child: _buildSummarySection(themeData),
-          ),
-        ],
-      ),
-    );
-
-    _measureTopChrome();
-
-    if (_topChromeHeight <= 0) {
-      return content;
-    }
-
-    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
-    final visibleHeight = (_topChromeHeight - collapse).clamp(
-      0.0,
-      _topChromeHeight,
-    );
-    if (visibleHeight <= 0) {
-      return const SizedBox.shrink();
-    }
-
-    return ClipRect(
-      child: SizedBox(
-        height: visibleHeight,
-        child: OverflowBox(
-          alignment: Alignment.topCenter,
-          minHeight: _topChromeHeight,
-          maxHeight: _topChromeHeight,
-          child: Transform.translate(
-            offset: Offset(0, -collapse),
-            child: content,
+  Widget _buildPinnedToolbarSliver(ThemeData themeData) {
+    _measureToolbarHeight();
+    return SliverPersistentHeader(
+      pinned: true,
+      floating: true,
+      delegate: PinnedHeaderDelegate(
+        height: _toolbarHeight,
+        backgroundColor: themeData.scaffoldBackgroundColor,
+        child: KeyedSubtree(
+          key: _toolbarKey,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: _buildManagementToolbar(themeData),
           ),
         ),
       ),
@@ -1088,44 +1050,55 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     final pendingCount =
         (_currentSummary['pending_count'] as num?)?.toInt() ?? 0;
 
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: [
-        _buildSummaryCard(
-          themeData,
-          title: 'إجمالي السندات',
-          value: '$totalVouchers',
-          subtitle: 'بعد الفلاتر الحالية',
-          icon: Icons.receipt_long_outlined,
-          color: theme.AppColors.darkGold,
-        ),
-        _buildSummaryCard(
-          themeData,
-          title: 'إجمالي النقد',
-          value: '${_currencyFormat.format(totalCash)} ر.س',
-          subtitle: 'لكل النتائج المطابقة',
-          icon: Icons.payments_outlined,
-          color: const Color(0xFF2F80ED),
-        ),
-        _buildSummaryCard(
-          themeData,
-          title: 'إجمالي الذهب',
-          value: '${_goldFormat.format(totalGold)} غ',
-          subtitle: 'بالمكافئ على العيار الرئيسي',
-          icon: Icons.scale_outlined,
-          color: const Color(0xFFD4A017),
-          emphasize: true,
-        ),
-        _buildSummaryCard(
-          themeData,
-          title: 'سندات معلقة',
-          value: '$pendingCount',
-          subtitle: 'جاهزة للمراجعة والاعتماد',
-          icon: Icons.pending_actions_outlined,
-          color: theme.AppColors.info,
-        ),
-      ],
+    final cards = [
+      _buildSummaryCard(
+        themeData,
+        title: 'إجمالي السندات',
+        value: '$totalVouchers',
+        subtitle: 'بعد الفلاتر الحالية',
+        icon: Icons.receipt_long_outlined,
+        color: theme.AppColors.darkGold,
+      ),
+      _buildSummaryCard(
+        themeData,
+        title: 'إجمالي النقد',
+        value: '${_currencyFormat.format(totalCash)} ر.س',
+        subtitle: 'لكل النتائج المطابقة',
+        icon: Icons.payments_outlined,
+        color: const Color(0xFF2F80ED),
+      ),
+      _buildSummaryCard(
+        themeData,
+        title: 'إجمالي الذهب',
+        value: '${_goldFormat.format(totalGold)} غ',
+        subtitle: 'بالمكافئ على العيار الرئيسي',
+        icon: Icons.scale_outlined,
+        color: const Color(0xFFD4A017),
+        emphasize: true,
+      ),
+      _buildSummaryCard(
+        themeData,
+        title: 'سندات معلقة',
+        value: '$pendingCount',
+        subtitle: 'جاهزة للمراجعة والاعتماد',
+        icon: Icons.pending_actions_outlined,
+        color: theme.AppColors.info,
+      ),
+    ];
+
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
+    if (!isCompact) {
+      return Wrap(spacing: 10, runSpacing: 10, children: cards);
+    }
+
+    return SizedBox(
+      height: 72,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: cards.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (_, index) => cards[index],
+      ),
     );
   }
 
@@ -1138,79 +1111,119 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     required Color color,
     bool emphasize = false,
   }) {
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
+
+    final card = Container(
+      padding: EdgeInsets.all(isCompact ? 10 : 14),
+      decoration: BoxDecoration(
+        gradient: emphasize
+            ? LinearGradient(
+                colors: [
+                  _withAlpha(color, 0.14),
+                  themeData.colorScheme.surface,
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              )
+            : null,
+        color: emphasize ? null : themeData.colorScheme.surface,
+        borderRadius: BorderRadius.circular(isCompact ? 14 : 18),
+        border: Border.all(color: _withAlpha(color, emphasize ? 0.28 : 0.16)),
+        boxShadow: [
+          BoxShadow(
+            color: _withAlpha(Colors.black, 0.06),
+            blurRadius: 12,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisSize: isCompact ? MainAxisSize.min : MainAxisSize.max,
+        children: [
+          Container(
+            width: isCompact ? 30 : 40,
+            height: isCompact ? 30 : 40,
+            decoration: BoxDecoration(
+              color: _withAlpha(color, 0.12),
+              borderRadius: BorderRadius.circular(isCompact ? 9 : 12),
+            ),
+            child: Icon(icon, color: color, size: isCompact ? 15 : 20),
+          ),
+          SizedBox(width: isCompact ? 8 : 10),
+          isCompact
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      title,
+                      style: themeData.textTheme.labelSmall?.copyWith(
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      value,
+                      style: themeData.textTheme.titleSmall?.copyWith(
+                        fontWeight: emphasize
+                            ? FontWeight.w900
+                            : FontWeight.w800,
+                        color: color,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                )
+              : Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: themeData.textTheme.bodySmall?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        value,
+                        style: themeData.textTheme.titleMedium?.copyWith(
+                          fontWeight: emphasize
+                              ? FontWeight.w900
+                              : FontWeight.w800,
+                          color: color,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitle,
+                        style: themeData.textTheme.bodySmall?.copyWith(
+                          color: _withAlpha(
+                            themeData.colorScheme.onSurface,
+                            0.6,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+        ],
+      ),
+    );
+
+    if (isCompact) {
+      return SizedBox(width: 170, child: card);
+    }
     return ConstrainedBox(
       constraints: const BoxConstraints(minWidth: 180, maxWidth: 250),
-      child: Container(
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          gradient: emphasize
-              ? LinearGradient(
-                  colors: [
-                    _withAlpha(color, 0.14),
-                    themeData.colorScheme.surface,
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                )
-              : null,
-          color: emphasize ? null : themeData.colorScheme.surface,
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: _withAlpha(color, emphasize ? 0.28 : 0.16)),
-          boxShadow: [
-            BoxShadow(
-              color: _withAlpha(Colors.black, 0.06),
-              blurRadius: 12,
-              offset: const Offset(0, 6),
-            ),
-          ],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 40,
-              height: 40,
-              decoration: BoxDecoration(
-                color: _withAlpha(color, 0.12),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Icon(icon, color: color, size: 20),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: themeData.textTheme.bodySmall?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    value,
-                    style: themeData.textTheme.titleMedium?.copyWith(
-                      fontWeight: emphasize ? FontWeight.w900 : FontWeight.w800,
-                      color: color,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    subtitle,
-                    style: themeData.textTheme.bodySmall?.copyWith(
-                      color: _withAlpha(themeData.colorScheme.onSurface, 0.6),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
+      child: card,
     );
   }
 
   Widget _buildManagementToolbar(ThemeData themeData) {
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -1223,10 +1236,8 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            crossAxisAlignment: WrapCrossAlignment.center,
+          _buildFilterRow(
+            isCompact: isCompact,
             children: [
               Text(
                 'إدارة النتائج: $_totalVouchers سجل',
@@ -1261,9 +1272,8 @@ class _VouchersListScreenState extends State<VouchersListScreen>
             ],
           ),
           const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+          _buildFilterRow(
+            isCompact: isCompact,
             children: [
               _buildToolbarSearchField(themeData),
               SizedBox(
@@ -1447,6 +1457,31 @@ class _VouchersListScreenState extends State<VouchersListScreen>
     );
   }
 
+  Widget _buildFilterRow({
+    required bool isCompact,
+    required List<Widget> children,
+  }) {
+    if (!isCompact) {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: children,
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            children[i],
+          ],
+        ],
+      ),
+    );
+  }
+
   InputDecoration _compactFilterDecoration(String label) {
     return InputDecoration(
       labelText: label,
@@ -1529,7 +1564,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
                       onRefresh: _refresh,
                       color: theme.AppColors.primaryGold,
                       child: ListView.builder(
-                        controller: _scrollController,
+                        primary: true,
                         padding: EdgeInsets.zero,
                         physics: const AlwaysScrollableScrollPhysics(),
                         itemCount: _vouchers.length,

@@ -13,6 +13,7 @@ import '../models/employee_model.dart';
 import '../providers/auth_provider.dart';
 import '../services/data_sync_bus.dart';
 import '../utils/invoice_direct_print.dart';
+import '../widgets/widgets.dart';
 import 'add_return_invoice_screen.dart';
 import 'purchase_invoice_screen.dart';
 import 'sales_invoice_screen_v2.dart';
@@ -53,8 +54,13 @@ class _InvoiceTabConfig {
 
 class InvoicesListScreen extends StatefulWidget {
   final bool isArabic;
+  final bool embedded;
 
-  const InvoicesListScreen({super.key, this.isArabic = true});
+  const InvoicesListScreen({
+    super.key,
+    this.isArabic = true,
+    this.embedded = false,
+  });
 
   @override
   State<InvoicesListScreen> createState() => _InvoicesListScreenState();
@@ -65,7 +71,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
   final ApiService _apiService = ApiService();
   final ScrollController _invoiceTableHorizontalController = ScrollController();
   final ScrollController _invoiceContentScrollController = ScrollController();
-  final GlobalKey _invoiceTopChromeKey = GlobalKey();
+  final GlobalKey _invoiceFilterToolbarKey = GlobalKey();
   static const Duration _tabSwitchAnimationDuration = Duration(
     milliseconds: 160,
   );
@@ -162,8 +168,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
   Map<String, dynamic>? _currentSummary;
   final Map<String, Map<String, dynamic>> _invoiceQueryCache = {};
   Timer? _searchDebounce;
-  double _topChromeHeight = 0;
-  double _topChromeCollapseOffset = 0;
+  double _filterToolbarHeight = 84;
 
   static const Map<String, String> _invoicePrefixLookup = {
     'بيع': 'SELL',
@@ -200,7 +205,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
         if (mounted) setState(() {});
       });
     }
-    _invoiceContentScrollController.addListener(_onInvoiceContentScroll);
     _itemsRevisionSnapshot = DataSyncBus.itemsRevision.value;
     _itemsRevisionListener = () {
       _cachedItems = null;
@@ -226,33 +230,18 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     super.dispose();
   }
 
-  void _onInvoiceContentScroll() {
-    final nextOffset = _invoiceContentScrollController.hasClients
-        ? _invoiceContentScrollController.offset.clamp(0.0, _topChromeHeight)
-        : 0.0;
-    if ((nextOffset - _topChromeCollapseOffset).abs() < 0.5) {
-      return;
-    }
-    setState(() {
-      _topChromeCollapseOffset = nextOffset;
-    });
-  }
-
-  void _measureTopChrome() {
+  void _measureFilterToolbarHeight() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final context = _invoiceTopChromeKey.currentContext;
+      final context = _invoiceFilterToolbarKey.currentContext;
       if (context == null) return;
       final renderObject = context.findRenderObject();
       if (renderObject is! RenderBox) return;
       final measuredHeight = renderObject.size.height;
       if (measuredHeight <= 0) return;
-      if ((measuredHeight - _topChromeHeight).abs() < 0.5) return;
+      if ((measuredHeight - _filterToolbarHeight).abs() < 0.5) return;
       setState(() {
-        _topChromeHeight = measuredHeight;
-        if (_topChromeCollapseOffset > measuredHeight) {
-          _topChromeCollapseOffset = measuredHeight;
-        }
+        _filterToolbarHeight = measuredHeight;
       });
     });
   }
@@ -1455,101 +1444,129 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
         .map((tab) => isAr ? tab.labelAr : tab.labelEn)
         .toList();
 
+    final actions = <Widget>[
+      IconButton(
+        icon: Icon(Icons.add, color: primary),
+        onPressed: _navigateToAddInvoice,
+        tooltip: isAr ? 'فاتورة جديدة' : 'New Invoice',
+      ),
+      IconButton(
+        icon: Icon(
+          _viewMode == _InvoiceListView.table
+              ? Icons.view_module_outlined
+              : Icons.table_rows_outlined,
+          color: primary,
+        ),
+        onPressed: () {
+          setState(() {
+            _viewMode = _viewMode == _InvoiceListView.table
+                ? _InvoiceListView.cards
+                : _InvoiceListView.table;
+          });
+        },
+        tooltip: _viewMode == _InvoiceListView.table
+            ? (isAr ? 'عرض البطاقات' : 'Card View')
+            : (isAr ? 'عرض الجدول' : 'Table View'),
+      ),
+      IconButton(
+        icon: Icon(Icons.tune, color: primary),
+        onPressed: _showFiltersBottomSheet,
+        tooltip: isAr ? 'فلاتر متقدمة' : 'Advanced Filters',
+      ),
+      IconButton(
+        icon: Icon(Icons.refresh, color: primary),
+        onPressed: () => _loadInvoices(forceRefresh: true),
+        tooltip: isAr ? 'تحديث' : 'Refresh',
+      ),
+    ];
+
+    final body = NestedScrollView(
+      controller: _invoiceContentScrollController,
+      headerSliverBuilder: (context, innerBoxIsScrolled) => [
+        SliverToBoxAdapter(
+          child: Column(
+            children: [
+              Container(
+                color: theme.appBarTheme.backgroundColor ?? primary,
+                child: _buildTabBar(),
+              ),
+              Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 8, 0),
+                child: _buildStatisticsSection(),
+              ),
+              Padding(
+                padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 8, 0),
+                child: _buildStatusChipsRow(),
+              ),
+            ],
+          ),
+        ),
+        _buildPinnedFilterToolbarSliver(),
+      ],
+      body: _isLoading
+          ? Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(primary),
+              ),
+            )
+          : _buildTabContent(
+              _getTabFilteredInvoices(
+                _tabController.index,
+                tabLabels[_tabController.index],
+              ),
+            ),
+    );
+
+    if (widget.embedded) {
+      // Embedded inside the home shell's own AppBar — skip a second full
+      // AppBar/title bar. The tab switcher itself moved into the
+      // collapsible top chrome so it shrinks away with the rest of the
+      // header on scroll, leaving the table the vertical space instead.
+      return Directionality(
+        textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+        child: Material(
+          color: scaffoldBackground,
+          child: Column(
+            children: [
+              Container(
+                color: theme.appBarTheme.backgroundColor ?? primary,
+                child: SafeArea(
+                  bottom: false,
+                  child: Row(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsetsDirectional.only(start: 16),
+                        child: Text(
+                          isAr ? 'الفواتير' : 'Invoices',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                      const Spacer(),
+                      ...actions,
+                    ],
+                  ),
+                ),
+              ),
+              Expanded(child: body),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Directionality(
       textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
       child: Scaffold(
         backgroundColor: scaffoldBackground,
         appBar: AppBar(
           title: Text(isAr ? 'قائمة الفواتير' : 'Invoices List'),
-          actions: [
-            IconButton(
-              icon: Icon(Icons.add, color: primary),
-              onPressed: _navigateToAddInvoice,
-              tooltip: isAr ? 'فاتورة جديدة' : 'New Invoice',
-            ),
-            IconButton(
-              icon: Icon(
-                _viewMode == _InvoiceListView.table
-                    ? Icons.view_module_outlined
-                    : Icons.table_rows_outlined,
-                color: primary,
-              ),
-              onPressed: () {
-                setState(() {
-                  _viewMode = _viewMode == _InvoiceListView.table
-                      ? _InvoiceListView.cards
-                      : _InvoiceListView.table;
-                });
-              },
-              tooltip: _viewMode == _InvoiceListView.table
-                  ? (isAr ? 'عرض البطاقات' : 'Card View')
-                  : (isAr ? 'عرض الجدول' : 'Table View'),
-            ),
-            IconButton(
-              icon: Icon(Icons.tune, color: primary),
-              onPressed: _showFiltersBottomSheet,
-              tooltip: isAr ? 'فلاتر متقدمة' : 'Advanced Filters',
-            ),
-            IconButton(
-              icon: Icon(Icons.refresh, color: primary),
-              onPressed: () => _loadInvoices(forceRefresh: true),
-              tooltip: isAr ? 'تحديث' : 'Refresh',
-            ),
-          ],
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(54),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TabBar(
-                  controller: _tabController,
-                  onTap: _handleTabTap,
-                  isScrollable: true,
-                  labelColor: Colors.white,
-                  unselectedLabelColor: Colors.white.withValues(alpha: 0.65),
-                  indicatorSize: TabBarIndicatorSize.tab,
-                  dividerColor: Colors.transparent,
-                  indicator: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.18),
-                    ),
-                  ),
-                  tabs: List.generate(tabLabels.length, (index) {
-                    return Tab(
-                      icon: Icon(_invoiceTabs[index].icon),
-                      text: tabLabels[index],
-                    );
-                  }),
-                ),
-              ],
-            ),
-          ),
+          actions: actions,
         ),
-        body: Column(
-          children: [
-            _buildCollapsibleTopChrome(),
-            Padding(
-              padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 8, 0),
-              child: _buildFilterToolbar(),
-            ),
-            Expanded(
-              child: _isLoading
-                  ? Center(
-                      child: CircularProgressIndicator(
-                        valueColor: AlwaysStoppedAnimation<Color>(primary),
-                      ),
-                    )
-                  : _buildTabContent(
-                      _getTabFilteredInvoices(
-                        _tabController.index,
-                        tabLabels[_tabController.index],
-                      ),
-                    ),
-            ),
-          ],
-        ),
+        body: body,
       ),
     );
   }
@@ -1582,7 +1599,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       color: Theme.of(context).colorScheme.primary,
       backgroundColor: Theme.of(context).colorScheme.surface,
       child: ListView(
-        controller: _invoiceContentScrollController,
+        primary: true,
         padding: const EdgeInsets.fromLTRB(10, 10, 10, 8),
         children: [
           ...tabInvoices.map<Widget>((entry) {
@@ -1601,40 +1618,128 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     );
   }
 
-  Widget _buildCollapsibleTopChrome() {
-    final content = KeyedSubtree(
-      key: _invoiceTopChromeKey,
-      child: Padding(
-        padding: const EdgeInsetsDirectional.fromSTEB(8, 6, 8, 0),
-        child: _buildStatisticsSection(),
+  Widget _buildTabBar() {
+    final isAr = widget.isArabic;
+    final tabLabels = _invoiceTabs
+        .map((tab) => isAr ? tab.labelAr : tab.labelEn)
+        .toList();
+    return TabBar(
+      controller: _tabController,
+      onTap: _handleTabTap,
+      isScrollable: true,
+      labelColor: Colors.white,
+      unselectedLabelColor: Colors.white.withValues(alpha: 0.65),
+      indicatorSize: TabBarIndicatorSize.tab,
+      dividerColor: Colors.transparent,
+      indicator: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.16),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.18)),
+      ),
+      tabs: List.generate(tabLabels.length, (index) {
+        return Tab(
+          icon: Icon(_invoiceTabs[index].icon),
+          text: tabLabels[index],
+        );
+      }),
+    );
+  }
+
+  Widget _buildStatusChipsRow() {
+    final isAr = widget.isArabic;
+    final idx = _tabController.index;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final textTheme = theme.textTheme;
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
+
+    Widget quickStatusChip({
+      required String value,
+      required String label,
+      required Color color,
+    }) {
+      final selected = _tabStatus[idx] == value;
+      return ChoiceChip(
+        label: Text(label),
+        selected: selected,
+        labelStyle: textTheme.bodySmall?.copyWith(
+          color: selected ? colorScheme.onPrimary : color,
+          fontWeight: FontWeight.w700,
+        ),
+        backgroundColor: color.withValues(alpha: 0.08),
+        selectedColor: color,
+        side: BorderSide(color: color.withValues(alpha: 0.25)),
+        onSelected: (_) async {
+          setState(() {
+            _tabStatus[idx] = value;
+            _currentPage = 1;
+          });
+          await _loadInvoices(page: 1);
+        },
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: colorScheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.14)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildFilterRow(
+              isCompact: isCompact,
+              children: [
+                quickStatusChip(
+                  value: 'all',
+                  label: isAr ? 'الكل' : 'All',
+                  color: colorScheme.primary,
+                ),
+                quickStatusChip(
+                  value: 'paid',
+                  label: isAr ? 'مدفوعة' : 'Paid',
+                  color: Colors.green,
+                ),
+                quickStatusChip(
+                  value: 'remaining',
+                  label: isAr ? 'متبقي' : 'Remaining',
+                  color: Colors.redAccent,
+                ),
+                quickStatusChip(
+                  value: 'partially_paid',
+                  label: isAr ? 'جزئي' : 'Partial',
+                  color: Colors.orange,
+                ),
+              ],
+            ),
+          ),
+          if (_activeFiltersCount > 0)
+            TextButton.icon(
+              onPressed: _clearFilters,
+              icon: const Icon(Icons.close, size: 16),
+              label: Text(isAr ? 'مسح الفلاتر' : 'Clear Filters'),
+            ),
+        ],
       ),
     );
+  }
 
-    _measureTopChrome();
-
-    if (_topChromeHeight <= 0) {
-      return content;
-    }
-
-    final collapse = _topChromeCollapseOffset.clamp(0.0, _topChromeHeight);
-    final visibleHeight = (_topChromeHeight - collapse).clamp(
-      0.0,
-      _topChromeHeight,
-    );
-    if (visibleHeight <= 0) {
-      return const SizedBox.shrink();
-    }
-
-    return ClipRect(
-      child: SizedBox(
-        height: visibleHeight,
-        child: OverflowBox(
-          alignment: Alignment.topCenter,
-          minHeight: _topChromeHeight,
-          maxHeight: _topChromeHeight,
-          child: Transform.translate(
-            offset: Offset(0, -collapse),
-            child: content,
+  Widget _buildPinnedFilterToolbarSliver() {
+    _measureFilterToolbarHeight();
+    final theme = Theme.of(context);
+    return SliverPersistentHeader(
+      pinned: true,
+      floating: true,
+      delegate: PinnedHeaderDelegate(
+        height: _filterToolbarHeight,
+        backgroundColor: theme.scaffoldBackgroundColor,
+        child: KeyedSubtree(
+          key: _invoiceFilterToolbarKey,
+          child: Padding(
+            padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 8, 8),
+            child: _buildFilterToolbar(),
           ),
         ),
       ),
@@ -1647,6 +1752,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final textTheme = theme.textTheme;
+    final isCompact = MediaQuery.sizeOf(context).width < 700;
     final searchController = _searchControllers[idx];
     final searchType = _tabSearchType[idx];
     final partyOptions = _currentPartyOptions();
@@ -1685,32 +1791,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       }
     }
 
-    Widget quickStatusChip({
-      required String value,
-      required String label,
-      required Color color,
-    }) {
-      final selected = _tabStatus[idx] == value;
-      return ChoiceChip(
-        label: Text(label),
-        selected: selected,
-        labelStyle: textTheme.bodySmall?.copyWith(
-          color: selected ? colorScheme.onPrimary : color,
-          fontWeight: FontWeight.w700,
-        ),
-        backgroundColor: color.withValues(alpha: 0.08),
-        selectedColor: color,
-        side: BorderSide(color: color.withValues(alpha: 0.25)),
-        onSelected: (_) async {
-          setState(() {
-            _tabStatus[idx] = value;
-            _currentPage = 1;
-          });
-          await _loadInvoices(page: 1);
-        },
-      );
-    }
-
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1718,51 +1798,8 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: colorScheme.outline.withValues(alpha: 0.14)),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
-                  children: [
-                    quickStatusChip(
-                      value: 'all',
-                      label: isAr ? 'الكل' : 'All',
-                      color: colorScheme.primary,
-                    ),
-                    quickStatusChip(
-                      value: 'paid',
-                      label: isAr ? 'مدفوعة' : 'Paid',
-                      color: Colors.green,
-                    ),
-                    quickStatusChip(
-                      value: 'remaining',
-                      label: isAr ? 'متبقي' : 'Remaining',
-                      color: Colors.redAccent,
-                    ),
-                    quickStatusChip(
-                      value: 'partially_paid',
-                      label: isAr ? 'جزئي' : 'Partial',
-                      color: Colors.orange,
-                    ),
-                  ],
-                ),
-              ),
-              if (_activeFiltersCount > 0)
-                TextButton.icon(
-                  onPressed: _clearFilters,
-                  icon: const Icon(Icons.close, size: 16),
-                  label: Text(isAr ? 'مسح الفلاتر' : 'Clear Filters'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
+      child: _buildFilterRow(
+            isCompact: isCompact,
             children: [
               SizedBox(
                 width: 470,
@@ -2062,6 +2099,29 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                 ),
             ],
           ),
+    );
+  }
+
+  Widget _buildFilterRow({
+    required bool isCompact,
+    required List<Widget> children,
+  }) {
+    if (!isCompact) {
+      return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: children,
+      );
+    }
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            children[i],
+          ],
         ],
       ),
     );
@@ -2118,7 +2178,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                       color: theme.colorScheme.primary,
                       backgroundColor: theme.colorScheme.surface,
                       child: ListView.builder(
-                        controller: _invoiceContentScrollController,
+                        primary: true,
                         padding: EdgeInsets.zero,
                         physics: const AlwaysScrollableScrollPhysics(),
                         itemCount: invoices.length,

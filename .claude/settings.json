@@ -1,0 +1,41 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(nohup ./venv/bin/python app.py)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8001/)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://127.0.0.1:8001/api/auth/login -X POST -H \"Content-Type: application/json\" -d '{}')",
+      "Bash(python3 verify_statement.py)",
+      "Bash(python3 verify_wide.py)",
+      "Bash(python3 verify_wide2.py)",
+      "Bash(python3 verify_wide3.py)",
+      "Bash(python3 verify_wide4.py)",
+      "Bash(python3 verify_wide5.py)",
+      "Bash(python3 verify_wide6.py)",
+      "Bash(python3 verify_wide7.py)",
+      "Bash(python3 -c ' *)",
+      "Bash(awk 'NR>=14450 && NR<=16200 && /elif invoice_type ==|if invoice_type ==/' backend/routes.py)",
+      "Bash(python3 -m py_compile routes.py)",
+      "Bash(python3 -c \"import app; print\\('APP_IMPORT_OK'\\)\")",
+      "Bash(curl -s -m 15 'http://100.108.4.124/api/invoices?invoice_type=%D9%85%D8%B1%D8%AC%D8%B9%20%D8%A8%D9%8A%D8%B9&per_page=1' -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -m 15 http://100.108.4.124/api/invoices?per_page=1 -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\('total:', d.get\\('total'\\)\\); [print\\(i.get\\('id'\\), i.get\\('invoice_type'\\), i.get\\('gold_type'\\)\\) for i in d.get\\('invoices',[]\\)]\")",
+      "Bash(curl -s -m 15 'http://100.108.4.124/api/invoices?invoice_group=returns&per_page=30' -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 15 http://100.108.4.124/api/invoices/1089 -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 20 http://100.108.4.124/api/accounts/by-number/1300/statement?per_page=500 -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 20 http://100.108.4.124/api/accounts/by-number/1310/statement?per_page=500 -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 15 http://100.108.4.124/api/journal_entries/1805 -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 15 http://100.108.4.124/api/accounts/1138 -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 20 'http://100.108.4.124/api/journal_entries?per_page=200&search=تصحيح' -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 15 http://100.108.4.124/api/journal_entries/1804 -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(curl -s -m 20 'http://100.108.4.124/api/invoices?invoice_group=sales&per_page=1000' -H 'Authorization: Bearer __CMDSUB_OUTPUT__')",
+      "Bash(python3 -m py_compile fix_returned_weight_closing_orders.py)",
+      "Bash(python3 fix_returned_weight_closing_orders.py)",
+      "Bash(rm -f reports/fix_returned_weight_closing_orders_20260620T025650Z_dryrun.json *)"
+    ],
+    "additionalDirectories": [
+      "/tmp",
+      "/private/tmp"
+    ]
+  }
+}

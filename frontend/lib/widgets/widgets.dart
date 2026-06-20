@@ -7,3 +7,4 @@ export 'original_invoice_selector.dart';
 export 'invoice_type_banner.dart';
 export 'account_picker_sheet.dart';
 export 'invoice_settings_sheet.dart';
+export 'pinned_header_delegate.dart';

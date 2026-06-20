@@ -1572,15 +1572,23 @@ def _record_memo_weight_transfer(journal_entry_id, *, debit_account_id=None, cre
     )
 
 
-def _get_inventory_account_by_karat(karat: int) -> int:
+def _get_inventory_account_by_karat(karat: int, kind: str = 'new') -> int:
     """
-    اختيار حساب المخزون المناسب حسب العيار
-    
+    اختيار حساب المخزون المالي المناسب حسب نوع الذهب (جديد/كسر) — العيار لا
+    يحدد الحساب (مطابقةً لتصميم WEIGHT_SUPPORT_ACCOUNTS في config.py: 1300 =
+    جديد لأي عيار، 1310 = كسر لأي عيار). كانت هذه الدالة سابقاً تربط كل عيار
+    بحساب مختلف (ترقيم قديم) بصرف النظر عن النوع، مما كان يُسوّي بيوع الذهب
+    الجديد على حساب مخزون الكسر (أو العكس) عند عيارات غير 18.
+
+    Args:
+        karat: العيار (غير مستخدم في التحديد، يبقى للتوافق مع الاستدعاءات الحالية)
+        kind: 'scrap' للكسر، أي قيمة أخرى تُعامل كـ 'new' (جديد)
+
     Returns:
-        int: ID حساب المخزون
+        int: ID حساب المخزون المالي
     """
-    # ✅ إذا تم توحيد مخزون العيارات في حساب واحد، نعتمد إعداد inventory_account_id
-    # (قد يكون رقم حساب أو account.id حسب بيئة العميل).
+    # ✅ إذا تم توحيد مخزون العيارات/الأنواع في حساب واحد، نعتمد إعداد
+    # inventory_account_id (قد يكون رقم حساب أو account.id حسب بيئة العميل).
     try:
         settings = _load_weight_closing_settings() or {}
         preferred = settings.get('inventory_account_id')
@@ -1599,23 +1607,16 @@ def _get_inventory_account_by_karat(karat: int) -> int:
     except Exception:
         pass
 
-    # استخدام أرقام الحسابات بالترقيم القديم
-    karat_to_account = {
-        24: '1330',  # مخزون ذهب عيار 24
-        22: '1320',  # مخزون ذهب عيار 22
-        21: '1310',  # مخزون ذهب عيار 21
-        18: '1300',  # مخزون ذهب عيار 18
-    }
-    
-    account_number = karat_to_account.get(karat, '1310')  # افتراضي: عيار 21
-    
+    # حساب حسب النوع (جديد/كسر) — لا حسب العيار
+    account_number = '1310' if kind == 'scrap' else '1300'
+
     account = Account.query.filter_by(account_number=account_number).first()
     if account:
         return account.id
-    
+
     # fallback: استخدام الحساب من الإعدادات
     settings = _load_weight_closing_settings()
-    preferred = settings.get('inventory_account_id', 1310)
+    preferred = settings.get('inventory_account_id', 1300)
     try:
         preferred_int = int(preferred)
     except Exception:
@@ -15061,6 +15062,30 @@ def add_invoice():
                     if inv_acc_id:
                         inventory_accounts[karat] = inv_acc_id
 
+            # بيع كسر مرتجع: استخدام حساب صندوق الكسر للوزن بدلاً من مخزون الكسر
+            # العام، ليطابق فاتورة البيع الأصلية (نفس منطق بيع الكسر في فرع 'بيع'
+            # أعلاه). بدون هذا، الوزن المرتجع يدخل حساب مختلف عن الذي خرج منه فعلياً.
+            _ret_scrap_sale_safe_account_id = None
+            _ret_scrap_sale_target_sb_id = None
+            if gold_type == 'scrap':
+                try:
+                    _ret_sale_settings = Settings.query.first()
+                    _ret_scrap_sale_sb_id = getattr(_ret_sale_settings, 'main_scrap_gold_safe_box_id', None) if _ret_sale_settings else None
+                    if not _ret_scrap_sale_sb_id:
+                        _ret_fallback_sale_sb = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+                        if _ret_fallback_sale_sb:
+                            _ret_scrap_sale_sb_id = _ret_fallback_sale_sb.id
+                    if _ret_scrap_sale_sb_id:
+                        _ret_sale_gold_safe = SafeBox.query.get(int(_ret_scrap_sale_sb_id))
+                        if _ret_sale_gold_safe and getattr(_ret_sale_gold_safe, 'account', None):
+                            _ret_scrap_sale_safe_account_id = int(_ret_sale_gold_safe.account.id)
+                            _ret_scrap_sale_target_sb_id = int(_ret_sale_gold_safe.id)
+                            # Override: كل العيارات تشير لحساب صندوق الكسر المالي
+                            inventory_accounts = {k: _ret_scrap_sale_safe_account_id for k in ['18', '21', '22', '24']}
+                except Exception:
+                    _ret_scrap_sale_safe_account_id = None
+                    _ret_scrap_sale_target_sb_id = None
+
             # ─── الضريبة ───
             # المصدر الأول: items المُرسلة من الفرونت (tax_amount)
             _total_tax_ret = sum(
@@ -15213,12 +15238,16 @@ def add_invoice():
             # ─── SBT صندوق الكسر (بيع كسر مرتجع → الكسر يعود للصندوق) ───
             if gold_type == 'scrap' and not approval_required:
                 try:
-                    _ret_settings = Settings.query.first()
-                    _ret_scrap_sb_id = getattr(_ret_settings, 'main_scrap_gold_safe_box_id', None) if _ret_settings else None
+                    # نعيد استخدام نفس الخزينة المُحدَّدة أعلاه لحساب المخزون
+                    # (inventory_accounts override) لضمان التطابق بين القيد و SBT.
+                    _ret_scrap_sb_id = _ret_scrap_sale_target_sb_id
                     if not _ret_scrap_sb_id:
-                        _fb = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
-                        if _fb:
-                            _ret_scrap_sb_id = _fb.id
+                        _ret_settings = Settings.query.first()
+                        _ret_scrap_sb_id = getattr(_ret_settings, 'main_scrap_gold_safe_box_id', None) if _ret_settings else None
+                        if not _ret_scrap_sb_id:
+                            _fb = SafeBox.query.filter_by(safe_type='gold', is_active=True).order_by(SafeBox.is_default.desc(), SafeBox.id.asc()).first()
+                            if _fb:
+                                _ret_scrap_sb_id = _fb.id
                     if _ret_scrap_sb_id:
                         _ret_sbt_weights = {
                             'weight_18k': float(gold_by_karat.get('18', 0.0) or 0.0),
@@ -15247,24 +15276,109 @@ def add_invoice():
             # ثم _append_safe_transactions_for_voucher. لا حاجة لتكرارها هنا.
 
             # ─── إلغاء/تعديل أمر تسكير الوزن للفاتورة الأصلية ───
+            # ملاحظة: total_weight_main_karat هو الحقل الذي يجب تقليصه، لا
+            # remaining_weight_main_karat — لأن _auto_consume_weight_closing
+            # يعيد حساب remaining دائماً من (total - executed) عند كل تنفيذ
+            # لاحق، فأي تعديل مباشر عليه فقط يُمحى ولا يدوم.
+            # كما أن أسماء الحالة الصحيحة هي 'open' / 'partially_closed' /
+            # 'closed' (لا 'partial' التي لا تُستخدم في أي مكان آخر بالكود).
+            # إن كان جزء من الكمية المرتجعة قد سُوّي نقدياً مسبقاً (قيد تكلفة
+            # مبيعات COGS عبر تنفيذ تسكير سابق)، يجب عكس ذلك القيد بدلاً من
+            # ترك نقد خارج حساب المخزون المالي لذهب رجع فعلياً للمحل.
             _orig_inv_id = data.get('original_invoice_id')
             if _orig_inv_id:
                 try:
                     _orig_wco = WeightClosingOrder.query.filter_by(
                         invoice_id=int(_orig_inv_id)
                     ).first()
-                    if _orig_wco and _orig_wco.status in ('open', 'partial'):
+                    if _orig_wco and _orig_wco.status in ('open', 'partially_closed', 'closed'):
                         _ret_weight_mk = sum(
                             float(w or 0) * int(k) / (get_main_karat() or 21)
                             for k, w in gold_by_karat.items()
                             if float(w or 0) > 0
                         )
-                        _orig_wco.remaining_weight_main_karat = max(
-                            (_orig_wco.remaining_weight_main_karat or 0.0) - _ret_weight_mk,
-                            0.0,
-                        )
-                        if _orig_wco.remaining_weight_main_karat <= 0.001:
-                            _orig_wco.status = 'cancelled'
+                        if _ret_weight_mk > 0:
+                            _old_total = float(_orig_wco.total_weight_main_karat or 0.0)
+                            _old_executed = float(_orig_wco.executed_weight_main_karat or 0.0)
+                            _new_total = max(_old_total - _ret_weight_mk, 0.0)
+                            _over_executed = max(_old_executed - _new_total, 0.0)
+
+                            if _over_executed > 0.0001:
+                                _remaining_to_reverse = _over_executed
+                                _cogs_account = Account.query.filter_by(account_number='521').first()
+                                _inv_fin_id = _get_inventory_account_by_karat(
+                                    int(_orig_wco.main_karat or get_main_karat() or 21),
+                                    kind=(_orig_wco.invoice.gold_type if _orig_wco.invoice else 'new'),
+                                )
+                                _past_executions = (
+                                    WeightClosingExecution.query
+                                    .filter_by(order_id=_orig_wco.id)
+                                    .filter(WeightClosingExecution.weight_main_karat > 0)
+                                    .order_by(WeightClosingExecution.created_at.desc(), WeightClosingExecution.id.desc())
+                                    .all()
+                                )
+                                for _exec_row in _past_executions:
+                                    if _remaining_to_reverse <= 0.0001:
+                                        break
+                                    _exec_weight = float(_exec_row.weight_main_karat or 0.0)
+                                    if _exec_weight <= 0:
+                                        continue
+                                    _reverse_chunk = min(_exec_weight, _remaining_to_reverse)
+                                    _exec_price = float(_exec_row.price_per_gram or 0.0)
+                                    _reverse_24k = convert_from_main_karat(_reverse_chunk, 24)
+                                    _reverse_cash = round(_reverse_24k * _exec_price, 2) if _exec_price else 0.0
+
+                                    if _reverse_cash > 0 and _cogs_account and _inv_fin_id:
+                                        create_dual_journal_entry(
+                                            journal_entry_id=journal_entry.id,
+                                            account_id=_inv_fin_id,
+                                            cash_debit=_reverse_cash,
+                                            description=(
+                                                f"عكس تكلفة مبيعات مُسوّاة سابقاً - مرتجع بيع "
+                                                f"(أمر {_orig_wco.order_number})"
+                                            ),
+                                        )
+                                        create_dual_journal_entry(
+                                            journal_entry_id=journal_entry.id,
+                                            account_id=_cogs_account.id,
+                                            cash_credit=_reverse_cash,
+                                            description=(
+                                                f"عكس تكلفة مبيعات مُسوّاة سابقاً - مرتجع بيع "
+                                                f"(أمر {_orig_wco.order_number})"
+                                            ),
+                                        )
+
+                                    db.session.add(WeightClosingExecution(
+                                        order_id=_orig_wco.id,
+                                        source_invoice_id=new_invoice.id,
+                                        execution_type='sale_return_reversal',
+                                        weight_main_karat=-_reverse_chunk,
+                                        price_per_gram=_exec_price,
+                                        journal_entry_id=journal_entry.id,
+                                        notes=f'عكس جزئي لتنفيذ تسكير سابق بسبب مرتجع بيع #{new_invoice.id}',
+                                    ))
+                                    _remaining_to_reverse -= _reverse_chunk
+
+                            _orig_wco.total_weight_main_karat = round(_new_total, 6)
+                            _orig_wco.executed_weight_main_karat = round(max(_old_executed - _over_executed, 0.0), 6)
+                            _orig_wco.remaining_weight_main_karat = round(
+                                max(_orig_wco.total_weight_main_karat - _orig_wco.executed_weight_main_karat, 0.0), 6
+                            )
+                            if _orig_wco.total_weight_main_karat <= 0.001:
+                                _orig_wco.status = 'cancelled'
+                            elif _orig_wco.remaining_weight_main_karat <= 0.0001:
+                                _orig_wco.status = 'closed'
+                            elif _orig_wco.executed_weight_main_karat > 0:
+                                _orig_wco.status = 'partially_closed'
+                            else:
+                                _orig_wco.status = 'open'
+
+                            if _orig_wco.invoice:
+                                _orig_wco.invoice.weight_closing_status = _orig_wco.status
+                                _orig_wco.invoice.weight_closing_total_weight = _orig_wco.total_weight_main_karat
+                                _orig_wco.invoice.weight_closing_executed_weight = _orig_wco.executed_weight_main_karat
+                                _orig_wco.invoice.weight_closing_remaining_weight = _orig_wco.remaining_weight_main_karat
+
                         db.session.flush()
                 except Exception as _wco_exc:
                     print(f"⚠️ WeightClosingOrder update for sale return failed: {_wco_exc}")
@@ -31610,7 +31724,10 @@ def _auto_consume_weight_closing(
             karat_line = InvoiceKaratLine.query.filter_by(invoice_id=invoice.id).first()
             execution_karat = karat_line.karat if karat_line else get_main_karat()
 
-            inventory_account_id = _get_inventory_account_by_karat(execution_karat)
+            # نوع الذهب يُحدَّد من فاتورة البيع الأصلية لهذا الأمر (order)، لا من
+            # الفاتورة المُسوِّية — فهو ما يحدد أي مخزون (جديد/كسر) يُستهلَك فعلياً.
+            _order_gold_kind = order.invoice.gold_type if order.invoice else 'new'
+            inventory_account_id = _get_inventory_account_by_karat(execution_karat, kind=_order_gold_kind)
 
             bridge_account_id = (
                 Account.query.filter_by(account_number='1710').first()
@@ -31669,7 +31786,8 @@ def _auto_consume_weight_closing(
                     if invoice else None
                 )
                 _exec_karat_cogs = int(_karat_ln.karat) if _karat_ln else get_main_karat()
-                _inv_fin_id = _get_inventory_account_by_karat(_exec_karat_cogs)
+                _order_gold_kind_cogs = order.invoice.gold_type if order.invoice else 'new'
+                _inv_fin_id = _get_inventory_account_by_karat(_exec_karat_cogs, kind=_order_gold_kind_cogs)
                 if _inv_fin_id:
                     create_dual_journal_entry(
                         journal_entry_id=journal_entry_id,
