@@ -2829,19 +2829,24 @@ class InvoicePayment(db.Model):
     # ربط بالفاتورة
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id', ondelete='CASCADE'), nullable=False)
     
-    # ربط بوسيلة الدفع — حقل هجين، لا "immutable audit field" ولا "mutable
-    # business truth" بشكل كامل:
+    # ربط بوسيلة الدفع — حقل هجين بمرحلتين، لا "immutable audit field" ولا
+    # "mutable business truth" بشكل كامل:
     #   - قبل وجود أي SettlementLine لهذه الدفعة: قابل للتصحيح (انظر
-    #     POST /invoices/<id>/payments/<id>/correct-method) — يمثّل "أفضل
-    #     فهم حالي"، derived/correctable.
-    #   - بعد وجود SettlementLine واحدة على الأقل: يتجمّد نهائياً ويصبح
-    #     حقيقة تدقيق ثابتة (الدفعة دخلت سلسلة InvoicePayment→SettlementLine
-    #     →سند تسوية→تحويل بنكي حقيقي تحت هذا التصنيف)؛ الـ endpoint أعلاه
-    #     يرفض أي تعديل في هذه الحالة.
-    # لأي تقرير يحتاج إعادة بناء دقيقة لما كان مسجَّلاً في لحظة تاريخية معيّنة
-    # (لا الحالة الحالية بعد تصحيح لاحق): استخدم AuditLog
-    # (action='correct_payment_method') لا هذا الحقل مباشرة، طالما الدفعة لم
-    # تكن مُسوّاة وقت تلك اللحظة.
+    #     POST /invoices/<id>/payments/<id>/correct-method) — "أفضل فهم
+    #     حالي"، derived/correctable.
+    #   - بعد وجود SettlementLine واحدة على الأقل: القيمة تتجمَّد (الـ
+    #     endpoint أعلاه يرفض أي تعديل) — لكن التجمُّد لا يعني أن هذا الحقل
+    #     يصبح "الحقيقة التاريخية". هو فقط يتوقّف عن كونه قابلاً للتغيير؛
+    #     الحقيقة التاريخية الفعلية (أي حساب استقبل المال، بأي عمولة) تبقى
+    #     دائماً في JournalEntryLine/VoucherAccountLine وقت تلك التسوية، لا
+    #     في إعادة استدلال عبر هذا الحقل + إعدادات PaymentMethod *الحالية*.
+    #     مثال ملموس: لو تغيّر PaymentMethod.default_safe_box_id لاحقاً، فإن
+    #     "payment_method_id → default_safe_box_id الحالي" سيُعطي حساباً
+    #     مختلفاً عن الحساب الحقيقي الذي استُخدم وقت التسوية الفعلية.
+    # القاعدة العملية: أي إعادة بناء لحقيقة تاريخية (حالية أو سابقة على
+    # تصحيح) تُبنى من سجل الأحداث (event log) — JournalEntryLine +
+    # SettlementLine + AuditLog(action='correct_payment_method') — لا من
+    # قراءة هذا الحقل وإعادة تفسيره عبر أي إعداد حالي.
     payment_method_id = db.Column(db.Integer, db.ForeignKey('payment_method.id'), nullable=False)
     payment_method = db.relationship('PaymentMethod', backref='invoice_payments')
 
