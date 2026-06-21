@@ -8858,10 +8858,29 @@ def reassign_invoice_employee(invoice_id: int):
 
 
 
+def _compute_commission_fields(amount: float, pm) -> dict:
+    """Same formula used when an InvoicePayment is first created."""
+    rate = float(getattr(pm, 'commission_rate', 0.0) or 0.0)
+    try:
+        timing = str(getattr(pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+    except Exception:
+        timing = 'invoice'
+    if timing == 'settlement':
+        return {'commission_rate': rate, 'commission_amount': 0.0, 'commission_vat': 0.0, 'net_amount': amount}
+    commission_amount = amount * (rate / 100.0) if rate > 0 else 0.0
+    commission_vat = commission_amount * 0.15
+    return {
+        'commission_rate': rate,
+        'commission_amount': commission_amount,
+        'commission_vat': commission_vat,
+        'net_amount': amount - commission_amount - commission_vat,
+    }
+
+
 @api.route('/invoices/<int:invoice_id>/payments/<int:payment_id>/correct-method', methods=['POST'])
 @require_admin
 def correct_invoice_payment_method(invoice_id: int, payment_id: int):
-    """Correct the payment method of an invoice payment.
+    """Correct the payment method of an invoice payment -- fully or partially.
 
     Only allowed when the payment has not yet been settled (no SettlementLine
     at all). Once a SettlementLine exists, payment_method_id becomes part of
@@ -8875,10 +8894,23 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     posted JournalEntryLine. It creates a new, independent reclassification
     voucher (credit old account, debit new account) via the same
     create_journal_entry_from_voucher path every other voucher uses, tagged
-    reference_type='payment_method_correction'. Commission fields on the
-    InvoicePayment are fully recomputed for the new payment method.
+    reference_type='payment_method_correction'.
 
-    Body: { "new_payment_method_id": <int>, "reason": "<string>" }
+    Body: {
+      "new_payment_method_id": <int>,
+      "reason": "<string>",
+      "correction_amount": <float, optional>   # omit/equal to full amount = full reclassification (default)
+    }
+
+    If correction_amount is given and is LESS than the payment's full
+    amount, this is a SPLIT correction: the original row was a single
+    InvoicePayment that actually mixed two payment methods (e.g. one row of
+    1000 recorded entirely as cash, when really 600 was مدى + 400 cash).
+    The original row's own amount/commission shrink to the remainder under
+    the OLD payment method (its payment_method_id is NOT changed); a NEW
+    InvoicePayment row is created for correction_amount under the NEW
+    payment method; the reclassification voucher moves only
+    correction_amount, not the full original amount.
     """
     invoice = Invoice.query.get(invoice_id)
     if not invoice:
@@ -8908,6 +8940,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     data = request.get_json(silent=True) or {}
     new_pm_id = data.get('new_payment_method_id')
     reason = str(data.get('reason') or '').strip()
+    correction_amount_raw = data.get('correction_amount')
 
     if not new_pm_id:
         return jsonify({'error': 'new_payment_method_id is required'}), 400
@@ -8926,6 +8959,22 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     if old_pm_id == new_pm_id:
         return jsonify({'error': 'same_method', 'message': 'وسيلة الدفع هي نفسها الحالية'}), 400
 
+    full_amount = float(ip.amount or 0.0)
+    correction_amount = full_amount
+    if correction_amount_raw is not None:
+        try:
+            correction_amount = float(correction_amount_raw)
+        except (TypeError, ValueError):
+            return jsonify({'error': 'invalid correction_amount'}), 400
+        if correction_amount <= 0:
+            return jsonify({'error': 'correction_amount must be positive'}), 400
+        if correction_amount > full_amount + 0.005:
+            return jsonify({
+                'error': 'correction_amount_exceeds_payment',
+                'message': f'المبلغ المطلوب تصحيحه ({correction_amount:.2f}) أكبر من مبلغ الدفعة نفسها ({full_amount:.2f})',
+            }), 400
+    is_partial = abs(correction_amount - full_amount) > 0.005
+
     old_safe_account_id = None
     new_safe_account_id = None
     if old_sb_id is not None:
@@ -8943,39 +8992,58 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
             'net_amount': ip.net_amount,
         }
 
-        ip.payment_method_id = new_pm_id
+        new_ip_id = None
+        if not is_partial:
+            # Full reclassification: same row, new payment method.
+            ip.payment_method_id = new_pm_id
+            for k, v in _compute_commission_fields(full_amount, new_pm).items():
+                setattr(ip, k, v)
 
-        # Recompute commission fields for the NEW payment method (same formula
-        # used when an InvoicePayment is first created -- see the payment
-        # creation handler).
-        amount = float(ip.amount or 0.0)
-        new_commission_rate = float(getattr(new_pm, 'commission_rate', 0.0) or 0.0)
-        try:
-            new_commission_timing = str(getattr(new_pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
-        except Exception:
-            new_commission_timing = 'invoice'
-
-        if new_commission_timing == 'settlement':
-            ip.commission_rate = new_commission_rate
-            ip.commission_amount = 0.0
-            ip.commission_vat = 0.0
-            ip.net_amount = amount
+            if new_sb_id is not None:
+                sbt = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).first()
+                if sbt:
+                    sbt.safe_box_id = new_sb_id
         else:
-            new_commission_amount = amount * (new_commission_rate / 100.0) if new_commission_rate > 0 else 0.0
-            new_commission_vat = new_commission_amount * 0.15
-            ip.commission_rate = new_commission_rate
-            ip.commission_amount = new_commission_amount
-            ip.commission_vat = new_commission_vat
-            ip.net_amount = amount - new_commission_amount - new_commission_vat
+            # Split: original row shrinks to the remainder, stays under the
+            # OLD payment method; a new row is created for correction_amount
+            # under the NEW payment method.
+            remainder = round(full_amount - correction_amount, 2)
+            ip.amount = remainder
+            for k, v in _compute_commission_fields(remainder, old_pm).items():
+                setattr(ip, k, v)
 
-        # Update the linked SafeBoxTransaction safe_box_id (tracking table, not a GL posting).
-        if new_sb_id is not None:
-            sbt = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).first()
-            if sbt:
-                sbt.safe_box_id = new_sb_id
+            old_sbt = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).first()
+            if old_sbt:
+                old_sbt.amount_cash = round(float(old_sbt.amount_cash or 0.0) - correction_amount, 2)
+
+            new_ip = InvoicePayment(
+                invoice_id=invoice.id,
+                payment_method_id=new_pm_id,
+                amount=correction_amount,
+                notes=f'تقسيم من دفعة #{payment_id} — {reason}',
+                **_compute_commission_fields(correction_amount, new_pm),
+            )
+            db.session.add(new_ip)
+            db.session.flush()
+            new_ip_id = new_ip.id
+
+            if new_sb_id is not None:
+                db.session.add(SafeBoxTransaction(
+                    safe_box_id=new_sb_id,
+                    ref_type='invoice_payment',
+                    ref_id=new_ip.id,
+                    invoice_id=invoice.id,
+                    invoice_payment_id=new_ip.id,
+                    payment_method_id=new_pm_id,
+                    direction='in',
+                    amount_cash=correction_amount,
+                    notes=f'تقسيم من دفعة #{payment_id} — {reason}',
+                    created_by=(g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin'),
+                ))
 
         # Independent reclassification voucher -- never touches the original
-        # posted JournalEntryLine. Credit old account, debit new account.
+        # posted JournalEntryLine. Credit old account, debit new account, for
+        # correction_amount only (== full_amount when not partial).
         reclass_voucher_number = None
         reclass_je_id = None
         if old_safe_account_id and new_safe_account_id and old_safe_account_id != new_safe_account_id:
@@ -8986,20 +9054,25 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                 voucher_type='adjustment',
                 date=recon_dt,
                 description=(
-                    f'إعادة تصنيف وسيلة دفع: فاتورة {invoice.invoice_number} دفعة #{payment_id} '
-                    f'({getattr(old_pm, "name", old_pm_id)} → {new_pm.name}) — {reason}'
+                    f'إعادة تصنيف وسيلة دفع{" (جزئي)" if is_partial else ""}: فاتورة {invoice.invoice_number} '
+                    f'دفعة #{payment_id} ({getattr(old_pm, "name", old_pm_id)} → {new_pm.name}، '
+                    f'{correction_amount:.2f} من {full_amount:.2f}) — {reason}'
                 ),
                 notes=json.dumps({
                     'old_payment_method_id': old_pm_id,
                     'new_payment_method_id': new_pm_id,
                     'old_commission': old_commission,
                     'reason': reason,
+                    'is_partial': is_partial,
+                    'correction_amount': correction_amount,
+                    'full_amount': full_amount,
+                    'new_invoice_payment_id': new_ip_id,
                 }, ensure_ascii=False),
                 created_by=(g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin'),
                 status='approved',
                 approved_by=(g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin'),
                 approved_at=recon_dt,
-                amount_cash=amount,
+                amount_cash=correction_amount,
                 amount_gold=0.0,
             )
             db.session.add(voucher)
@@ -9010,7 +9083,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                 account_id=int(new_safe_account_id),
                 line_type='debit',
                 amount_type='cash',
-                amount=amount,
+                amount=correction_amount,
                 description=f'إعادة تصنيف دفعة #{payment_id} إلى {new_pm.name}',
             ))
             db.session.add(VoucherAccountLine(
@@ -9018,7 +9091,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                 account_id=int(old_safe_account_id),
                 line_type='credit',
                 amount_type='cash',
-                amount=amount,
+                amount=correction_amount,
                 description=f'إعادة تصنيف دفعة #{payment_id} من {getattr(old_pm, "name", old_pm_id)}',
             ))
             db.session.flush()
@@ -9033,9 +9106,9 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
             new_acc = Account.query.get(int(new_safe_account_id))
             old_acc = Account.query.get(int(old_safe_account_id))
             if new_acc is not None:
-                new_acc.update_balance(cash_amount=amount)
+                new_acc.update_balance(cash_amount=correction_amount)
             if old_acc is not None:
-                old_acc.update_balance(cash_amount=-amount)
+                old_acc.update_balance(cash_amount=-correction_amount)
 
             reclass_voucher_number = voucher.voucher_number
 
@@ -9054,12 +9127,10 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                     'old_safe_account_id': old_safe_account_id,
                     'new_safe_account_id': new_safe_account_id,
                     'old_commission': old_commission,
-                    'new_commission': {
-                        'commission_rate': ip.commission_rate,
-                        'commission_amount': ip.commission_amount,
-                        'commission_vat': ip.commission_vat,
-                        'net_amount': ip.net_amount,
-                    },
+                    'is_partial': is_partial,
+                    'full_amount': full_amount,
+                    'correction_amount': correction_amount,
+                    'new_invoice_payment_id': new_ip_id,
                     'reclassification_voucher_number': reclass_voucher_number,
                     'reclassification_journal_entry_id': reclass_je_id,
                     'reason': reason,
@@ -9082,6 +9153,11 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
             'new_safe_box_id': new_sb_id,
             'old_safe_account_id': old_safe_account_id,
             'new_safe_account_id': new_safe_account_id,
+            'is_partial': is_partial,
+            'full_amount': full_amount,
+            'correction_amount': correction_amount,
+            'remaining_amount_on_original': float(ip.amount or 0.0) if is_partial else None,
+            'new_invoice_payment_id': new_ip_id,
             'reclassification_voucher_number': reclass_voucher_number,
             'reclassification_journal_entry_id': reclass_je_id,
         }), 200
