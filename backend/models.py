@@ -2052,6 +2052,53 @@ class JournalEntryLine(db.Model):
         }
 
 
+def _validate_journal_entry_line_clearing_account_or_raise(line: 'JournalEntryLine') -> None:
+    """Stage-1 clearing-account guard.
+
+    Any JournalEntryLine touching a clearing-type safe box's account (مدى,
+    تابي, تمارا, فيزا/ماستر, ...) must belong to a JournalEntry with a
+    non-empty reference_type. An unattributed entry on a clearing account is
+    exactly how a historical ~4380 SAR adjustment on مدى's account became
+    untraceable (no reference_type, no created_by, no link to any process).
+    This does not curate *which* reference_type values are allowed yet
+    (settlement engine vs. manual reconciliation/correction) -- it only
+    blocks the one confirmed failure mode: no classification at all. A
+    stage-2 whitelist can tighten this further once all legitimate
+    reference_type values across every clearing account are audited.
+    """
+    account_id = getattr(line, 'account_id', None)
+    if not account_id:
+        return
+
+    is_clearing_account = (
+        SafeBox.query.filter_by(safe_type='clearing', account_id=account_id).first() is not None
+    )
+    if not is_clearing_account:
+        return
+
+    journal_entry_id = getattr(line, 'journal_entry_id', None)
+    entry = JournalEntry.query.get(journal_entry_id) if journal_entry_id else None
+    reference_type = (getattr(entry, 'reference_type', None) or '').strip() if entry else ''
+
+    if not reference_type:
+        raise ValueError(
+            f"Unclassified JournalEntryLine on clearing account #{account_id}: the parent "
+            f"JournalEntry has no reference_type. Entries touching a clearing-account must be "
+            f"explicitly classified (e.g. 'clearing_settlement' via the settlement engine, or a "
+            f"tagged manual reconciliation/correction entry with a stated reason)."
+        )
+
+
+@event.listens_for(JournalEntryLine, 'before_insert')
+def _guard_journal_entry_line_clearing_account_before_insert(mapper, connection, target):
+    _validate_journal_entry_line_clearing_account_or_raise(target)
+
+
+@event.listens_for(JournalEntryLine, 'before_update')
+def _guard_journal_entry_line_clearing_account_before_update(mapper, connection, target):
+    _validate_journal_entry_line_clearing_account_or_raise(target)
+
+
 class DimensionDefinition(db.Model):
     __tablename__ = 'dimension_definition'
 
