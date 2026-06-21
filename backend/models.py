@@ -2829,22 +2829,38 @@ class InvoicePayment(db.Model):
     # ربط بالفاتورة
     invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id', ondelete='CASCADE'), nullable=False)
     
-    # ربط بوسيلة الدفع
+    # ربط بوسيلة الدفع — حقل هجين، لا "immutable audit field" ولا "mutable
+    # business truth" بشكل كامل:
+    #   - قبل وجود أي SettlementLine لهذه الدفعة: قابل للتصحيح (انظر
+    #     POST /invoices/<id>/payments/<id>/correct-method) — يمثّل "أفضل
+    #     فهم حالي"، derived/correctable.
+    #   - بعد وجود SettlementLine واحدة على الأقل: يتجمّد نهائياً ويصبح
+    #     حقيقة تدقيق ثابتة (الدفعة دخلت سلسلة InvoicePayment→SettlementLine
+    #     →سند تسوية→تحويل بنكي حقيقي تحت هذا التصنيف)؛ الـ endpoint أعلاه
+    #     يرفض أي تعديل في هذه الحالة.
+    # لأي تقرير يحتاج إعادة بناء دقيقة لما كان مسجَّلاً في لحظة تاريخية معيّنة
+    # (لا الحالة الحالية بعد تصحيح لاحق): استخدم AuditLog
+    # (action='correct_payment_method') لا هذا الحقل مباشرة، طالما الدفعة لم
+    # تكن مُسوّاة وقت تلك اللحظة.
     payment_method_id = db.Column(db.Integer, db.ForeignKey('payment_method.id'), nullable=False)
     payment_method = db.relationship('PaymentMethod', backref='invoice_payments')
-    
+
     # المبلغ المدفوع بهذه الوسيلة
     amount = db.Column(db.Float, nullable=False)
-    
-    # نسخة من العمولة وقت الدفع (للحفظ التاريخي)
+
+    # العمولة المحسوبة بناءً على وسيلة الدفع الحالية للدفعة — derived data لا
+    # historical snapshot: تُعاد حسابها بالكامل (rate/amount/vat/net) عند أي
+    # تصحيح لـ payment_method_id قبل التسوية (نفس قاعدة الحقل أعلاه)، فتعكس
+    # دائماً وسيلة الدفع الحالية المسجَّلة، لا بالضرورة ما حُسب وقت الدفع
+    # الأصلي إن جرى تصحيح لاحق.
     commission_rate = db.Column(db.Float, default=0.0)
-    
+
     # العمولة المحسوبة (بدون ضريبة)
     commission_amount = db.Column(db.Float, default=0.0)
-    
+
     # ضريبة القيمة المضافة على العمولة (15%)
     commission_vat = db.Column(db.Float, default=0.0)
-    
+
     # المبلغ الصافي بعد العمولة وضريبتها
     net_amount = db.Column(db.Float, nullable=False)
     
