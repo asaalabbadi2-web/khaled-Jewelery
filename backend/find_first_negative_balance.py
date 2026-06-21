@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from app import app
-from models import db, JournalEntry, JournalEntryLine
+from models import db, JournalEntry, JournalEntryLine, Voucher
 
 
 def _db_has_column(table, column):
@@ -62,11 +62,28 @@ def run(account_id: int):
         )
         print(f"عدد سطور القيود (نفس فلاتر كشف الحساب): {len(rows)}")
 
-        # رتّب بـ created_at الحقيقي للقيد، لا date القابل للتقديم بأثر رجعي
-        rows_sorted = sorted(
-            rows,
-            key=lambda pair: pair[1].created_at or pair[1].date,
-        )
+        # JournalEntry.created_at نفسه يُقدَّم بأثر رجعي ليطابق date لقيود
+        # السندات التلقائية (مؤكَّد: JE لِـ Voucher#1053 created_at=date=
+        # 2026-04-17T12:00، بينما Voucher#1053.created_at الحقيقي =
+        # 2026-04-18T19:01). المرجع الوحيد الموثوق دائماً هو created_at
+        # الخاص بالسند (Voucher) نفسه عند توفّره.
+        voucher_ids = {
+            entry.reference_id for _, entry in rows
+            if entry.reference_type == 'voucher' and entry.reference_id
+        }
+        voucher_created_at = {
+            v.id: v.created_at
+            for v in Voucher.query.filter(Voucher.id.in_(voucher_ids)).all()
+        } if voucher_ids else {}
+
+        def true_timestamp(entry):
+            if entry.reference_type == 'voucher' and entry.reference_id in voucher_created_at:
+                ts = voucher_created_at[entry.reference_id]
+                if ts:
+                    return ts
+            return entry.created_at or entry.date
+
+        rows_sorted = sorted(rows, key=lambda pair: true_timestamp(pair[1]))
 
         running = 0.0
         min_running = 0.0
@@ -82,7 +99,7 @@ def run(account_id: int):
                 min_running = running
 
             if prev_running >= -0.01 and running < -0.01:
-                ts = entry.created_at or entry.date
+                ts = true_timestamp(entry)
                 event = {
                     'journal_entry_id': entry.id,
                     'entry_number': entry.entry_number,
