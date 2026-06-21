@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from app import app
-from models import db, SafeBox, JournalEntry, JournalEntryLine
+from models import db, SafeBox, JournalEntry, JournalEntryLine, _KNOWN_CLEARING_REFERENCE_TYPES
 
 
 def _db_has_column(table, column):
@@ -106,7 +106,12 @@ def run():
             acc_report = []
             for ref, b in sorted(acc_buckets.items(), key=lambda kv: -kv[1]['count']):
                 net = round(b['debit'] - b['credit'], 2)
-                flag = '  ⚠️ يحتاج مراجعة (غير مصنَّف)' if 'NULL' in ref else ''
+                if 'NULL' in ref:
+                    flag = '  ⚠️ يحتاج مراجعة (غير مصنَّف)'
+                elif ref not in _KNOWN_CLEARING_REFERENCE_TYPES:
+                    flag = '  ⚠️ خارج القائمة المعروفة حالياً (مرحلة 2 — راجع قبل الترقية لمرحلة 3)'
+                else:
+                    flag = ''
                 print(f"  {ref:30s} | عدد={b['count']:4d} | مدين={b['debit']:12.2f} | "
                       f"دائن={b['credit']:12.2f} | صافي={net:12.2f}{flag}")
                 print(f"      آخر مثال ({b['latest']}): {(b['sample_description'] or '')[:90]}")
