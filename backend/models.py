@@ -6,6 +6,7 @@ except ImportError:  # Local scripts running from backend/ directory
 # SQLAlchemy models for Customer, Item, Invoice, InvoiceItem
 from datetime import datetime, date, time
 import json
+import logging
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy import event, text
@@ -2052,19 +2053,43 @@ class JournalEntryLine(db.Model):
         }
 
 
+_CLEARING_ACCOUNT_GUARD_LOGGER = logging.getLogger('clearing_account_guard')
+
+# Stage-2 (audit mode): provisionally allowed reference_type values on
+# clearing accounts, based on everything actually observed across مدى/تابي/
+# تمارا/فيزا-ماستر while investigating مدى's balance history. 'voucher' stays
+# allowed deliberately -- it covers both legitimate legacy migration-era
+# receipts and at least one questionable ad-hoc transfer (RV-2026-00482), and
+# there isn't yet enough evidence to tell those apart by reference_type alone.
+# Anything outside this set is NOT blocked yet -- only logged -- so a real
+# legitimate path we haven't audited isn't broken. Promote to a hard
+# whitelist (stage 3) only after a observation period with zero unexpected
+# warnings.
+_KNOWN_CLEARING_REFERENCE_TYPES = {
+    'clearing_settlement',
+    'invoice_payment',
+    'invoice_payments',
+    'voucher',
+    'voucher_reversal',
+    'payment_method_correction',
+    'invoice',
+}
+
+
 def _validate_journal_entry_line_clearing_account_or_raise(line: 'JournalEntryLine') -> None:
-    """Stage-1 clearing-account guard.
+    """Stage-1 (enforced) + stage-2 (audit-only) clearing-account guard.
 
     Any JournalEntryLine touching a clearing-type safe box's account (مدى,
     تابي, تمارا, فيزا/ماستر, ...) must belong to a JournalEntry with a
     non-empty reference_type. An unattributed entry on a clearing account is
     exactly how a historical ~4380 SAR adjustment on مدى's account became
     untraceable (no reference_type, no created_by, no link to any process).
-    This does not curate *which* reference_type values are allowed yet
-    (settlement engine vs. manual reconciliation/correction) -- it only
-    blocks the one confirmed failure mode: no classification at all. A
-    stage-2 whitelist can tighten this further once all legitimate
-    reference_type values across every clearing account are audited.
+    This is the only condition actually enforced (raises and blocks).
+
+    Stage 2: if reference_type is present but not in
+    _KNOWN_CLEARING_REFERENCE_TYPES, log a warning and allow it through
+    anyway. This collects real evidence of any reference_type we haven't
+    audited yet before stage 3 turns it into a hard rejection.
     """
     account_id = getattr(line, 'account_id', None)
     if not account_id:
@@ -2086,6 +2111,13 @@ def _validate_journal_entry_line_clearing_account_or_raise(line: 'JournalEntryLi
             f"JournalEntry has no reference_type. Entries touching a clearing-account must be "
             f"explicitly classified (e.g. 'clearing_settlement' via the settlement engine, or a "
             f"tagged manual reconciliation/correction entry with a stated reason)."
+        )
+
+    if reference_type not in _KNOWN_CLEARING_REFERENCE_TYPES:
+        _CLEARING_ACCOUNT_GUARD_LOGGER.warning(
+            "[stage-2 audit] Unknown reference_type=%r touching clearing account #%s "
+            "(JournalEntry#%s, created_by=%r) -- not blocked yet, review before stage-3 enforcement.",
+            reference_type, account_id, journal_entry_id, getattr(entry, 'created_by', None),
         )
 
 
