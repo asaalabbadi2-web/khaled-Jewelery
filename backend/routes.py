@@ -8863,9 +8863,20 @@ def reassign_invoice_employee(invoice_id: int):
 def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     """Correct the payment method of an invoice payment.
 
-    Only allowed when the payment has not yet been settled (no SettlementLine).
-    This atomically updates InvoicePayment.payment_method_id and the linked
-    SafeBoxTransaction.safe_box_id so the clearing ledger stays consistent.
+    Only allowed when the payment has not yet been settled (no SettlementLine
+    at all). Once a SettlementLine exists, payment_method_id becomes part of
+    the historical record (InvoicePayment -> SettlementLine -> Settlement
+    Voucher -> real bank transfer already happened under that
+    classification) and must never be rewritten -- any genuine economic
+    correction at that point has to be a separate reclassification/transfer
+    entry that does not touch payment_method_id.
+
+    For the allowed (pre-settlement) case, this never mutates an existing
+    posted JournalEntryLine. It creates a new, independent reclassification
+    voucher (credit old account, debit new account) via the same
+    create_journal_entry_from_voucher path every other voucher uses, tagged
+    reference_type='payment_method_correction'. Commission fields on the
+    InvoicePayment are fully recomputed for the new payment method.
 
     Body: { "new_payment_method_id": <int>, "reason": "<string>" }
     """
@@ -8877,7 +8888,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     if ip is None:
         return jsonify({'error': 'not_found', 'message': 'الدفعة غير موجودة'}), 404
 
-    # Block if already settled
+    # Block if already settled -- payment_method_id is now a historical fact.
     settled = (
         db.session.query(func.coalesce(func.sum(SettlementLine.amount_settled), 0.0))
         .filter(SettlementLine.invoice_payment_id == payment_id)
@@ -8886,15 +8897,22 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     if float(settled) > 0.005:
         return jsonify({
             'error': 'already_settled',
-            'message': 'لا يمكن تصحيح وسيلة الدفع بعد إتمام التسوية',
+            'message': (
+                'لا يمكن تصحيح وسيلة الدفع بعد دخول الدفعة في سلسلة تسوية فعلية '
+                '(InvoicePayment → SettlementLine → سند تسوية → تحويل بنكي). '
+                'أي تصحيح اقتصادي مطلوب يجب أن يتم بقيد تحويل/مطابقة مستقل '
+                'لا يغيّر تصنيف هذه الدفعة.'
+            ),
         }), 409
 
     data = request.get_json(silent=True) or {}
     new_pm_id = data.get('new_payment_method_id')
-    reason = str(data.get('reason') or 'تصحيح وسيلة الدفع').strip()
+    reason = str(data.get('reason') or '').strip()
 
     if not new_pm_id:
         return jsonify({'error': 'new_payment_method_id is required'}), 400
+    if not reason:
+        return jsonify({'error': 'reason is required', 'message': 'سبب التصحيح إلزامي'}), 400
 
     new_pm = PaymentMethod.query.get(new_pm_id)
     if new_pm is None:
@@ -8908,7 +8926,6 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
     if old_pm_id == new_pm_id:
         return jsonify({'error': 'same_method', 'message': 'وسيلة الدفع هي نفسها الحالية'}), 400
 
-    # Resolve GL accounts for old and new safe boxes
     old_safe_account_id = None
     new_safe_account_id = None
     if old_sb_id is not None:
@@ -8919,58 +8936,109 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
         new_safe_account_id = getattr(new_sb_obj, 'account_id', None) if new_sb_obj else None
 
     try:
+        old_commission = {
+            'commission_rate': ip.commission_rate,
+            'commission_amount': ip.commission_amount,
+            'commission_vat': ip.commission_vat,
+            'net_amount': ip.net_amount,
+        }
+
         ip.payment_method_id = new_pm_id
 
-        # 1. Update the linked SafeBoxTransaction safe_box_id
+        # Recompute commission fields for the NEW payment method (same formula
+        # used when an InvoicePayment is first created -- see the payment
+        # creation handler).
+        amount = float(ip.amount or 0.0)
+        new_commission_rate = float(getattr(new_pm, 'commission_rate', 0.0) or 0.0)
+        try:
+            new_commission_timing = str(getattr(new_pm, 'commission_timing', 'invoice') or 'invoice').strip().lower()
+        except Exception:
+            new_commission_timing = 'invoice'
+
+        if new_commission_timing == 'settlement':
+            ip.commission_rate = new_commission_rate
+            ip.commission_amount = 0.0
+            ip.commission_vat = 0.0
+            ip.net_amount = amount
+        else:
+            new_commission_amount = amount * (new_commission_rate / 100.0) if new_commission_rate > 0 else 0.0
+            new_commission_vat = new_commission_amount * 0.15
+            ip.commission_rate = new_commission_rate
+            ip.commission_amount = new_commission_amount
+            ip.commission_vat = new_commission_vat
+            ip.net_amount = amount - new_commission_amount - new_commission_vat
+
+        # Update the linked SafeBoxTransaction safe_box_id (tracking table, not a GL posting).
         if new_sb_id is not None:
-            sbt = SafeBoxTransaction.query.filter_by(
-                invoice_payment_id=payment_id
-            ).first()
+            sbt = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).first()
             if sbt:
                 sbt.safe_box_id = new_sb_id
 
-        # 2. Update the GL: re-point the consolidated JE line from old safe account → new safe account.
-        #    The consolidated JE (reference_type='invoice_payments') has 2 lines per payment;
-        #    the line with account_id == old_safe_account_id is the safe-box leg.
-        je_line_updated = False
+        # Independent reclassification voucher -- never touches the original
+        # posted JournalEntryLine. Credit old account, debit new account.
+        reclass_voucher_number = None
+        reclass_je_id = None
         if old_safe_account_id and new_safe_account_id and old_safe_account_id != new_safe_account_id:
-            marker = f'دفعة #{payment_id}'
-            consolidated_je = (
-                JournalEntry.query
-                .filter(
-                    JournalEntry.is_deleted == False,
-                    JournalEntry.reference_type == 'invoice_payments',
-                    JournalEntry.reference_id == int(invoice.id),
-                )
-                .first()
+            recon_dt = datetime.now()
+            voucher_number = generate_voucher_number('adjustment', voucher_date=recon_dt)
+            voucher = Voucher(
+                voucher_number=voucher_number,
+                voucher_type='adjustment',
+                date=recon_dt,
+                description=(
+                    f'إعادة تصنيف وسيلة دفع: فاتورة {invoice.invoice_number} دفعة #{payment_id} '
+                    f'({getattr(old_pm, "name", old_pm_id)} → {new_pm.name}) — {reason}'
+                ),
+                notes=json.dumps({
+                    'old_payment_method_id': old_pm_id,
+                    'new_payment_method_id': new_pm_id,
+                    'old_commission': old_commission,
+                    'reason': reason,
+                }, ensure_ascii=False),
+                created_by=(g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin'),
+                status='approved',
+                approved_by=(g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin'),
+                approved_at=recon_dt,
+                amount_cash=amount,
+                amount_gold=0.0,
             )
-            if consolidated_je:
-                safe_line = (
-                    JournalEntryLine.query
-                    .filter(
-                        JournalEntryLine.journal_entry_id == consolidated_je.id,
-                        JournalEntryLine.account_id == int(old_safe_account_id),
-                        JournalEntryLine.is_deleted == False,
-                        JournalEntryLine.description.contains(marker),
-                    )
-                    .first()
-                )
-                if safe_line:
-                    # Adjust cached balance_cash on both accounts
-                    net_cash = float(safe_line.cash_debit or 0.0) - float(safe_line.cash_credit or 0.0)
-                    try:
-                        old_acc = Account.query.get(int(old_safe_account_id))
-                        new_acc = Account.query.get(int(new_safe_account_id))
-                        if old_acc is not None:
-                            old_acc.balance_cash = float(old_acc.balance_cash or 0.0) - net_cash
-                        if new_acc is not None:
-                            new_acc.balance_cash = float(new_acc.balance_cash or 0.0) + net_cash
-                    except Exception:
-                        pass
-                    safe_line.account_id = int(new_safe_account_id)
-                    je_line_updated = True
+            db.session.add(voucher)
+            db.session.flush()
 
-        # 3. Audit log
+            db.session.add(VoucherAccountLine(
+                voucher_id=voucher.id,
+                account_id=int(new_safe_account_id),
+                line_type='debit',
+                amount_type='cash',
+                amount=amount,
+                description=f'إعادة تصنيف دفعة #{payment_id} إلى {new_pm.name}',
+            ))
+            db.session.add(VoucherAccountLine(
+                voucher_id=voucher.id,
+                account_id=int(old_safe_account_id),
+                line_type='credit',
+                amount_type='cash',
+                amount=amount,
+                description=f'إعادة تصنيف دفعة #{payment_id} من {getattr(old_pm, "name", old_pm_id)}',
+            ))
+            db.session.flush()
+
+            journal_entry = create_journal_entry_from_voucher(voucher)
+            if journal_entry:
+                journal_entry.reference_type = 'payment_method_correction'
+                journal_entry.reference_id = payment_id
+                voucher.journal_entry_id = journal_entry.id
+                reclass_je_id = journal_entry.id
+
+            new_acc = Account.query.get(int(new_safe_account_id))
+            old_acc = Account.query.get(int(old_safe_account_id))
+            if new_acc is not None:
+                new_acc.update_balance(cash_amount=amount)
+            if old_acc is not None:
+                old_acc.update_balance(cash_amount=-amount)
+
+            reclass_voucher_number = voucher.voucher_number
+
         try:
             AuditLog.log_action(
                 user_name=g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin',
@@ -8985,7 +9053,15 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
                     'new_safe_box_id': new_sb_id,
                     'old_safe_account_id': old_safe_account_id,
                     'new_safe_account_id': new_safe_account_id,
-                    'je_line_updated': je_line_updated,
+                    'old_commission': old_commission,
+                    'new_commission': {
+                        'commission_rate': ip.commission_rate,
+                        'commission_amount': ip.commission_amount,
+                        'commission_vat': ip.commission_vat,
+                        'net_amount': ip.net_amount,
+                    },
+                    'reclassification_voucher_number': reclass_voucher_number,
+                    'reclassification_journal_entry_id': reclass_je_id,
                     'reason': reason,
                 }, ensure_ascii=False),
                 ip_address=request.remote_addr,
@@ -9006,7 +9082,8 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
             'new_safe_box_id': new_sb_id,
             'old_safe_account_id': old_safe_account_id,
             'new_safe_account_id': new_safe_account_id,
-            'je_line_updated': je_line_updated,
+            'reclassification_voucher_number': reclass_voucher_number,
+            'reclassification_journal_entry_id': reclass_je_id,
         }), 200
 
     except Exception as exc:
