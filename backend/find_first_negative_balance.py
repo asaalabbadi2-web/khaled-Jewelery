@@ -1,17 +1,17 @@
 """
 find_first_negative_balance.py
 =================================
-قراءة فقط بالكامل. يبحث عن أول لحظة تاريخية حقيقية (بترتيب created_at
-الحقيقي لكل سند، لا حقل date القابل للتقديم بأثر رجعي للسندات التلقائية)
-نزل فيها الرصيد الفعلي لحساب مقاصة معيّن تحت الصفر — وهو ما يُفترض أن
-الحارس insufficient_clearing_balance في _create_clearing_settlement_voucher
-يمنعه دائماً.
+قراءة فقط بالكامل. يبحث عن أول لحظة تاريخية حقيقية نزل فيها الرصيد الفعلي
+لحساب معيّن تحت الصفر — وهو ما يُفترض أن الحارس insufficient_clearing_balance
+في _create_clearing_settlement_voucher يمنعه دائماً.
 
-لكل سطر حساب (VoucherAccountLine) على هذا الحساب، يجلب created_at الحقيقي
-للسند الأب (لا تاريخ السند date)، يرتّب زمنياً بدقة، ويعيد بناء الرصيد
-الجاري الحقيقي. عند أول نزول تحت الصفر، يطبع تفاصيل كاملة عن السند
-المسؤول (نوعه، مُنشئه، مبلغه، ما كان متاحاً فعلياً قبل لحظة إنشائه بالضبط)
-ليُحدَّد بدقة هل الحارس فشل، أم تم تجاوزه عبر مسار آخر.
+يقرأ من JournalEntryLine مباشرة (المصدر نفسه الذي يستخدمه endpoint كشف
+الحساب /api/accounts/<id>/statement، بنفس فلاتر is_deleted/is_posted
+تماماً، لضمان مطابقة العدد الكامل للسطور) — لكن يرتّب بـ
+JournalEntry.created_at الحقيقي (لا JournalEntry.date القابل للتقديم
+بأثر رجعي للسندات التلقائية، الذي يستخدمه كشف الحساب نفسه للعرض).
+
+عند أول نزول تحت الصفر، يطبع تفاصيل كاملة عن القيد المسؤول.
 
 لا يُعدّل أي بيانات.
 
@@ -29,76 +29,89 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(__file__))
 
 from app import app
-from models import db, VoucherAccountLine, Voucher
+from models import db, JournalEntry, JournalEntryLine
+
+
+def _db_has_column(table, column):
+    try:
+        from sqlalchemy import inspect as sa_inspect
+        inspector = sa_inspect(db.engine)
+        cols = [c['name'] for c in inspector.get_columns(table)]
+        return column in cols
+    except Exception:
+        return False
 
 
 def run(account_id: int):
     with app.app_context():
         run_dt = datetime.now(timezone.utc)
 
+        filters = [
+            JournalEntryLine.account_id == account_id,
+            JournalEntry.is_deleted == False,
+            JournalEntryLine.is_deleted == False,
+        ]
+        if _db_has_column('journal_entry', 'is_posted'):
+            filters.append(JournalEntry.is_posted == True)
+
         rows = (
-            db.session.query(VoucherAccountLine, Voucher)
-            .join(Voucher, Voucher.id == VoucherAccountLine.voucher_id)
-            .filter(VoucherAccountLine.account_id == account_id)
+            db.session.query(JournalEntryLine, JournalEntry)
+            .join(JournalEntry, JournalEntry.id == JournalEntryLine.journal_entry_id)
+            .filter(*filters)
             .all()
         )
-        print(f"عدد سطور الحساب: {len(rows)}")
+        print(f"عدد سطور القيود (نفس فلاتر كشف الحساب): {len(rows)}")
 
-        # رتّب بـ created_at الحقيقي للسند الأب (fallback لتاريخ السطر نفسه إن غاب)
-        def sort_key(pair):
-            line, voucher = pair
-            ts = voucher.created_at or line.created_at or voucher.date
-            return ts
-
-        rows_sorted = sorted(rows, key=sort_key)
+        # رتّب بـ created_at الحقيقي للقيد، لا date القابل للتقديم بأثر رجعي
+        rows_sorted = sorted(
+            rows,
+            key=lambda pair: pair[1].created_at or pair[1].date,
+        )
 
         running = 0.0
         min_running = 0.0
         first_negative = None
         negative_events = []
-        for line, voucher in rows_sorted:
-            ts = voucher.created_at or line.created_at or voucher.date
-            amount = float(line.amount or 0.0)
+        for line, entry in rows_sorted:
+            debit = float(line.cash_debit or 0.0)
+            credit = float(line.cash_credit or 0.0)
             prev_running = running
-            if line.line_type == 'debit':
-                running = round(running + amount, 2)
-            else:
-                running = round(running - amount, 2)
+            running = round(running + debit - credit, 2)
 
             if running < min_running:
                 min_running = running
 
             if prev_running >= -0.01 and running < -0.01:
+                ts = entry.created_at or entry.date
                 event = {
-                    'voucher_id': voucher.id,
-                    'voucher_number': voucher.voucher_number,
-                    'voucher_type': voucher.voucher_type,
-                    'status': voucher.status,
-                    'created_by': voucher.created_by,
+                    'journal_entry_id': entry.id,
+                    'entry_number': entry.entry_number,
+                    'reference_type': entry.reference_type,
+                    'reference_id': entry.reference_id,
+                    'reference_number': entry.reference_number,
+                    'created_by': entry.created_by,
                     'created_at_used_for_sort': ts.isoformat() if hasattr(ts, 'isoformat') else str(ts),
-                    'voucher_date': voucher.date.isoformat() if voucher.date else None,
-                    'line_type': line.line_type,
-                    'line_amount': amount,
+                    'entry_date_field': entry.date.isoformat() if entry.date else None,
+                    'line_id': line.id,
+                    'line_description': line.description,
+                    'cash_debit': debit,
+                    'cash_credit': credit,
                     'available_before': prev_running,
                     'running_after': running,
-                    'shortfall': round(amount - max(prev_running, 0.0), 2) if line.line_type == 'credit' else None,
-                    'description': line.description,
-                    'reference_type': voucher.reference_type,
-                    'reference_number': voucher.reference_number,
                 }
                 negative_events.append(event)
                 if first_negative is None:
                     first_negative = event
 
         print(f"\nأدنى رصيد وصل إليه الحساب عبر كل التاريخ (بترتيب created_at الحقيقي): {min_running:.2f}")
-        print(f"الرصيد النهائي (يجب أن يطابق الرصيد الفعلي المعروض في النظام): {running:.2f}")
+        print(f"الرصيد النهائي المُعاد بناؤه (يجب أن يطابق الرصيد الفعلي المعروض في النظام): {running:.2f}")
 
         print(f"\nعدد لحظات العبور من موجب/صفر إلى سالب: {len(negative_events)}")
         for ev in negative_events[:30]:
-            print(f"  {ev['created_at_used_for_sort']} | {ev['voucher_number']} (id={ev['voucher_id']}, "
-                  f"status={ev['status']}, created_by={ev['created_by']}) | "
+            print(f"  {ev['created_at_used_for_sort']} | JE#{ev['journal_entry_id']} ({ev['entry_number']}, "
+                  f"ref={ev['reference_type']}#{ev['reference_id']}, created_by={ev['created_by']}) | "
                   f"متاح_قبل={ev['available_before']:.2f} | بعد={ev['running_after']:.2f} | "
-                  f"{ev['description'][:70] if ev['description'] else ''}")
+                  f"debit={ev['cash_debit']:.2f} credit={ev['cash_credit']:.2f} | {ev['line_description'] or ''}")
 
         if first_negative:
             print("\n" + "=" * 70)
@@ -109,8 +122,9 @@ def run(account_id: int):
         report = {
             'generated_at': run_dt.isoformat(),
             'account_id': account_id,
+            'line_count': len(rows),
             'min_balance_ever': min_running,
-            'final_balance': running,
+            'final_balance_reconstructed': running,
             'negative_crossing_events': negative_events,
         }
         reports_dir = os.path.join(os.path.dirname(__file__), 'reports')
