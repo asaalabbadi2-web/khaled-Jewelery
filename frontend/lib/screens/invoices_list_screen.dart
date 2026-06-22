@@ -22,6 +22,13 @@ import 'scrap_sales_invoice_screen.dart';
 import 'voucher_details_screen.dart';
 // import 'add_invoice_screen.dart'; // TODO: Uncomment when implementing add invoice
 
+// حالة سطر واحد عند تقسيم دفعة فاتورة على عدة وسائل دفع
+// (انظر _showCorrectPaymentMethodDialog).
+class _SplitRowState {
+  int? paymentMethodId;
+  final TextEditingController amountController = TextEditingController();
+}
+
 enum _InvoiceCreationTarget {
   sales,
   scrapSale,
@@ -4500,40 +4507,62 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       methods = await _apiService.getActivePaymentMethods();
     } catch (_) {}
 
-    int? selectedMethodId;
+    int? selectedMethodId; // used only when NOT splitting
     final reasonController = TextEditingController();
     bool isSplit = false;
-    final splitAmountController = TextEditingController();
+    final List<_SplitRowState> splitRows = [_SplitRowState()];
 
     await showDialog<void>(
       context: sheetContext,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setState) {
-          double? parsedSplitAmount() =>
-              double.tryParse(splitAmountController.text.trim());
+          double sumOfSplits() => splitRows.fold<double>(
+                0.0,
+                (sum, r) => sum + (double.tryParse(r.amountController.text.trim()) ?? 0.0),
+              );
 
-          String? validateSplit() {
+          List<String?> rowErrors() {
+            final seenMethods = <int>{};
+            return splitRows.map((r) {
+              if (r.paymentMethodId == null) {
+                return isAr ? 'اختر وسيلة الدفع' : 'Select a payment method';
+              }
+              if (seenMethods.contains(r.paymentMethodId)) {
+                return isAr ? 'وسيلة مكرّرة' : 'Duplicate method';
+              }
+              seenMethods.add(r.paymentMethodId!);
+              final amt = double.tryParse(r.amountController.text.trim());
+              if (amt == null || amt <= 0) {
+                return isAr ? 'مبلغ غير صحيح' : 'Invalid amount';
+              }
+              return null;
+            }).toList();
+          }
+
+          String? overallSplitError() {
             if (!isSplit) return null;
             if (currentAmount == null) {
               return isAr
                   ? 'مبلغ الدفعة الأصلي غير معروف، لا يمكن التقسيم'
                   : 'Original payment amount unknown, cannot split';
             }
-            final v = parsedSplitAmount();
-            if (v == null || v <= 0) {
-              return isAr ? 'أدخل مبلغاً صحيحاً أكبر من صفر' : 'Enter a valid amount greater than zero';
+            if (rowErrors().any((e) => e != null)) {
+              return isAr ? 'راجع الحقول أعلاه' : 'Check the fields above';
             }
-            if (v >= currentAmount) {
+            if (sumOfSplits() >= currentAmount) {
               return isAr
-                  ? 'المبلغ يجب أن يكون أقل من إجمالي الدفعة (${currentAmount.toStringAsFixed(2)})'
-                  : 'Amount must be less than the full payment (${currentAmount.toStringAsFixed(2)})';
+                  ? 'إجمالي التقسيم يجب أن يكون أقل من إجمالي الدفعة (${currentAmount.toStringAsFixed(2)})'
+                  : 'Total split must be less than the full payment (${currentAmount.toStringAsFixed(2)})';
             }
             return null;
           }
 
           final remaining = (isSplit && currentAmount != null)
-              ? (currentAmount - (parsedSplitAmount() ?? 0))
+              ? (currentAmount - sumOfSplits())
               : null;
+          final canSubmit = isSplit
+              ? overallSplitError() == null
+              : selectedMethodId != null;
 
           return AlertDialog(
             title: Text(isAr ? 'تصحيح وسيلة الدفع' : 'Correct Payment Method'),
@@ -4549,19 +4578,108 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                     style: const TextStyle(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<int>(
-                    decoration: InputDecoration(
-                      labelText: isAr ? 'وسيلة الدفع الصحيحة' : 'Correct method',
-                      border: const OutlineInputBorder(),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: isSplit,
+                    title: Text(
+                      isAr
+                          ? 'هذه دفعة مدمجة، أريد تقسيمها بين عدة وسائل'
+                          : 'This payment is merged, I want to split it between multiple methods',
                     ),
-                    value: selectedMethodId,
-                    items: methods.map<DropdownMenuItem<int>>((m) {
-                      final id = _tryParseInt(m['id']);
-                      final name = m['name']?.toString() ?? '';
-                      return DropdownMenuItem(value: id, child: Text(name));
-                    }).toList(),
-                    onChanged: (v) => setState(() => selectedMethodId = v),
+                    onChanged: (v) => setState(() => isSplit = v ?? false),
                   ),
+                  const SizedBox(height: 4),
+                  if (!isSplit)
+                    DropdownButtonFormField<int>(
+                      decoration: InputDecoration(
+                        labelText: isAr ? 'وسيلة الدفع الصحيحة' : 'Correct method',
+                        border: const OutlineInputBorder(),
+                      ),
+                      value: selectedMethodId,
+                      items: methods.map<DropdownMenuItem<int>>((m) {
+                        final id = _tryParseInt(m['id']);
+                        final name = m['name']?.toString() ?? '';
+                        return DropdownMenuItem(value: id, child: Text(name));
+                      }).toList(),
+                      onChanged: (v) => setState(() => selectedMethodId = v),
+                    )
+                  else ...[
+                    for (var i = 0; i < splitRows.length; i++)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 3,
+                              child: DropdownButtonFormField<int>(
+                                decoration: InputDecoration(
+                                  labelText: isAr ? 'وسيلة' : 'Method',
+                                  border: const OutlineInputBorder(),
+                                  errorText: rowErrors()[i],
+                                ),
+                                value: splitRows[i].paymentMethodId,
+                                items: methods.map<DropdownMenuItem<int>>((m) {
+                                  final id = _tryParseInt(m['id']);
+                                  final name = m['name']?.toString() ?? '';
+                                  return DropdownMenuItem(value: id, child: Text(name));
+                                }).toList(),
+                                onChanged: (v) => setState(() => splitRows[i].paymentMethodId = v),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              flex: 2,
+                              child: TextField(
+                                controller: splitRows[i].amountController,
+                                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                decoration: InputDecoration(
+                                  labelText: isAr ? 'المبلغ' : 'Amount',
+                                  border: const OutlineInputBorder(),
+                                ),
+                                onChanged: (_) => setState(() {}),
+                              ),
+                            ),
+                            if (splitRows.length > 1)
+                              IconButton(
+                                icon: const Icon(Icons.remove_circle_outline, color: Colors.red),
+                                tooltip: isAr ? 'حذف' : 'Remove',
+                                onPressed: () => setState(() => splitRows.removeAt(i)),
+                              ),
+                          ],
+                        ),
+                      ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: () => setState(() => splitRows.add(_SplitRowState())),
+                        icon: const Icon(Icons.add),
+                        label: Text(isAr ? 'إضافة وسيلة أخرى' : 'Add another method'),
+                      ),
+                    ),
+                    if (remaining != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        isAr
+                            ? 'سيبقى ${remaining.toStringAsFixed(2)} تحت $currentMethodName'
+                            : '${remaining.toStringAsFixed(2)} stays under $currentMethodName',
+                        style: TextStyle(
+                          color: remaining < 0
+                              ? Colors.red
+                              : Theme.of(ctx).colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                    if (overallSplitError() != null) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        overallSplitError()!,
+                        style: const TextStyle(color: Colors.red, fontSize: 12),
+                      ),
+                    ],
+                  ],
                   const SizedBox(height: 12),
                   TextField(
                     controller: reasonController,
@@ -4570,44 +4688,6 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                       border: const OutlineInputBorder(),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    value: isSplit,
-                    title: Text(
-                      isAr
-                          ? 'هذه دفعة مدمجة، أريد تقسيمها بين وسيلتين'
-                          : 'This payment is merged, I want to split it between two methods',
-                    ),
-                    onChanged: (v) => setState(() => isSplit = v ?? false),
-                  ),
-                  if (isSplit) ...[
-                    TextField(
-                      controller: splitAmountController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                      decoration: InputDecoration(
-                        labelText: isAr
-                            ? 'المبلغ المنقول للوسيلة الصحيحة'
-                            : 'Amount moving to the correct method',
-                        border: const OutlineInputBorder(),
-                        errorText: validateSplit(),
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                    if (remaining != null) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        isAr
-                            ? 'سيبقى ${remaining.toStringAsFixed(2)} تحت $currentMethodName'
-                            : '${remaining.toStringAsFixed(2)} stays under $currentMethodName',
-                        style: TextStyle(
-                          color: Theme.of(ctx).colorScheme.primary,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ],
                 ],
               ),
             ),
@@ -4617,22 +4697,35 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                 child: Text(isAr ? 'إلغاء' : 'Cancel'),
               ),
               ElevatedButton(
-                onPressed: (selectedMethodId == null || validateSplit() != null)
+                onPressed: !canSubmit
                     ? null
                     : () async {
                         Navigator.pop(ctx);
+                        final reason = reasonController.text.trim().isNotEmpty
+                            ? reasonController.text.trim()
+                            : (isAr ? 'تصحيح وسيلة الدفع' : 'Correct payment method');
                         try {
-                          final result = await _apiService.correctInvoicePaymentMethod(
-                            invoiceId: invoiceId,
-                            paymentId: paymentId,
-                            newPaymentMethodId: selectedMethodId!,
-                            reason: reasonController.text.trim().isNotEmpty
-                                ? reasonController.text.trim()
-                                : (isAr
-                                      ? 'تصحيح وسيلة الدفع'
-                                      : 'Correct payment method'),
-                            correctionAmount: isSplit ? parsedSplitAmount() : null,
-                          );
+                          Map<String, dynamic> result;
+                          if (isSplit) {
+                            result = await _apiService.splitInvoicePaymentMethod(
+                              invoiceId: invoiceId,
+                              paymentId: paymentId,
+                              reason: reason,
+                              splits: splitRows
+                                  .map((r) => {
+                                        'payment_method_id': r.paymentMethodId,
+                                        'amount': double.parse(r.amountController.text.trim()),
+                                      })
+                                  .toList(),
+                            );
+                          } else {
+                            result = await _apiService.correctInvoicePaymentMethod(
+                              invoiceId: invoiceId,
+                              paymentId: paymentId,
+                              newPaymentMethodId: selectedMethodId!,
+                              reason: reason,
+                            );
+                          }
                           final wasPartial = result['is_partial'] == true;
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
@@ -4640,7 +4733,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                                 content: Text(
                                   isAr
                                       ? (wasPartial
-                                            ? 'تم تقسيم الدفعة وتصحيح الجزء المحدَّد بنجاح'
+                                            ? 'تم تقسيم الدفعة وتصحيحها بنجاح'
                                             : 'تم تصحيح وسيلة الدفع بنجاح')
                                       : (wasPartial
                                             ? 'Payment split and corrected successfully'

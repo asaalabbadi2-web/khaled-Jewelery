@@ -3432,6 +3432,35 @@ class ApiService {
     );
   }
 
+  /// تقسيم دفعة فاتورة واحدة بين 2+ وسائل دفع دفعة واحدة (atomic) — بديل عن
+  /// استدعاء correctInvoicePaymentMethod عدة مرات. كل عنصر في splits:
+  /// `{'payment_method_id': int, 'amount': double}`.
+  Future<Map<String, dynamic>> splitInvoicePaymentMethod({
+    required int invoiceId,
+    required int paymentId,
+    required String reason,
+    required List<Map<String, dynamic>> splits,
+  }) async {
+    final token = await _requireAuthToken();
+    final response = await http.post(
+      Uri.parse('$_baseUrl/invoices/$invoiceId/payments/$paymentId/correct-method'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+      body: json.encode({
+        'reason': reason,
+        'splits': splits,
+      }),
+    );
+    final data = json.decode(utf8.decode(response.bodyBytes));
+    if (response.statusCode == 200) return data as Map<String, dynamic>;
+    throw Exception(
+      (data is Map ? data['message'] ?? data['error'] : null) ??
+          'Failed to split payment method',
+    );
+  }
+
   /// جلب الحسابات البنكية المتاحة
   Future<List<dynamic>> getBankAccounts() async {
     final response = await http.get(
