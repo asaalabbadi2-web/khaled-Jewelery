@@ -3401,12 +3401,15 @@ class ApiService {
     }
   }
 
-  /// تصحيح وسيلة الدفع لدفعة فاتورة (قبل التسوية فقط)
+  /// تصحيح وسيلة الدفع لدفعة فاتورة (قبل التسوية فقط).
+  /// correctionAmount اختياري: إن كان أقل من مبلغ الدفعة الكامل، يُقسَّم
+  /// الصف الأصلي بين الوسيلتين بدل تصحيحه بالكامل (انظر is_partial في الرد).
   Future<Map<String, dynamic>> correctInvoicePaymentMethod({
     required int invoiceId,
     required int paymentId,
     required int newPaymentMethodId,
     required String reason,
+    double? correctionAmount,
   }) async {
     final token = await _requireAuthToken();
     final response = await http.post(
@@ -3418,6 +3421,7 @@ class ApiService {
       body: json.encode({
         'new_payment_method_id': newPaymentMethodId,
         'reason': reason,
+        if (correctionAmount != null) 'correction_amount': correctionAmount,
       }),
     );
     final data = json.decode(utf8.decode(response.bodyBytes));

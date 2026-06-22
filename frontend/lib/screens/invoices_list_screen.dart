@@ -4305,6 +4305,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                                           invoice: invoice,
                                           paymentId: paymentId,
                                           currentMethodName: methodName,
+                                          currentAmount: amount,
                                         ),
                                         tooltip: isAr
                                             ? 'تصحيح وسيلة الدفع'
@@ -4488,6 +4489,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     required Map<String, dynamic> invoice,
     required int paymentId,
     required String currentMethodName,
+    double? currentAmount,
   }) async {
     final isAr = Localizations.localeOf(sheetContext).languageCode == 'ar';
     final invoiceId = _tryParseInt(invoice['id']);
@@ -4500,97 +4502,173 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
 
     int? selectedMethodId;
     final reasonController = TextEditingController();
+    bool isSplit = false;
+    final splitAmountController = TextEditingController();
 
     await showDialog<void>(
       context: sheetContext,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setState) => AlertDialog(
-          title: Text(isAr ? 'تصحيح وسيلة الدفع' : 'Correct Payment Method'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                isAr
-                    ? 'الوسيلة الحالية: $currentMethodName'
-                    : 'Current method: $currentMethodName',
-                style: const TextStyle(fontWeight: FontWeight.w600),
+        builder: (ctx, setState) {
+          double? parsedSplitAmount() =>
+              double.tryParse(splitAmountController.text.trim());
+
+          String? validateSplit() {
+            if (!isSplit) return null;
+            if (currentAmount == null) {
+              return isAr
+                  ? 'مبلغ الدفعة الأصلي غير معروف، لا يمكن التقسيم'
+                  : 'Original payment amount unknown, cannot split';
+            }
+            final v = parsedSplitAmount();
+            if (v == null || v <= 0) {
+              return isAr ? 'أدخل مبلغاً صحيحاً أكبر من صفر' : 'Enter a valid amount greater than zero';
+            }
+            if (v >= currentAmount) {
+              return isAr
+                  ? 'المبلغ يجب أن يكون أقل من إجمالي الدفعة (${currentAmount.toStringAsFixed(2)})'
+                  : 'Amount must be less than the full payment (${currentAmount.toStringAsFixed(2)})';
+            }
+            return null;
+          }
+
+          final remaining = (isSplit && currentAmount != null)
+              ? (currentAmount - (parsedSplitAmount() ?? 0))
+              : null;
+
+          return AlertDialog(
+            title: Text(isAr ? 'تصحيح وسيلة الدفع' : 'Correct Payment Method'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    isAr
+                        ? 'الوسيلة الحالية: $currentMethodName${currentAmount != null ? ' (${currentAmount.toStringAsFixed(2)})' : ''}'
+                        : 'Current method: $currentMethodName${currentAmount != null ? ' (${currentAmount.toStringAsFixed(2)})' : ''}',
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int>(
+                    decoration: InputDecoration(
+                      labelText: isAr ? 'وسيلة الدفع الصحيحة' : 'Correct method',
+                      border: const OutlineInputBorder(),
+                    ),
+                    value: selectedMethodId,
+                    items: methods.map<DropdownMenuItem<int>>((m) {
+                      final id = _tryParseInt(m['id']);
+                      final name = m['name']?.toString() ?? '';
+                      return DropdownMenuItem(value: id, child: Text(name));
+                    }).toList(),
+                    onChanged: (v) => setState(() => selectedMethodId = v),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: reasonController,
+                    decoration: InputDecoration(
+                      labelText: isAr ? 'سبب التصحيح' : 'Reason',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    value: isSplit,
+                    title: Text(
+                      isAr
+                          ? 'هذه دفعة مدمجة، أريد تقسيمها بين وسيلتين'
+                          : 'This payment is merged, I want to split it between two methods',
+                    ),
+                    onChanged: (v) => setState(() => isSplit = v ?? false),
+                  ),
+                  if (isSplit) ...[
+                    TextField(
+                      controller: splitAmountController,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: InputDecoration(
+                        labelText: isAr
+                            ? 'المبلغ المنقول للوسيلة الصحيحة'
+                            : 'Amount moving to the correct method',
+                        border: const OutlineInputBorder(),
+                        errorText: validateSplit(),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    if (remaining != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        isAr
+                            ? 'سيبقى ${remaining.toStringAsFixed(2)} تحت $currentMethodName'
+                            : '${remaining.toStringAsFixed(2)} stays under $currentMethodName',
+                        style: TextStyle(
+                          color: Theme.of(ctx).colorScheme.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
+                ],
               ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<int>(
-                decoration: InputDecoration(
-                  labelText: isAr ? 'وسيلة الدفع الصحيحة' : 'Correct method',
-                  border: const OutlineInputBorder(),
-                ),
-                value: selectedMethodId,
-                items: methods.map<DropdownMenuItem<int>>((m) {
-                  final id = _tryParseInt(m['id']);
-                  final name = m['name']?.toString() ?? '';
-                  return DropdownMenuItem(value: id, child: Text(name));
-                }).toList(),
-                onChanged: (v) => setState(() => selectedMethodId = v),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: Text(isAr ? 'إلغاء' : 'Cancel'),
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: reasonController,
-                decoration: InputDecoration(
-                  labelText: isAr ? 'سبب التصحيح' : 'Reason',
-                  border: const OutlineInputBorder(),
-                ),
+              ElevatedButton(
+                onPressed: (selectedMethodId == null || validateSplit() != null)
+                    ? null
+                    : () async {
+                        Navigator.pop(ctx);
+                        try {
+                          final result = await _apiService.correctInvoicePaymentMethod(
+                            invoiceId: invoiceId,
+                            paymentId: paymentId,
+                            newPaymentMethodId: selectedMethodId!,
+                            reason: reasonController.text.trim().isNotEmpty
+                                ? reasonController.text.trim()
+                                : (isAr
+                                      ? 'تصحيح وسيلة الدفع'
+                                      : 'Correct payment method'),
+                            correctionAmount: isSplit ? parsedSplitAmount() : null,
+                          );
+                          final wasPartial = result['is_partial'] == true;
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  isAr
+                                      ? (wasPartial
+                                            ? 'تم تقسيم الدفعة وتصحيح الجزء المحدَّد بنجاح'
+                                            : 'تم تصحيح وسيلة الدفع بنجاح')
+                                      : (wasPartial
+                                            ? 'Payment split and corrected successfully'
+                                            : 'Payment method corrected successfully'),
+                                ),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                            _loadInvoices();
+                          }
+                        } catch (e) {
+                          if (mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  isAr ? 'خطأ: $e' : 'Error: $e',
+                                ),
+                                backgroundColor: Colors.red,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                child: Text(isAr ? 'تصحيح' : 'Correct'),
               ),
             ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: Text(isAr ? 'إلغاء' : 'Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: selectedMethodId == null
-                  ? null
-                  : () async {
-                      Navigator.pop(ctx);
-                      try {
-                        await _apiService.correctInvoicePaymentMethod(
-                          invoiceId: invoiceId,
-                          paymentId: paymentId,
-                          newPaymentMethodId: selectedMethodId!,
-                          reason: reasonController.text.trim().isNotEmpty
-                              ? reasonController.text.trim()
-                              : (isAr
-                                    ? 'تصحيح وسيلة الدفع'
-                                    : 'Correct payment method'),
-                        );
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                isAr
-                                    ? 'تم تصحيح وسيلة الدفع بنجاح'
-                                    : 'Payment method corrected successfully',
-                              ),
-                              backgroundColor: Colors.green,
-                            ),
-                          );
-                          _loadInvoices();
-                        }
-                      } catch (e) {
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                isAr ? 'خطأ: $e' : 'Error: $e',
-                              ),
-                              backgroundColor: Colors.red,
-                            ),
-                          );
-                        }
-                      }
-                    },
-              child: Text(isAr ? 'تصحيح' : 'Correct'),
-            ),
-          ],
-        ),
+          );
+        },
       ),
     );
   }
