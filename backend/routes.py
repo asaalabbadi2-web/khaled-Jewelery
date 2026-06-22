@@ -8877,6 +8877,250 @@ def _compute_commission_fields(amount: float, pm) -> dict:
     }
 
 
+def _correct_invoice_payment_method_multi_split(invoice, ip, data):
+    """N-way split: one InvoicePayment row that mixed 3+ payment methods.
+
+    Body shape for this mode:
+      { "reason": "<string>", "splits": [{"payment_method_id": <int>, "amount": <float>}, ...] }
+
+    Same rules as the 2-way split (single new_payment_method_id +
+    correction_amount): the original row shrinks to the remainder and stays
+    under its OLD payment method; one new InvoicePayment row is created per
+    split entry; one independent reclassification voucher moves exactly the
+    split amounts between accounts (never touches the original posted
+    JournalEntryLine). Sum of all split amounts must be strictly less than
+    the payment's full amount, so the original always keeps a positive
+    remainder.
+    """
+    payment_id = ip.id
+    reason = str(data.get('reason') or '').strip()
+    if not reason:
+        return jsonify({'error': 'reason is required', 'message': 'سبب التصحيح إلزامي'}), 400
+
+    splits_raw = data.get('splits')
+    if not isinstance(splits_raw, list) or len(splits_raw) < 1:
+        return jsonify({'error': 'splits must be a non-empty list'}), 400
+
+    full_amount = float(ip.amount or 0.0)
+    old_pm_id = ip.payment_method_id
+    old_pm = PaymentMethod.query.get(old_pm_id)
+    old_sb_id = getattr(old_pm, 'default_safe_box_id', None) if old_pm else None
+    old_safe_account_id = None
+    if old_sb_id is not None:
+        old_sb_obj = SafeBox.query.get(old_sb_id)
+        old_safe_account_id = getattr(old_sb_obj, 'account_id', None) if old_sb_obj else None
+
+    parsed_splits = []
+    total_split = 0.0
+    for i, entry in enumerate(splits_raw):
+        if not isinstance(entry, dict):
+            return jsonify({'error': f'splits[{i}] must be an object'}), 400
+        pm_id = entry.get('payment_method_id')
+        try:
+            amt = float(entry.get('amount'))
+        except (TypeError, ValueError):
+            return jsonify({'error': f'splits[{i}].amount is invalid'}), 400
+        if not pm_id:
+            return jsonify({'error': f'splits[{i}].payment_method_id is required'}), 400
+        if amt <= 0:
+            return jsonify({'error': f'splits[{i}].amount must be positive'}), 400
+        pm = PaymentMethod.query.get(pm_id)
+        if pm is None:
+            return jsonify({'error': 'not_found', 'message': f'وسيلة الدفع في splits[{i}] غير موجودة'}), 404
+        if pm_id == old_pm_id:
+            return jsonify({'error': f'splits[{i}].payment_method_id يطابق الوسيلة الحالية'}), 400
+        sb_id = getattr(pm, 'default_safe_box_id', None)
+        safe_account_id = None
+        if sb_id is not None:
+            sb_obj = SafeBox.query.get(sb_id)
+            safe_account_id = getattr(sb_obj, 'account_id', None) if sb_obj else None
+        parsed_splits.append({'pm': pm, 'pm_id': pm_id, 'sb_id': sb_id, 'account_id': safe_account_id, 'amount': amt})
+        total_split += amt
+
+    total_split = round(total_split, 2)
+    if total_split >= full_amount - 0.005:
+        return jsonify({
+            'error': 'splits_exceed_payment',
+            'message': (
+                f'إجمالي مبالغ التقسيم ({total_split:.2f}) يجب أن يكون أقل من مبلغ الدفعة الكامل '
+                f'({full_amount:.2f}) — يجب أن يبقى جزء تحت الوسيلة الحالية.'
+            ),
+        }), 400
+
+    try:
+        old_commission = {
+            'commission_rate': ip.commission_rate,
+            'commission_amount': ip.commission_amount,
+            'commission_vat': ip.commission_vat,
+            'net_amount': ip.net_amount,
+        }
+
+        remainder = round(full_amount - total_split, 2)
+        ip.amount = remainder
+        for k, v in _compute_commission_fields(remainder, old_pm).items():
+            setattr(ip, k, v)
+
+        old_sbt = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).first()
+        if old_sbt:
+            old_sbt.amount_cash = round(float(old_sbt.amount_cash or 0.0) - total_split, 2)
+
+        actor = g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin'
+        new_ip_ids = []
+        for s in parsed_splits:
+            new_ip = InvoicePayment(
+                invoice_id=invoice.id,
+                payment_method_id=s['pm_id'],
+                amount=s['amount'],
+                notes=f'تقسيم من دفعة #{payment_id} — {reason}',
+                **_compute_commission_fields(s['amount'], s['pm']),
+            )
+            db.session.add(new_ip)
+            db.session.flush()
+            s['new_ip_id'] = new_ip.id
+            new_ip_ids.append(new_ip.id)
+
+            if s['sb_id'] is not None:
+                db.session.add(SafeBoxTransaction(
+                    safe_box_id=s['sb_id'],
+                    ref_type='invoice_payment',
+                    ref_id=new_ip.id,
+                    invoice_id=invoice.id,
+                    invoice_payment_id=new_ip.id,
+                    payment_method_id=s['pm_id'],
+                    direction='in',
+                    amount_cash=s['amount'],
+                    notes=f'تقسيم من دفعة #{payment_id} — {reason}',
+                    created_by=actor,
+                ))
+
+        reclass_voucher_number = None
+        reclass_je_id = None
+        debit_targets = [s for s in parsed_splits if s['account_id'] and s['account_id'] != old_safe_account_id]
+        if old_safe_account_id and debit_targets:
+            recon_dt = datetime.now()
+            voucher_number = generate_voucher_number('adjustment', voucher_date=recon_dt)
+            methods_desc = '، '.join(f"{s['pm'].name} ({s['amount']:.2f})" for s in parsed_splits)
+            voucher = Voucher(
+                voucher_number=voucher_number,
+                voucher_type='adjustment',
+                date=recon_dt,
+                description=(
+                    f'إعادة تصنيف وسيلة دفع (تقسيم متعدد): فاتورة {invoice.invoice_number} '
+                    f'دفعة #{payment_id} ({getattr(old_pm, "name", old_pm_id)} → {methods_desc}) — {reason}'
+                ),
+                notes=json.dumps({
+                    'old_payment_method_id': old_pm_id,
+                    'old_commission': old_commission,
+                    'reason': reason,
+                    'is_partial': True,
+                    'is_multi_split': True,
+                    'full_amount': full_amount,
+                    'total_split': total_split,
+                    'splits': [
+                        {'payment_method_id': s['pm_id'], 'amount': s['amount'], 'new_invoice_payment_id': s['new_ip_id']}
+                        for s in parsed_splits
+                    ],
+                }, ensure_ascii=False),
+                created_by=actor,
+                status='approved',
+                approved_by=actor,
+                approved_at=recon_dt,
+                amount_cash=total_split,
+                amount_gold=0.0,
+            )
+            db.session.add(voucher)
+            db.session.flush()
+
+            db.session.add(VoucherAccountLine(
+                voucher_id=voucher.id,
+                account_id=int(old_safe_account_id),
+                line_type='credit',
+                amount_type='cash',
+                amount=total_split,
+                description=f'إعادة تصنيف دفعة #{payment_id} من {getattr(old_pm, "name", old_pm_id)} (تقسيم متعدد)',
+            ))
+            # Group debit lines by account in case two splits share one.
+            by_account: dict[int, float] = {}
+            for s in debit_targets:
+                by_account[s['account_id']] = round(by_account.get(s['account_id'], 0.0) + s['amount'], 2)
+            for acc_id, amt in by_account.items():
+                db.session.add(VoucherAccountLine(
+                    voucher_id=voucher.id,
+                    account_id=int(acc_id),
+                    line_type='debit',
+                    amount_type='cash',
+                    amount=amt,
+                    description=f'إعادة تصنيف دفعة #{payment_id} (تقسيم متعدد)',
+                ))
+            db.session.flush()
+
+            journal_entry = create_journal_entry_from_voucher(voucher)
+            if journal_entry:
+                journal_entry.reference_type = 'payment_method_correction'
+                journal_entry.reference_id = payment_id
+                voucher.journal_entry_id = journal_entry.id
+                reclass_je_id = journal_entry.id
+
+            old_acc = Account.query.get(int(old_safe_account_id))
+            if old_acc is not None:
+                old_acc.update_balance(cash_amount=-total_split)
+            for acc_id, amt in by_account.items():
+                acc = Account.query.get(int(acc_id))
+                if acc is not None:
+                    acc.update_balance(cash_amount=amt)
+
+            reclass_voucher_number = voucher.voucher_number
+
+        try:
+            AuditLog.log_action(
+                user_name=actor,
+                action='correct_payment_method',
+                entity_type='InvoicePayment',
+                entity_id=payment_id,
+                entity_number=invoice.invoice_number,
+                details=json.dumps({
+                    'old_payment_method_id': old_pm_id,
+                    'old_commission': old_commission,
+                    'is_partial': True,
+                    'is_multi_split': True,
+                    'full_amount': full_amount,
+                    'total_split': total_split,
+                    'splits': [
+                        {'payment_method_id': s['pm_id'], 'amount': s['amount'], 'new_invoice_payment_id': s['new_ip_id']}
+                        for s in parsed_splits
+                    ],
+                    'reclassification_voucher_number': reclass_voucher_number,
+                    'reclassification_journal_entry_id': reclass_je_id,
+                    'reason': reason,
+                }, ensure_ascii=False),
+                ip_address=request.remote_addr,
+                user_agent=request.headers.get('User-Agent'),
+                success=True,
+            )
+        except Exception:
+            pass
+
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'payment_id': payment_id,
+            'old_payment_method_id': old_pm_id,
+            'is_partial': True,
+            'is_multi_split': True,
+            'full_amount': full_amount,
+            'total_split': total_split,
+            'remaining_amount_on_original': float(ip.amount or 0.0),
+            'new_invoice_payment_ids': new_ip_ids,
+            'reclassification_voucher_number': reclass_voucher_number,
+            'reclassification_journal_entry_id': reclass_je_id,
+        }), 200
+
+    except Exception as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 500
+
+
 @api.route('/invoices/<int:invoice_id>/payments/<int:payment_id>/correct-method', methods=['POST'])
 @require_admin
 def correct_invoice_payment_method(invoice_id: int, payment_id: int):
@@ -8938,6 +9182,11 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
         }), 409
 
     data = request.get_json(silent=True) or {}
+
+    # N-way split mode: { "reason": ..., "splits": [{"payment_method_id", "amount"}, ...] }
+    if isinstance(data.get('splits'), list):
+        return _correct_invoice_payment_method_multi_split(invoice, ip, data)
+
     new_pm_id = data.get('new_payment_method_id')
     reason = str(data.get('reason') or '').strip()
     correction_amount_raw = data.get('correction_amount')
