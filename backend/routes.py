@@ -8888,9 +8888,12 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
     under its OLD payment method; one new InvoicePayment row is created per
     split entry; one independent reclassification voucher moves exactly the
     split amounts between accounts (never touches the original posted
-    JournalEntryLine). Sum of all split amounts must be strictly less than
-    the payment's full amount, so the original always keeps a positive
-    remainder.
+    JournalEntryLine). Sum of all split amounts may equal the payment's full
+    amount (nothing genuinely left under the old method) -- in that case the
+    original row and its SafeBoxTransaction are removed instead of being
+    shrunk to a 0.00 leftover; the full reclassification is still recorded
+    via the voucher/JE + AuditLog either way. Sum may not EXCEED the full
+    amount.
     """
     payment_id = ip.id
     reason = str(data.get('reason') or '').strip()
@@ -8946,12 +8949,12 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
         total_split += amt
 
     total_split = round(total_split, 2)
-    if total_split >= full_amount - 0.005:
+    if total_split > full_amount + 0.005:
         return jsonify({
             'error': 'splits_exceed_payment',
             'message': (
-                f'إجمالي مبالغ التقسيم ({total_split:.2f}) يجب أن يكون أقل من مبلغ الدفعة الكامل '
-                f'({full_amount:.2f}) — يجب أن يبقى جزء تحت الوسيلة الحالية.'
+                f'إجمالي مبالغ التقسيم ({total_split:.2f}) أكبر من مبلغ الدفعة الكامل '
+                f'({full_amount:.2f}).'
             ),
         }), 400
 
@@ -8963,14 +8966,29 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
             'net_amount': ip.net_amount,
         }
 
+        # total_split may legitimately equal full_amount: the whole row was
+        # mixed across N other methods with nothing genuinely left under the
+        # old one (e.g. 3000 تمارا really being 1000 نقد + 500 مدى + 1500
+        # تابي). Forcing a positive remainder would mislabel part of the
+        # payment as still belonging to the old method just to satisfy a
+        # validation rule -- so when the remainder rounds to ~0, the original
+        # row (and its SafeBoxTransaction) is removed instead of shrunk to a
+        # confusing 0.00 leftover. Nothing here touches the posted
+        # JournalEntryLine or erases history: the full reclassification is
+        # still recorded via the voucher/JE created below + AuditLog.
         remainder = round(full_amount - total_split, 2)
-        ip.amount = remainder
-        for k, v in _compute_commission_fields(remainder, old_pm).items():
-            setattr(ip, k, v)
-
+        original_removed = remainder <= 0.005
         old_sbt = SafeBoxTransaction.query.filter_by(invoice_payment_id=payment_id).first()
-        if old_sbt:
-            old_sbt.amount_cash = round(float(old_sbt.amount_cash or 0.0) - total_split, 2)
+        if original_removed:
+            if old_sbt:
+                db.session.delete(old_sbt)
+            db.session.delete(ip)
+        else:
+            ip.amount = remainder
+            for k, v in _compute_commission_fields(remainder, old_pm).items():
+                setattr(ip, k, v)
+            if old_sbt:
+                old_sbt.amount_cash = round(float(old_sbt.amount_cash or 0.0) - total_split, 2)
 
         actor = g.current_user.username if hasattr(g, 'current_user') and g.current_user else 'admin'
         new_ip_ids = []
@@ -9032,6 +9050,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
                     'full_amount': full_amount,
                     'total_split': total_split,
                     'total_moved': total_moved,
+                    'original_payment_removed': original_removed,
                     'splits': [
                         {'payment_method_id': s['pm_id'], 'amount': s['amount'], 'new_invoice_payment_id': s['new_ip_id']}
                         for s in parsed_splits
@@ -9102,6 +9121,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
                     'full_amount': full_amount,
                     'total_split': total_split,
                     'total_moved': total_moved,
+                    'original_payment_removed': original_removed,
                     'splits': [
                         {'payment_method_id': s['pm_id'], 'amount': s['amount'], 'new_invoice_payment_id': s['new_ip_id']}
                         for s in parsed_splits
@@ -9128,7 +9148,8 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
             'full_amount': full_amount,
             'total_split': total_split,
             'total_moved': total_moved,
-            'remaining_amount_on_original': float(ip.amount or 0.0),
+            'original_payment_removed': original_removed,
+            'remaining_amount_on_original': 0.0 if original_removed else float(remainder),
             'new_invoice_payment_ids': new_ip_ids,
             'reclassification_voucher_number': reclass_voucher_number,
             'reclassification_journal_entry_id': reclass_je_id,
