@@ -4501,11 +4501,13 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
     }).toList();
 
     final limited = filtered.take(120).toList();
+    final screenSize = MediaQuery.sizeOf(context);
+    final dialogMaxHeight = (screenSize.height * 0.85).clamp(720.0, 900.0);
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 720),
+        constraints: BoxConstraints(maxWidth: 560, maxHeight: dialogMaxHeight),
         child: Form(
           key: _formKey,
           child: Column(

@@ -4752,11 +4752,13 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
             return name.contains(_searchQuery);
           }).toList();
     final limited = filtered.take(100).toList();
+    final screenSize = MediaQuery.sizeOf(context);
+    final dialogMaxHeight = (screenSize.height * 0.85).clamp(680.0, 900.0);
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
       child: Container(
-        constraints: const BoxConstraints(maxWidth: 550, maxHeight: 680),
+        constraints: BoxConstraints(maxWidth: 550, maxHeight: dialogMaxHeight),
         child: Form(
           key: _formKey,
           child: Column(
