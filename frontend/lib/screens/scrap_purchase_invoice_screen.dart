@@ -4392,6 +4392,7 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
   String _query = '';
 
   late int _selectedKarat;
+  bool _karatLockedByCategory = false;
 
   @override
   void initState() {
@@ -4451,6 +4452,7 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
     final karat = _tryParseCategoryKarat(first);
     setState(() {
       _selected = first;
+      _karatLockedByCategory = karat != null;
       if (karat != null) {
         _selectedKarat = karat;
       }
@@ -4616,6 +4618,8 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                                                   _selected = c;
                                                   final karat =
                                                       _tryParseCategoryKarat(c);
+                                                  _karatLockedByCategory =
+                                                      karat != null;
                                                   if (karat != null) {
                                                     _selectedKarat = karat;
                                                   }
@@ -4695,9 +4699,18 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                       const SizedBox(height: 12),
                       DropdownButtonFormField<int>(
                         value: _selectedKarat,
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: 'العيار',
-                          border: OutlineInputBorder(),
+                          border: const OutlineInputBorder(),
+                          prefixIcon: _karatLockedByCategory
+                              ? Icon(Icons.lock, size: 20, color: theme.colorScheme.primary)
+                              : null,
+                          filled: _karatLockedByCategory,
+                          fillColor: _karatLockedByCategory
+                              ? theme.colorScheme.primary.withValues(alpha: 0.07)
+                              : null,
+                          helperText: _karatLockedByCategory ? 'محدد من التصنيف' : null,
+                          helperStyle: TextStyle(color: theme.colorScheme.primary, fontSize: 11),
                         ),
                         items: const [
                           DropdownMenuItem(value: 18, child: Text('18')),
@@ -4705,7 +4718,9 @@ class _ScrapCategoryLineDialogState extends State<_ScrapCategoryLineDialog> {
                           DropdownMenuItem(value: 22, child: Text('22')),
                           DropdownMenuItem(value: 24, child: Text('24')),
                         ],
-                        onChanged: (v) {
+                        onChanged: _karatLockedByCategory
+                            ? null
+                            : (v) {
                           if (v == null) return;
                           setState(() {
                             _selectedKarat = v;

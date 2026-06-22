@@ -6813,6 +6813,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
   late int _selectedKarat;
   String _searchQuery = '';
   bool _wageLockedByCategory = false;
+  bool _karatLockedByCategory = false;
 
   @override
   void initState() {
@@ -6836,6 +6837,9 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     final categoryKarat = _tryParseCategoryKarat(category);
     if (categoryKarat != null) {
       _selectedKarat = categoryKarat;
+      _karatLockedByCategory = true;
+    } else {
+      _karatLockedByCategory = false;
     }
   }
 
@@ -7296,9 +7300,24 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          prefixIcon: const Icon(Icons.diamond, size: 20),
+                          prefixIcon: Icon(
+                            _karatLockedByCategory ? Icons.lock : Icons.diamond,
+                            size: 20,
+                            color: _karatLockedByCategory
+                                ? theme.colorScheme.primary
+                                : null,
+                          ),
                           filled: true,
-                          fillColor: theme.colorScheme.surface,
+                          fillColor: _karatLockedByCategory
+                              ? theme.colorScheme.primary.withValues(alpha: 0.07)
+                              : theme.colorScheme.surface,
+                          helperText: _karatLockedByCategory
+                              ? 'محدد من التصنيف'
+                              : null,
+                          helperStyle: TextStyle(
+                            color: theme.colorScheme.primary,
+                            fontSize: 11,
+                          ),
                         ),
                         items: const [18, 21, 22, 24]
                             .map(
@@ -7308,9 +7327,11 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                               ),
                             )
                             .toList(),
-                        onChanged: (v) => setState(() {
-                          _selectedKarat = v ?? _selectedKarat;
-                        }),
+                        onChanged: _karatLockedByCategory
+                            ? null
+                            : (v) => setState(() {
+                                _selectedKarat = v ?? _selectedKarat;
+                              }),
                       ),
                       const SizedBox(height: 12),
                       Row(

@@ -4655,6 +4655,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
 
   Map<String, dynamic>? _selectedCategory;
   late int _selectedKarat;
+  bool _karatLockedByCategory = false;
   String _searchQuery = '';
 
   @override
@@ -4700,6 +4701,7 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
     final categoryKarat = _tryParseCategoryKarat(first);
     setState(() {
       _selectedCategory = first;
+      _karatLockedByCategory = categoryKarat != null;
       if (categoryKarat != null) _selectedKarat = categoryKarat;
     });
   }
@@ -4939,6 +4941,8 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                                                       _tryParseCategoryKarat(
                                                         opt,
                                                       );
+                                                  _karatLockedByCategory =
+                                                      k != null;
                                                   if (k != null) {
                                                     _selectedKarat = k;
                                                   }
@@ -5048,9 +5052,24 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          prefixIcon: const Icon(Icons.diamond, size: 20),
+                          prefixIcon: Icon(
+                            _karatLockedByCategory ? Icons.lock : Icons.diamond,
+                            size: 20,
+                            color: _karatLockedByCategory
+                                ? theme.colorScheme.primary
+                                : null,
+                          ),
                           filled: true,
-                          fillColor: theme.colorScheme.surface,
+                          fillColor: _karatLockedByCategory
+                              ? theme.colorScheme.primary.withValues(alpha: 0.07)
+                              : theme.colorScheme.surface,
+                          helperText: _karatLockedByCategory
+                              ? 'محدد من التصنيف'
+                              : null,
+                          helperStyle: TextStyle(
+                            color: theme.colorScheme.primary,
+                            fontSize: 11,
+                          ),
                         ),
                         items: const [18, 21, 22, 24]
                             .map(
@@ -5060,9 +5079,11 @@ class _CategoryLineDialogState extends State<_CategoryLineDialog> {
                               ),
                             )
                             .toList(),
-                        onChanged: (v) => setState(
-                          () => _selectedKarat = v ?? _selectedKarat,
-                        ),
+                        onChanged: _karatLockedByCategory
+                            ? null
+                            : (v) => setState(
+                                () => _selectedKarat = v ?? _selectedKarat,
+                              ),
                       ),
                       const SizedBox(height: 12),
                       Row(
