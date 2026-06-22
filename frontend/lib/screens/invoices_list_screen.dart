@@ -4558,10 +4558,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
             if (rowErrors().any((e) => e != null)) {
               return isAr ? 'راجع الحقول أعلاه' : 'Check the fields above';
             }
-            if (sumOfSplits() >= currentAmount) {
+            if (sumOfSplits() > currentAmount + 0.005) {
               return isAr
-                  ? 'إجمالي التقسيم يجب أن يكون أقل من إجمالي الدفعة (${currentAmount.toStringAsFixed(2)})'
-                  : 'Total split must be less than the full payment (${currentAmount.toStringAsFixed(2)})';
+                  ? 'إجمالي التقسيم أكبر من إجمالي الدفعة (${currentAmount.toStringAsFixed(2)})'
+                  : 'Total split exceeds the full payment (${currentAmount.toStringAsFixed(2)})';
             }
             return null;
           }
@@ -4670,9 +4670,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                     if (remaining != null) ...[
                       const SizedBox(height: 4),
                       Text(
-                        isAr
-                            ? 'سيبقى ${remaining.toStringAsFixed(2)} تحت $currentMethodName'
-                            : '${remaining.toStringAsFixed(2)} stays under $currentMethodName',
+                        remaining.abs() < 0.005
+                            ? (isAr
+                                  ? 'لن يتبقى شيء تحت $currentMethodName — الدفعة بالكامل تُنقَل لوسائل أخرى'
+                                  : 'Nothing stays under $currentMethodName — fully moved to other methods')
+                            : (isAr
+                                  ? 'سيبقى ${remaining.toStringAsFixed(2)} تحت $currentMethodName'
+                                  : '${remaining.toStringAsFixed(2)} stays under $currentMethodName'),
                         style: TextStyle(
                           color: remaining < 0
                               ? Colors.red
