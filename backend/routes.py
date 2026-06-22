@@ -8911,17 +8911,19 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
         old_safe_account_id = getattr(old_sb_obj, 'account_id', None) if old_sb_obj else None
 
     parsed_splits = []
+    seen_pm_ids = set()
     total_split = 0.0
     for i, entry in enumerate(splits_raw):
         if not isinstance(entry, dict):
             return jsonify({'error': f'splits[{i}] must be an object'}), 400
-        pm_id = entry.get('payment_method_id')
+        try:
+            pm_id = int(entry.get('payment_method_id'))
+        except (TypeError, ValueError):
+            return jsonify({'error': f'splits[{i}].payment_method_id is invalid'}), 400
         try:
             amt = float(entry.get('amount'))
         except (TypeError, ValueError):
             return jsonify({'error': f'splits[{i}].amount is invalid'}), 400
-        if not pm_id:
-            return jsonify({'error': f'splits[{i}].payment_method_id is required'}), 400
         if amt <= 0:
             return jsonify({'error': f'splits[{i}].amount must be positive'}), 400
         pm = PaymentMethod.query.get(pm_id)
@@ -8929,6 +8931,12 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
             return jsonify({'error': 'not_found', 'message': f'وسيلة الدفع في splits[{i}] غير موجودة'}), 404
         if pm_id == old_pm_id:
             return jsonify({'error': f'splits[{i}].payment_method_id يطابق الوسيلة الحالية'}), 400
+        if pm_id in seen_pm_ids:
+            return jsonify({
+                'error': 'duplicate_payment_method',
+                'message': f'وسيلة الدفع "{pm.name}" مكرّرة في أكثر من سطر تقسيم — اجمعها في سطر واحد',
+            }), 400
+        seen_pm_ids.add(pm_id)
         sb_id = getattr(pm, 'default_safe_box_id', None)
         safe_account_id = None
         if sb_id is not None:
@@ -8995,7 +9003,14 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
 
         reclass_voucher_number = None
         reclass_je_id = None
+        # Splits whose target account differs from the OLD account are the
+        # only ones that actually need cash to move in the GL -- a split
+        # landing on the SAME account as the old method (e.g. بطاقة/تحويل
+        # sharing one safe box) only changes InvoicePayment-level
+        # classification, no GL movement. total_moved (not total_split) is
+        # therefore the only amount-correct figure for the voucher/balances.
         debit_targets = [s for s in parsed_splits if s['account_id'] and s['account_id'] != old_safe_account_id]
+        total_moved = round(sum(s['amount'] for s in debit_targets), 2)
         if old_safe_account_id and debit_targets:
             recon_dt = datetime.now()
             voucher_number = generate_voucher_number('adjustment', voucher_date=recon_dt)
@@ -9016,6 +9031,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
                     'is_multi_split': True,
                     'full_amount': full_amount,
                     'total_split': total_split,
+                    'total_moved': total_moved,
                     'splits': [
                         {'payment_method_id': s['pm_id'], 'amount': s['amount'], 'new_invoice_payment_id': s['new_ip_id']}
                         for s in parsed_splits
@@ -9025,7 +9041,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
                 status='approved',
                 approved_by=actor,
                 approved_at=recon_dt,
-                amount_cash=total_split,
+                amount_cash=total_moved,
                 amount_gold=0.0,
             )
             db.session.add(voucher)
@@ -9036,7 +9052,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
                 account_id=int(old_safe_account_id),
                 line_type='credit',
                 amount_type='cash',
-                amount=total_split,
+                amount=total_moved,
                 description=f'إعادة تصنيف دفعة #{payment_id} من {getattr(old_pm, "name", old_pm_id)} (تقسيم متعدد)',
             ))
             # Group debit lines by account in case two splits share one.
@@ -9063,7 +9079,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
 
             old_acc = Account.query.get(int(old_safe_account_id))
             if old_acc is not None:
-                old_acc.update_balance(cash_amount=-total_split)
+                old_acc.update_balance(cash_amount=-total_moved)
             for acc_id, amt in by_account.items():
                 acc = Account.query.get(int(acc_id))
                 if acc is not None:
@@ -9085,6 +9101,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
                     'is_multi_split': True,
                     'full_amount': full_amount,
                     'total_split': total_split,
+                    'total_moved': total_moved,
                     'splits': [
                         {'payment_method_id': s['pm_id'], 'amount': s['amount'], 'new_invoice_payment_id': s['new_ip_id']}
                         for s in parsed_splits
@@ -9110,6 +9127,7 @@ def _correct_invoice_payment_method_multi_split(invoice, ip, data):
             'is_multi_split': True,
             'full_amount': full_amount,
             'total_split': total_split,
+            'total_moved': total_moved,
             'remaining_amount_on_original': float(ip.amount or 0.0),
             'new_invoice_payment_ids': new_ip_ids,
             'reclassification_voucher_number': reclass_voucher_number,

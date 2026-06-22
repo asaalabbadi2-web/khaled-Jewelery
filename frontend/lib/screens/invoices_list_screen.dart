@@ -4198,6 +4198,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
 
                               final paymentId = _tryParseInt(payment['id']);
                               final amount = _tryParseDouble(payment['amount']);
+                              final currentMethodId = _tryParseInt(payment['payment_method_id']);
                               final methodName =
                                   (payment['payment_method_name'] ?? '')
                                       .toString();
@@ -4313,6 +4314,7 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                                           paymentId: paymentId,
                                           currentMethodName: methodName,
                                           currentAmount: amount,
+                                          currentMethodId: currentMethodId,
                                         ),
                                         tooltip: isAr
                                             ? 'تصحيح وسيلة الدفع'
@@ -4497,15 +4499,22 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
     required int paymentId,
     required String currentMethodName,
     double? currentAmount,
+    int? currentMethodId,
   }) async {
     final isAr = Localizations.localeOf(sheetContext).languageCode == 'ar';
     final invoiceId = _tryParseInt(invoice['id']);
     if (invoiceId == null) return;
 
-    List<dynamic> methods = [];
+    List<dynamic> allMethods = [];
     try {
-      methods = await _apiService.getActivePaymentMethods();
+      allMethods = await _apiService.getActivePaymentMethods();
     } catch (_) {}
+    // الوسيلة الحالية لا تظهر كهدف تصحيح/تقسيم (تصحيح إلى نفسها بلا معنى).
+    final methods = currentMethodId == null
+        ? allMethods
+        : allMethods
+            .where((m) => _tryParseInt(m['id']) != currentMethodId)
+            .toList();
 
     int? selectedMethodId; // used only when NOT splitting
     final reasonController = TextEditingController();
