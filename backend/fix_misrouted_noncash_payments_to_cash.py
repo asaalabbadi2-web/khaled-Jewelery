@@ -76,7 +76,6 @@ BANK_TRANSFER_ACCOUNT_ID = 757  # تحويل
 # this script.
 CORRECTIONS = [
     (2139, 'RV-2026-00976', 'SELL-2026-847', 'in',  3600.00, MADA_ACCOUNT_ID,          'مدى'),
-    (1008, 'PV-2026-00240', 'BUY-2026-080',  'out', 10000.00, BANK_TRANSFER_ACCOUNT_ID, 'تحويل'),
 ]
 
 
