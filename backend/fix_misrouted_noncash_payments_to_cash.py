@@ -59,12 +59,23 @@ MADA_ACCOUNT_ID = 777          # مدى
 BANK_TRANSFER_ACCOUNT_ID = 757  # تحويل
 
 # (original_voucher_id, original_voucher_number, invoice_number, direction, amount, correct_account_id, correct_account_name)
+#
+# NOTE (2026-06-23): RV-2026-00419 (1130, مدى) and RV-2026-00453 (620, مدى)
+# were REMOVED from this list on the user's explicit instruction, after
+# they compared مدى's account against the real bank statement directly:
+# both amounts were already covered by older, separate correction entries
+# (the only outstanding difference against the bank statement was the
+# 3600 from RV-2026-00976). Re-adding either here without re-confirming
+# against the bank statement again would double-correct them.
+#
+# PV-2026-00226 (830, تحويل) was ALSO removed: the user confirmed this
+# voucher's cash account is the correct, original classification --
+# tagging it as تحويل-misrouted-to-cash here was a false positive from the
+# original detection scan (likely a payment_method_id data issue on
+# InvoicePayment itself, not a safe-box routing bug). Out of scope for
+# this script.
 CORRECTIONS = [
-    (824,  'RV-2026-00419', 'SELL-2026-421', 'in',  1130.00, MADA_ACCOUNT_ID,          'مدى'),
-    (895,  'RV-2026-00453', 'SELL-2026-453', 'in',   620.00, MADA_ACCOUNT_ID,          'مدى'),
     (2139, 'RV-2026-00976', 'SELL-2026-847', 'in',  3600.00, MADA_ACCOUNT_ID,          'مدى'),
-    (977,  'PV-2026-00226', 'BUY-2026-072',  'out',  830.00, BANK_TRANSFER_ACCOUNT_ID, 'تحويل'),
-    (1007, 'PV-2026-00239', 'BUY-2026-080',  'out', 19600.00, BANK_TRANSFER_ACCOUNT_ID, 'تحويل'),
     (1008, 'PV-2026-00240', 'BUY-2026-080',  'out', 10000.00, BANK_TRANSFER_ACCOUNT_ID, 'تحويل'),
 ]
 
@@ -138,13 +149,21 @@ def run(apply: bool):
                 voucher_number=voucher_number,
                 voucher_type='adjustment',
                 date=run_dt,
+                # NOTE: create_journal_entry_from_voucher copies this into
+                # JournalEntry.description, which is VARCHAR(200) in
+                # production (Voucher.description itself is unrestricted
+                # Text) -- keep this short; full context lives in `notes`.
                 description=(
-                    f'تصحيح توجيه دفعة {correct_name} ({inv_number}, السند الأصلي {orig_number}) '
-                    f'من الصندوق النقدي الرئيسي إلى حساب {correct_name} الصحيح -- خلل برمجي '
-                    f'(race condition) كان يُرسل خزينة قديمة عند تبديل وسيلة الدفع بسرعة، تم تصحيحه بالكود'
+                    f'تصحيح توجيه دفعة {correct_name}: {orig_number} ({inv_number}) '
+                    f'إلى حساب {correct_name} الصحيح'
                 ),
                 notes=json.dumps({
                     'source': 'fix_misrouted_noncash_payments_to_cash',
+                    'reason': (
+                        'race condition in _loadSafeBoxesForPaymentMethod sent a stale '
+                        'safe box id when the payment method dropdown was switched quickly; '
+                        'fixed in code, this corrects the historical GL effect for this one voucher'
+                    ),
                     'original_voucher_id': orig_voucher.id,
                     'original_voucher_number': orig_number,
                     'invoice_number': inv_number,
