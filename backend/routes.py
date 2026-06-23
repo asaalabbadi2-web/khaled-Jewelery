@@ -9703,11 +9703,21 @@ def unpost_invoice(invoice_id: int):
     )
 
     try:
+        # Accounts touched by any JE we're about to unpost -- their stored
+        # balance_cash/balance_*k must be recomputed afterward, otherwise the
+        # cached balance keeps counting a JE that no longer affects the live
+        # (is_posted=True) ledger total, drifting further out of sync on
+        # every unpost. (Confirmed in production: 76 historical unposts with
+        # no corresponding reversal, accounting for a large, previously
+        # undiagnosed gap between cached and ledger-computed balances.)
+        affected_account_ids = set()
+
         # 1. Cascade: unpost all linked invoice JEs
         linked_jes = JournalEntry.query.filter_by(
             reference_type='invoice', reference_id=invoice_id
         ).all()
         for je in linked_jes:
+            affected_account_ids.update(l.account_id for l in je.lines if l.account_id)
             je.is_posted = False
             je.posted_at = None
             je.posted_by = None
@@ -9722,6 +9732,7 @@ def unpost_invoice(invoice_id: int):
             if v.journal_entry_id:
                 vje = JournalEntry.query.get(v.journal_entry_id)
                 if vje and vje.is_posted:
+                    affected_account_ids.update(l.account_id for l in vje.lines if l.account_id)
                     vje.is_posted = False
                     vje.posted_at = None
                     vje.posted_by = None
@@ -9729,6 +9740,7 @@ def unpost_invoice(invoice_id: int):
             for vje2 in JournalEntry.query.filter_by(
                 reference_type='voucher', reference_id=v.id, is_posted=True
             ).all():
+                affected_account_ids.update(l.account_id for l in vje2.lines if l.account_id)
                 vje2.is_posted = False
                 vje2.posted_at = None
                 vje2.posted_by = None
@@ -9757,6 +9769,12 @@ def unpost_invoice(invoice_id: int):
             CategoryWeightMovement.query.filter_by(invoice_id=invoice_id).delete()
         except Exception:
             pass
+
+        # 6. Recompute stored balances for every account these now-unposted
+        # JEs used to count toward, so balance_cash/balance_*k matches the
+        # live ledger total immediately, not just after a manual rebuild.
+        if affected_account_ids:
+            _recalculate_account_balances_for_accounts(affected_account_ids)
 
         db.session.commit()
         return jsonify({'success': True, 'invoice': invoice.to_dict()}), 200
