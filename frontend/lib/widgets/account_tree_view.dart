@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 enum _AccountAction { statement, addChild, edit, delete }
+
+final NumberFormat _cashFormat = NumberFormat('#,##0.00', 'ar');
+final NumberFormat _goldFormat = NumberFormat('#,##0.###', 'ar');
 
 // 1. AccountNode Class
 class AccountNode {
@@ -103,6 +107,14 @@ class AccountTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final account = node.account;
     final bool isLeaf = node.children.isEmpty;
+    final bool isMemoPairChild = account['is_memo_pair_child'] == true;
+    AccountNode? memoChildNode;
+    for (final c in node.children) {
+      if (c.account['is_memo_pair_child'] == true) {
+        memoChildNode = c;
+        break;
+      }
+    }
 
     PopupMenuItem<_AccountAction> buildItem(
       _AccountAction action,
@@ -129,6 +141,14 @@ class AccountTile extends StatelessWidget {
 
     final tileTitleRow = Row(
       children: [
+        if (isMemoPairChild)
+          Padding(
+            padding: const EdgeInsets.only(left: 6),
+            child: Tooltip(
+              message: 'حساب وزني مرتبط (مفكرة)',
+              child: Icon(Icons.scale_outlined, size: 16, color: Theme.of(context).colorScheme.secondary),
+            ),
+          ),
         Expanded(
           child: Text(
             '${account['account_number']} - ${account['name']}',
@@ -192,6 +212,19 @@ class AccountTile extends StatelessWidget {
       child: tileTitleRow,
     );
 
+    Widget? tileSubtitle;
+    if (memoChildNode != null) {
+      final cashValue = (account['balances']?['cash'] as num?)?.toDouble() ?? 0.0;
+      final weightValue = (memoChildNode.account['balances']?['weight']?['total'] as num?)?.toDouble() ?? 0.0;
+      tileSubtitle = Padding(
+        padding: const EdgeInsets.only(top: 2),
+        child: Text(
+          'نقدي: ${_cashFormat.format(cashValue)}  |  وزني: ${_goldFormat.format(weightValue)} جم',
+          style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.outline),
+        ),
+      );
+    }
+
     if (isLeaf) {
       // Still use ExpansionTile for a consistent look and to handle initially childless nodes
       // that might get children later, but the expand icon will be hidden automatically.
@@ -205,6 +238,7 @@ class AccountTile extends StatelessWidget {
     return ExpansionTile(
       key: PageStorageKey(account['id']), // Preserve expansion state
       title: tileTitle,
+      subtitle: tileSubtitle,
       children: node.children
           .map(
             (child) => AccountTile(
