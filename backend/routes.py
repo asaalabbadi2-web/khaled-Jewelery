@@ -32904,14 +32904,31 @@ def create_office_reservation():
 
         # ── قيد الإنشاء الوزني: ذهب يغادر المخزون إلى المكتب ───────────────
         # يُسجَّل دائماً عند إنشاء الحجز بغض النظر عن حالة الدفع.
-        # Dr. حساب وزني المورد (safe box المكتب) / Cr. مخزون كسر وزني (71310)
+        # Dr. حساب وزني المكتب (مفكرة account_category_id) / Cr. مخزون كسر وزني (71310)
+        #
+        # NOTE (2026-06-23): كان هذا يحلّ الحساب عبر supplier.default_safe_box.account_id
+        # -- مسار مستقل تماماً عن الجانب النقدي (الذي يستخدم office.account_category_id
+        # مباشرة)، فينتج حسابين مختلفين لنفس المكتب (شوهد فعلياً: نقدي->1072،
+        # وزني->1074، بينما 1072.memo_account_id=1213 الحساب الرسمي لم يُستخدَم
+        # إطلاقاً). الإصلاح: استخدام نفس سلسلة المرجع account_category_id ->
+        # memo_account_id المعتمدة في كل مكان آخر بالنظام (32 موضعاً في هذا
+        # الملف)، مع الإبقاء على المسار القديم كـfallback فقط لمكتب لم يُضبط
+        # له memo_account_id بعد، لا كمسار أساسي.
         _office_weight_acc_id = None
         try:
-            _gold_safe = getattr(supplier, 'default_safe_box', None)
-            if _gold_safe and getattr(_gold_safe, 'safe_type', None) == 'gold':
-                _office_weight_acc_id = getattr(_gold_safe, 'account_id', None)
+            _office_financial_acc = getattr(office, 'account_category', None)
+            if _office_financial_acc and getattr(_office_financial_acc, 'memo_account_id', None):
+                _office_weight_acc_id = _office_financial_acc.memo_account_id
         except Exception:
             pass
+
+        if not _office_weight_acc_id:
+            try:
+                _gold_safe = getattr(supplier, 'default_safe_box', None)
+                if _gold_safe and getattr(_gold_safe, 'safe_type', None) == 'gold':
+                    _office_weight_acc_id = getattr(_gold_safe, 'account_id', None)
+            except Exception:
+                pass
 
         _inv_weight_acc = Account.query.filter_by(account_number='71310').first()
         _inv_weight_acc_id = _inv_weight_acc.id if _inv_weight_acc else None
