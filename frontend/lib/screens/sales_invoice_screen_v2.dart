@@ -825,6 +825,15 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
 
       final apiService = ApiService();
       final allBoxes = await apiService.getSafeBoxes();
+
+      // Discard this response if the user has since switched to a different
+      // payment method while we were waiting on the network -- otherwise an
+      // earlier, slower-to-resolve call can overwrite the safe box chosen for
+      // whatever method is now actually selected (e.g. مدى's safe box gets
+      // silently replaced by نقداً's because the نقداً request happened to
+      // resolve last), routing the GL entry to the wrong account.
+      if (!mounted || _selectedPaymentMethodId != paymentMethodId) return;
+
       List<SafeBoxModel> boxes;
 
       // ✅ قواعد التوافق (الأفضل والمعمول به غالباً):

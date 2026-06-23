@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -8858,6 +8859,44 @@ def reassign_invoice_employee(invoice_id: int):
 
 
 
+_PAYMENT_SAFE_BOX_GUARD_LOGGER = logging.getLogger('payment_safe_box_guard')
+
+
+def _warn_if_safe_account_mismatches_payment_method(pm, safe_account_id, context: str = '') -> None:
+    """Stage-2-style warning-only check (never raises, never blocks).
+
+    Flags the case where a non-cash, non-receivable payment method resolves
+    to a safe account that differs from its OWN configured default safe
+    box's account -- the exact signature of a known frontend bug (an async
+    safe-box lookup race in *_loadSafeBoxesForPaymentMethod*) that silently
+    routed مدى/تحويل payments into the main cash account. Logged, not
+    enforced, since an admin could legitimately override the safe box via
+    "الخيارات المتقدمة" for a one-off reason; this is an audit trail for
+    spotting recurrences, not a hard gate.
+    """
+    try:
+        if pm is None or safe_account_id is None:
+            return
+        payment_type = str(getattr(pm, 'payment_type', '') or '').strip().lower()
+        if payment_type in ('cash', 'receivable'):
+            return
+        default_safe_box_id = getattr(pm, 'default_safe_box_id', None)
+        if not default_safe_box_id:
+            return
+        expected_box = SafeBox.query.get(default_safe_box_id)
+        expected_account_id = getattr(expected_box, 'account_id', None)
+        if expected_account_id and int(expected_account_id) != int(safe_account_id):
+            _PAYMENT_SAFE_BOX_GUARD_LOGGER.warning(
+                "payment_method=%r (id=%s, type=%s) resolved to account_id=%s but its "
+                "own default safe box (id=%s) maps to account_id=%s -- possible stale "
+                "safe-box selection from the client [%s]",
+                getattr(pm, 'name', None), getattr(pm, 'id', None), payment_type,
+                safe_account_id, default_safe_box_id, expected_account_id, context,
+            )
+    except Exception:
+        pass
+
+
 def _compute_commission_fields(amount: float, pm) -> dict:
     """Same formula used when an InvoicePayment is first created."""
     rate = float(getattr(pm, 'commission_rate', 0.0) or 0.0)
@@ -10217,6 +10256,7 @@ def add_invoice_payment(invoice_id: int):
         safe_account_id = getattr(safe_box_obj, 'account_id', None)
         if not safe_account_id:
             raise ValueError('safe_box_missing_account_id')
+        _warn_if_safe_account_mismatches_payment_method(pm_obj, safe_account_id, context='add_invoice_payment')
 
         direction = _direction_for_invoice_type(getattr(invoice, 'invoice_type', None))
         voucher_type = 'receipt' if direction == 'in' else 'payment'
@@ -13659,6 +13699,7 @@ def add_invoice():
 
                 if (not unposted_mode) and (not is_receivable):
                     safe_account_id = getattr(safe_box_obj, 'account_id', None)
+                    _warn_if_safe_account_mismatches_payment_method(pm_obj, safe_account_id, context='add_invoice:multi_payment')
                     if not safe_account_id:
                         db.session.rollback()
                         return jsonify({
@@ -13901,6 +13942,7 @@ def add_invoice():
 
             if payment_row is not None and (not unposted_mode) and (not is_receivable):
                 safe_account_id = getattr(safe_box_obj, 'account_id', None)
+                _warn_if_safe_account_mismatches_payment_method(pm_obj, safe_account_id, context='add_invoice:legacy_single_payment')
                 if not safe_account_id:
                     db.session.rollback()
                     return jsonify({

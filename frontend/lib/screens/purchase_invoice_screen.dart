@@ -1755,6 +1755,14 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
       if (paymentType == null) return;
 
       final allBoxes = await _api.getSafeBoxes();
+
+      // Discard this response if the user has since switched to a different
+      // payment method while we were waiting on the network -- otherwise an
+      // earlier, slower-to-resolve call can overwrite the safe box chosen for
+      // whatever method is now actually selected, routing the GL entry to
+      // the wrong account.
+      if (!mounted || _selectedPaymentMethodId != paymentMethodId) return;
+
       List<SafeBoxModel> boxes;
 
       switch (paymentType) {
