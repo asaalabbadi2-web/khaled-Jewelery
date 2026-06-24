@@ -979,10 +979,18 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
       '1260',
     ];
 
-    // فلترة الحسابات: إظهار الحسابات التفصيلية فقط (4 خانات أو أكثر)
+    // فلترة الحسابات: إظهار الحسابات التفصيلية فقط (4 خانات أو أكثر)،
+    // وتطابق نوع المبلغ (نقدي/ذهب) لهذا السطر تلقائياً -- بنفس حقل
+    // transaction_type المستخدَم في فلتر "نقدي/ذهبي/كلاهما" بديلوج
+    // "الطرف: آخر"، فيتغيّر محتوى القائمة فوراً عند تبديل نوع السطر بدل
+    // اختلاط حسابات نقدية ووزنية معاً بلا علاقة بما هو محدَّد.
     final detailedAccounts = _accounts.where((acc) {
       final accountNumber = acc['account_number'].toString();
-      return accountNumber.length >= 4; // حسابات تفصيلية
+      if (accountNumber.length < 4) return false; // حسابات تفصيلية فقط
+
+      final t = (acc['transaction_type'] ?? 'both').toString().toLowerCase();
+      if (amountType == 'gold') return t == 'gold' || t == 'both';
+      return t == 'cash' || t == 'both';
     }).toList();
 
     // ترتيب: الحسابات الأكثر استخداماً في المقدمة
@@ -1020,14 +1028,53 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
     }
   }
 
+  /// Returns 'cash'/'gold' if the given party account only makes sense as
+  /// one amount type, or null if it's free (dual account, or no party
+  /// selected). A safe box forces its own type; a plain account forces its
+  /// type unless it has a linked memo_account_id (dual -- the backend's
+  /// _resolve_account_id_for_amount_type already redirects gold lines to
+  /// the memo account at approval, so both types are valid and nothing
+  /// needs forcing).
+  String? _lockedAmountTypeForAccount(int? partyAccountId) {
+    final safe = _findSafeByAccountId(partyAccountId);
+    if (safe != null) {
+      return safe.safeType == 'gold' ? 'gold' : 'cash';
+    }
+    final account = _findAccountById(partyAccountId);
+    if (account == null) return null;
+    final tracksWeight = account['tracks_weight'] == true;
+    final hasMemo = account['memo_account_id'] != null;
+    if (tracksWeight) return 'gold';
+    if (!hasMemo) return 'cash';
+    return null; // dual account -- leave lines free.
+  }
+
+  /// The amount type lines must currently use, given the selected party for
+  /// party types where the picked account also implies a financial/weight
+  /// nature ("آخر" today). Drives both forcing existing lines (see
+  /// _syncLinesAmountTypeToParty) and disabling the non-matching radio
+  /// option in the line UI so the user can't switch back manually.
+  String? get _lockedAmountTypeForCurrentParty {
+    if (_partyType != 'other') return null;
+    return _lockedAmountTypeForAccount(_selectedOtherAccountId);
+  }
+
   /// When the party (الطرف) is a safe box, force all lines to match its type:
   /// gold safe → all lines become gold; cash/bank safe → all lines become cash.
+  ///
+  /// When it's a plain account (not safe-linked), its nature still narrows
+  /// what makes sense: a pure weight/memo account (tracks_weight) only
+  /// accepts gold lines, and a cash account with no linked memo
+  /// (memo_account_id) only accepts cash lines -- same single-type lock as
+  /// a safe box, just account-driven instead of safe-driven. A cash account
+  /// that DOES have a memo_account_id is dual (e.g. a regular supplier/
+  /// customer-style account): both cash and gold are valid, the backend
+  /// already redirects gold lines to the memo account at approval (see
+  /// _resolve_account_id_for_amount_type in routes.py) -- so leave lines
+  /// free to be either type, no forcing needed.
   void _syncLinesAmountTypeToParty(int? partyAccountId) {
-    final safe = _findSafeByAccountId(partyAccountId);
-    if (safe == null) return;
-
-    final String targetType =
-      safe.safeType == 'gold' ? 'gold' : 'cash';
+    final targetType = _lockedAmountTypeForAccount(partyAccountId);
+    if (targetType == null) return;
 
     for (final line in _accountLines) {
       if (line.amountType == targetType) continue;
@@ -2382,10 +2429,15 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                         safeType == 'gold';
                   }
 
-                  // Default (expenses / misc / legacy advances)
-                  return accNum.startsWith('5') ||
-                      accNum.startsWith('4') ||
-                      accNum.startsWith('140');
+                  // Default (no template): any postable detail account, not
+                  // just expense/revenue/VAT. A سند صرف is not limited to
+                  // those accounting-wise -- e.g. paying out a partner's
+                  // capital (310/320 تحت حقوق الملكية) or a weight/memo
+                  // account (7xxxx) are equally valid, and excluding them
+                  // entirely (vs. just not being the common case) made them
+                  // unreachable from this picker. Category/parent accounts
+                  // are still excluded since you can't post to them directly.
+                  return accNum.length >= 4;
                 },
                 showTransactionTypeFilter: true,
                 showTracksWeightFilter: false,
@@ -4031,12 +4083,14 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
                     child: RadioListTile<String>(
                       title: const Text('نقد'),
                       value: 'cash',
+                      enabled: _lockedAmountTypeForCurrentParty != 'gold',
                     ),
                   ),
                   Expanded(
                     child: RadioListTile<String>(
                       title: const Text('ذهب'),
                       value: 'gold',
+                      enabled: _lockedAmountTypeForCurrentParty != 'cash',
                     ),
                   ),
                 ],

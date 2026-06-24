@@ -61,7 +61,7 @@ class _VouchersListScreenState extends State<VouchersListScreen>
   String _sortBy = 'date';
   bool _sortAscending = false;
   _VoucherListView _viewMode = _VoucherListView.table;
-  double _toolbarHeight = 96;
+  double _toolbarHeight = 104; // +8 safety margin, see _measureToolbarHeight
 
   final NumberFormat _currencyFormat = NumberFormat('#,##0.00', 'ar');
   final NumberFormat _goldFormat = NumberFormat('#,##0.000', 'ar');
@@ -107,7 +107,14 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       if (context == null) return;
       final renderObject = context.findRenderObject();
       if (renderObject is! RenderBox) return;
-      final measuredHeight = renderObject.size.height;
+      // Small safety margin: the pinned header's height is set from this
+      // measurement *after* the fact, so any frame where the toolbar grows
+      // (e.g. a wrapped row gaining a line, "مسح الفلاتر" appearing) renders
+      // once against the previous, now-too-small height before this
+      // callback corrects it -- a brief but visible "BOTTOM OVERFLOWED"
+      // warning. The margin absorbs that one-frame lag.
+      const heightSafetyMargin = 8.0;
+      final measuredHeight = renderObject.size.height + heightSafetyMargin;
       if (measuredHeight <= 0) return;
       if ((measuredHeight - _toolbarHeight).abs() < 0.5) return;
       setState(() {

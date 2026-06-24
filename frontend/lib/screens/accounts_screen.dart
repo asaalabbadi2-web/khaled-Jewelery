@@ -69,13 +69,14 @@ class _AccountsScreenState extends State<AccountsScreen> {
       if (!mounted) {
         return;
       }
-      _allAccounts = allAccounts
+      final normalized = allAccounts
           .whereType<Map>()
           .map(
             (entry) =>
                 entry.map((key, value) => MapEntry(key.toString(), value)),
           )
           .toList(growable: false);
+      _allAccounts = _annotateMemoLinks(normalized);
       _filterAccounts();
       setState(() {
         _isLoading = false;
@@ -92,6 +93,61 @@ class _AccountsScreenState extends State<AccountsScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text('تعذر تحميل الحسابات: $e')));
     }
+  }
+
+  /// Display-only annotation: when a leaf account has a linked memo/weight
+  /// account (Account.memo_account_id) that is itself a leaf (category-level
+  /// nodes also carry memo_account_id, e.g. root "2 - الخصوم" <-> root
+  /// "72 - الخصوم وزني", but those always show a zero balance of their own
+  /// so there's nothing useful to annotate there), folds the memo account's
+  /// weight balance, name/number, and own map into the financial account's
+  /// map for the combined summary and the quick-jump ⚖️ shortcut. Both
+  /// accounts stay in the list as their own real, independent entries --
+  /// the list remains a faithful, complete reflection of every account.
+  ///
+  /// Note: tapping the ⚖️ shortcut opens AccountStatementScreen for the
+  /// memo account's id, and the backend's get_account_statement may
+  /// auto-return a merged cash+gold statement (is_merged: true) for it
+  /// instead of a weight-only view -- see the NOTE in routes.py's
+  /// get_account_statement. Intentional, not a bug.
+  List<Map<String, dynamic>> _annotateMemoLinks(
+    List<Map<String, dynamic>> accounts,
+  ) {
+    final byId = <int, Map<String, dynamic>>{};
+    for (final acc in accounts) {
+      final id = _asInt(acc['id']);
+      if (id != null) byId[id] = acc;
+    }
+    final hasChildren = <int>{};
+    for (final acc in accounts) {
+      final parentId = _asInt(acc['parent_id']);
+      if (parentId != null) hasChildren.add(parentId);
+    }
+
+    for (final acc in accounts) {
+      final id = _asInt(acc['id']);
+      if (id == null || acc['tracks_weight'] == true) continue;
+      if (hasChildren.contains(id)) continue;
+      final memoId = _asInt(acc['memo_account_id']);
+      if (memoId == null) continue;
+      final memoAccount = byId[memoId];
+      if (memoAccount == null || memoAccount['tracks_weight'] != true) {
+        continue;
+      }
+      if (hasChildren.contains(memoId)) continue;
+
+      acc['_merged_weight_total'] = _goldBalanceOf(memoAccount);
+      acc['_merged_memo_name'] = (memoAccount['name'] ?? '').toString();
+      acc['_merged_memo_number'] = (memoAccount['account_number'] ?? '')
+          .toString();
+      acc['_merged_memo_account'] = memoAccount;
+    }
+
+    return accounts;
+  }
+
+  bool _effectivelyTracksWeight(Map<String, dynamic> account) {
+    return _tracksWeight(account) || account['_merged_weight_total'] != null;
   }
 
   void _onContentScroll() {
@@ -174,6 +230,10 @@ class _AccountsScreenState extends State<AccountsScreen> {
   }
 
   double _goldBalanceOf(Map<String, dynamic> account) {
+    final mergedWeight = account['_merged_weight_total'];
+    if (mergedWeight is double) {
+      return mergedWeight;
+    }
     final weight = _balancesOf(account)?['weight'];
     if (weight is Map) {
       return _asDouble(weight['total']);
@@ -219,13 +279,21 @@ class _AccountsScreenState extends State<AccountsScreen> {
           final accountNumber = _accountNumber(account).toLowerCase();
           final type = _accountTypeLabel(account).toLowerCase();
           final parent = _parentLabel(account).toLowerCase();
+          final memoName = (account['_merged_memo_name'] ?? '')
+              .toString()
+              .toLowerCase();
+          final memoNumber = (account['_merged_memo_number'] ?? '')
+              .toString()
+              .toLowerCase();
 
           final matchesQuery =
               query.isEmpty ||
               name.contains(query) ||
               accountNumber.contains(query) ||
               type.contains(query) ||
-              parent.contains(query);
+              parent.contains(query) ||
+              memoName.contains(query) ||
+              memoNumber.contains(query);
 
           if (!matchesQuery) {
             return false;
@@ -236,7 +304,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
           if (_onlyWithBalance && !_hasAnyBalance(account)) {
             return false;
           }
-          if (_onlyWeightAccounts && !_tracksWeight(account)) {
+          if (_onlyWeightAccounts && !_effectivelyTracksWeight(account)) {
             return false;
           }
           return true;
@@ -404,7 +472,9 @@ class _AccountsScreenState extends State<AccountsScreen> {
     final detailAccounts = _filteredAccounts
         .where((account) => !_hasChildren(account))
         .length;
-    final weightAccounts = _filteredAccounts.where(_tracksWeight).length;
+    final weightAccounts = _filteredAccounts
+        .where(_effectivelyTracksWeight)
+        .length;
     final withBalance = _filteredAccounts.where(_hasAnyBalance).length;
 
     return Wrap(
@@ -721,7 +791,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: Icon(
-                      _tracksWeight(account)
+                      _effectivelyTracksWeight(account)
                           ? Icons.scale_outlined
                           : Icons.account_balance_wallet_outlined,
                       color: colorScheme.primary,
@@ -789,6 +859,20 @@ class _AccountsScreenState extends State<AccountsScreen> {
                     Chip(
                       avatar: const Icon(Icons.scale_outlined, size: 16),
                       label: const Text('وزني'),
+                    ),
+                  if (account['_merged_memo_account'] != null)
+                    Tooltip(
+                      message: 'عرض كشف الحساب الوزني المرتبط',
+                      child: ActionChip(
+                        avatar: const Icon(Icons.scale_outlined, size: 16),
+                        label: Text(
+                          'وزني مرتبط: ${account['_merged_memo_number']}',
+                        ),
+                        onPressed: () => _openStatement(
+                          account['_merged_memo_account']
+                              as Map<String, dynamic>,
+                        ),
+                      ),
                     ),
                   Chip(
                     avatar: Icon(
@@ -932,6 +1016,20 @@ class _AccountsScreenState extends State<AccountsScreen> {
                   ),
                 ),
               ),
+              if (account['_merged_memo_account'] != null)
+                Tooltip(
+                  message: 'عرض كشف الحساب الوزني المرتبط',
+                  child: IconButton(
+                    icon: Icon(
+                      Icons.scale_outlined,
+                      size: 18,
+                      color: colorScheme.secondary,
+                    ),
+                    onPressed: () => _openStatement(
+                      account['_merged_memo_account'] as Map<String, dynamic>,
+                    ),
+                  ),
+                ),
               const SizedBox(width: 12),
               PopupMenuButton<String>(
                 onSelected: (value) {

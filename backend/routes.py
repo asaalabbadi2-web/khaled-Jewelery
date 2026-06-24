@@ -3945,6 +3945,17 @@ def get_account_statement(account_id):
     # Dual Statement: if the account has a linked memo/financial pair, return a
     # unified timeline (cash + gold) using the existing merged statement logic.
     #
+    # NOTE for future readers: this means calling this same endpoint with
+    # EITHER side of a financial<->memo pair's id can return a *different*
+    # response shape (is_merged: true vs not present), and the merged
+    # response's cash figures will belong to the OTHER account, not this
+    # one. This is intentional, not a bug -- e.g. account 1100000 (a cash
+    # safe box) opened directly stays cash-only, but its linked weight
+    # account 71100000 opened on its own returns a combined cash+gold view
+    # that includes 1100000's cash movements. If you're debugging "why does
+    # this account's statement show data that belongs to another account",
+    # check is_payment_account/has_memo_pair below first.
+    #
     # Escape hatch (for debugging / special UX):
     # - Pass `separate=1` OR `merged=0` to force the classic single-account statement.
     try:

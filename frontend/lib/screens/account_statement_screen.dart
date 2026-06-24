@@ -393,6 +393,15 @@ class _AccountStatementScreenState extends State<AccountStatementScreen> {
       if (!mounted) return;
       setState(() {
         _statement = AccountStatement.fromJson(data);
+        // The heuristic above guesses the default view mode before the
+        // statement loads. is_merged is the backend's actual decision (see
+        // the NOTE in routes.py's get_account_statement) -- when present,
+        // it overrides the guess so a merged cash+gold statement always
+        // opens on "مزدوج" instead of hiding half the data behind a
+        // single-type default.
+        if (data['is_merged'] == true) {
+          _viewMode = 0;
+        }
         _filterLines(); // This will also handle the initial list
         _isLoading = false;
       });

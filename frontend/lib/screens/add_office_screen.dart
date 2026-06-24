@@ -43,8 +43,6 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
   List<SafeBoxModel> _goldSafeBoxes = const [];
   SafeBoxModel? _selectedGoldSafe;
 
-  bool _ensureSupplierAccounts = true;
-
   // Opening balances (used mainly when creating a new supplier)
   final _openingCashController = TextEditingController();
   final _openingGoldMainController = TextEditingController();
@@ -319,8 +317,6 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
           'opening_balance_cash': openingCash,
           'opening_balance_gold_main_karat': openingGoldMain,
         },
-
-        'ensure_supplier_accounts': _ensureSupplierAccounts,
       };
 
       if (widget.office == null) {
@@ -554,24 +550,6 @@ class _AddOfficeScreenState extends State<AddOfficeScreen> {
                       ),
                       const SizedBox(height: 12),
                     ],
-
-                    SwitchListTile.adaptive(
-                      value: _ensureSupplierAccounts,
-                      onChanged: (v) =>
-                          setState(() => _ensureSupplierAccounts = v),
-                      title: Text(
-                        isAr
-                            ? 'إنشاء/ربط حسابات المورد تلقائياً (مالي + مذكرة)'
-                            : 'Ensure supplier accounts (financial + memo)',
-                      ),
-                      subtitle: Text(
-                        isAr
-                            ? 'مفيد لتفعيل كشف الحساب المدمج وربط المذكرة'
-                            : 'Helps enable merged statements and memo linking',
-                      ),
-                      contentPadding: EdgeInsets.zero,
-                    ),
-                    const SizedBox(height: 16),
 
                     TextFormField(
                       controller: _phoneController,

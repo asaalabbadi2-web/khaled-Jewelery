@@ -3729,6 +3729,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
         context: context,
         isScrollControlled: true,
         backgroundColor: Colors.transparent,
+        // Wider than Material 3's default (~640) so the item chip row (qty,
+        // karat, weight, wage, price, total) fits on one line instead of
+        // wrapping to a second row on desktop-width screens.
+        constraints: const BoxConstraints(maxWidth: 820),
         builder: (sheetContext) {
           return _buildInvoicePreviewSheet(sheetContext, mergedInvoice);
         },
@@ -4076,6 +4080,13 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
                                         label: isAr
                                             ? 'أجور: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(wage)}'
                                             : 'Wage: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format(wage)}',
+                                        colorScheme: colorScheme,
+                                      ),
+                                    if (weight > 0)
+                                      _buildInfoChip(
+                                        label: isAr
+                                            ? 'السعر: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format((itemTotal - wage - itemTax) / weight)}'
+                                            : 'Price: ${NumberFormat('#,##0.00', isAr ? 'ar' : 'en').format((itemTotal - wage - itemTax) / weight)}',
                                         colorScheme: colorScheme,
                                       ),
                                     if (itemTax > 0)

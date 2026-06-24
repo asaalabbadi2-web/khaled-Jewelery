@@ -42,6 +42,14 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
     super.dispose();
   }
 
+  /// Looked up by account id so AccountTile can resolve an account's linked
+  /// memo/weight account (Account.memo_account_id) for the cash+weight
+  /// summary line and the quick-jump ⚖️ shortcut, without changing the
+  /// tree's actual parent_id-driven structure -- the chart stays a faithful
+  /// rendering of the real chart of accounts, with the relationship shown
+  /// as an annotation instead of by relocating nodes.
+  Map<int, Map<String, dynamic>> _accountsById = {};
+
   Future<void> _fetchAccounts() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
@@ -50,7 +58,13 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
       if (!mounted) return;
       setState(() {
         _accounts = accounts;
-        _accountTree = buildAccountTree(_applyMemoGrouping(accounts));
+        _accountsById = {
+          for (final acc in accounts.whereType<Map>())
+            acc['id'] as int: acc.map(
+              (key, value) => MapEntry(key.toString(), value),
+            ),
+        };
+        _accountTree = buildAccountTree(accounts);
         _isLoading = false;
       });
     } catch (e) {
@@ -60,46 +74,6 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
         context,
       ).showSnackBar(SnackBar(content: Text('Failed to load accounts: $e')));
     }
-  }
-
-  /// Display-only grouping: relocates each weight/memo account under its
-  /// paired financial account (Account.memo_account_id) for tree rendering,
-  /// instead of its real chart-of-accounts parent (financial and memo
-  /// accounts normally live in unrelated branches, e.g. sections 2 vs 7).
-  /// Does not mutate [accounts] or touch any backend data -- [_accounts]
-  /// (used by search/filter/delete) keeps the real parent_id values.
-  ///
-  /// Only applies to leaf entity pairs (e.g. an office/supplier's financial
-  /// + weight account, both childless). The memo_account_id pairing also
-  /// exists at the chart's category level (e.g. root "2 - الخصوم" <->
-  /// root "72 - الخصوم وزني", each with their own subtree) -- those must
-  /// stay where they are, or whole parallel sections of the chart would
-  /// collapse into each other.
-  List<Map<String, dynamic>> _applyMemoGrouping(List<dynamic> accounts) {
-    final byId = <int, Map<String, dynamic>>{
-      for (final acc in accounts)
-        acc['id'] as int: Map<String, dynamic>.from(acc as Map),
-    };
-    final hasChildren = <int>{
-      for (final acc in byId.values)
-        if (acc['parent_id'] != null) acc['parent_id'] as int,
-    };
-
-    for (final acc in byId.values) {
-      if (acc['tracks_weight'] == true) continue;
-      if (hasChildren.contains(acc['id'])) continue;
-      final memoId = acc['memo_account_id'];
-      if (memoId == null) continue;
-
-      final memoAccount = byId[memoId];
-      if (memoAccount == null || memoAccount['tracks_weight'] != true) continue;
-      if (hasChildren.contains(memoAccount['id'])) continue;
-
-      memoAccount['parent_id'] = acc['id'];
-      memoAccount['is_memo_pair_child'] = true;
-    }
-
-    return byId.values.toList();
   }
 
   void _showAddAccountDialog({Map<String, dynamic>? parentAccount}) {
@@ -731,6 +705,7 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                         ? _buildFilteredList(filteredAccounts)
                         : AccountTreeView(
                             roots: _accountTree,
+                            accountsById: _accountsById,
                             onEdit: _showEditAccountDialog,
                             onDelete: _deleteAccount,
                             onAddChild: (parentAccount) =>

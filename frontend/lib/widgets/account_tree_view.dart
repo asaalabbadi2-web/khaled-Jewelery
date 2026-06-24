@@ -56,6 +56,7 @@ List<AccountNode> buildAccountTree(List<dynamic> accounts) {
 // 3. AccountTreeView Widget
 class AccountTreeView extends StatelessWidget {
   final List<AccountNode> roots;
+  final Map<int, Map<String, dynamic>> accountsById;
   final Function(Map<String, dynamic>) onEdit;
   final Function(int) onDelete;
   final Function(Map<String, dynamic>) onAddChild;
@@ -64,6 +65,7 @@ class AccountTreeView extends StatelessWidget {
   const AccountTreeView({
     super.key,
     required this.roots,
+    required this.accountsById,
     required this.onEdit,
     required this.onDelete,
     required this.onAddChild,
@@ -77,6 +79,7 @@ class AccountTreeView extends StatelessWidget {
       itemBuilder: (context, index) {
         return AccountTile(
           node: roots[index],
+          accountsById: accountsById,
           onEdit: onEdit,
           onDelete: onDelete,
           onAddChild: onAddChild,
@@ -89,6 +92,7 @@ class AccountTreeView extends StatelessWidget {
 
 class AccountTile extends StatelessWidget {
   final AccountNode node;
+  final Map<int, Map<String, dynamic>> accountsById;
   final Function(Map<String, dynamic>) onEdit;
   final Function(int) onDelete;
   final Function(Map<String, dynamic>) onAddChild;
@@ -97,6 +101,7 @@ class AccountTile extends StatelessWidget {
   const AccountTile({
     super.key,
     required this.node,
+    required this.accountsById,
     required this.onEdit,
     required this.onDelete,
     required this.onAddChild,
@@ -107,14 +112,22 @@ class AccountTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final account = node.account;
     final bool isLeaf = node.children.isEmpty;
-    final bool isMemoPairChild = account['is_memo_pair_child'] == true;
-    AccountNode? memoChildNode;
-    for (final c in node.children) {
-      if (c.account['is_memo_pair_child'] == true) {
-        memoChildNode = c;
-        break;
-      }
-    }
+
+    // Linked memo/weight account (Account.memo_account_id), shown as an
+    // annotation (summary line + quick-jump icon) rather than relocated in
+    // the tree -- the tree stays a faithful rendering of the real
+    // parent_id structure. Only surfaced for leaf entities: category-level
+    // nodes (e.g. root "2 - الخصوم" <-> root "72 - الخصوم وزني") also carry
+    // memo_account_id but always show a zero balance of their own, so
+    // there is nothing useful to annotate there.
+    final memoId = account['memo_account_id'];
+    final memoAccount = (isLeaf && memoId != null)
+        ? accountsById[memoId]
+        : null;
+    // Tapping the ⚖️ below opens AccountStatementScreen for memoAccount's id.
+    // The backend's get_account_statement may auto-return a merged cash+gold
+    // statement (is_merged: true) for it instead of a weight-only view --
+    // see the NOTE in routes.py's get_account_statement. Intentional.
 
     PopupMenuItem<_AccountAction> buildItem(
       _AccountAction action,
@@ -141,20 +154,25 @@ class AccountTile extends StatelessWidget {
 
     final tileTitleRow = Row(
       children: [
-        if (isMemoPairChild)
-          Padding(
-            padding: const EdgeInsets.only(left: 6),
-            child: Tooltip(
-              message: 'حساب وزني مرتبط (مفكرة)',
-              child: Icon(Icons.scale_outlined, size: 16, color: Theme.of(context).colorScheme.secondary),
-            ),
-          ),
         Expanded(
           child: Text(
             '${account['account_number']} - ${account['name']}',
             overflow: TextOverflow.ellipsis,
           ),
         ),
+        if (memoAccount != null)
+          Tooltip(
+            message:
+                'عرض كشف الحساب الوزني المرتبط: ${memoAccount['account_number']} - ${memoAccount['name']}',
+            child: IconButton(
+              icon: Icon(
+                Icons.scale_outlined,
+                size: 18,
+                color: Theme.of(context).colorScheme.secondary,
+              ),
+              onPressed: () => onAccountTap(memoAccount),
+            ),
+          ),
         PopupMenuButton<_AccountAction>(
           tooltip: 'خيارات',
           onSelected: (action) {
@@ -213,14 +231,21 @@ class AccountTile extends StatelessWidget {
     );
 
     Widget? tileSubtitle;
-    if (memoChildNode != null) {
-      final cashValue = (account['balances']?['cash'] as num?)?.toDouble() ?? 0.0;
-      final weightValue = (memoChildNode.account['balances']?['weight']?['total'] as num?)?.toDouble() ?? 0.0;
+    if (memoAccount != null) {
+      final cashValue =
+          (account['balances']?['cash'] as num?)?.toDouble() ?? 0.0;
+      final weightValue =
+          (memoAccount['balances']?['weight']?['total'] as num?)
+              ?.toDouble() ??
+          0.0;
       tileSubtitle = Padding(
         padding: const EdgeInsets.only(top: 2),
         child: Text(
           'نقدي: ${_cashFormat.format(cashValue)}  |  وزني: ${_goldFormat.format(weightValue)} جم',
-          style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.outline),
+          style: TextStyle(
+            fontSize: 12,
+            color: Theme.of(context).colorScheme.outline,
+          ),
         ),
       );
     }
@@ -231,18 +256,19 @@ class AccountTile extends StatelessWidget {
       return ExpansionTile(
         key: PageStorageKey(account['id']), // Preserve expansion state
         title: tileTitle,
-        children: [], // No children to expand
+        subtitle: tileSubtitle,
+        children: const [], // No children to expand
       );
     }
 
     return ExpansionTile(
       key: PageStorageKey(account['id']), // Preserve expansion state
       title: tileTitle,
-      subtitle: tileSubtitle,
       children: node.children
           .map(
             (child) => AccountTile(
               node: child,
+              accountsById: accountsById,
               onEdit: onEdit,
               onDelete: onDelete,
               onAddChild: onAddChild,

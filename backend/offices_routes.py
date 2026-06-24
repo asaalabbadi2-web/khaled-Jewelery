@@ -471,7 +471,13 @@ def create_office():
                 return jsonify({'error': 'يوجد مورد بنفس اسم المكتب بالفعل. استخدم خيار (ربط بمورد موجود) بدلاً من إنشاء جديد.'}), 400
             supplier = ensure_office_supplier(office)
 
-        if _boolish(data.get('ensure_supplier_accounts'), default=False):
+        # Default True to match ensure_customer_accounts/ensure_supplier_accounts'
+        # own default at the direct /customers and /suppliers creation routes --
+        # an office's supplier should never end up with an unlinked memo account
+        # (see the مكاتب تسكير فورية واشخاص incident: its weight postings used
+        # supplier.default_safe_box.account_id instead of memo_account_id
+        # because this call was skipped at creation time).
+        if _boolish(data.get('ensure_supplier_accounts'), default=True):
             ensure_supplier_accounts(supplier)
 
         gold_safe_link_mode = str(data.get('gold_safe_link_mode') or data.get('office_gold_safe_mode') or 'new').strip().lower()
@@ -604,8 +610,8 @@ def update_office(office_id):
                 office.supplier.default_safe_box_id = gold_safe.id
                 db.session.add(office.supplier)
 
-        # Optional: ensure supplier accounts
-        if office.supplier and _boolish(data.get('ensure_supplier_accounts'), default=False):
+        # Optional: ensure supplier accounts (same default as creation -- see NOTE above)
+        if office.supplier and _boolish(data.get('ensure_supplier_accounts'), default=True):
             ensure_supplier_accounts(office.supplier)
 
         db.session.commit()
