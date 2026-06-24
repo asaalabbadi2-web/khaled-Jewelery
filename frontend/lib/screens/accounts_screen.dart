@@ -33,6 +33,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
   late bool _onlyDetailAccounts;
   bool _onlyWithBalance = false;
   bool _onlyWeightAccounts = false;
+  final Set<int> _absorbedMemoIds = {};
   String _sortBy = 'number';
   bool _sortAscending = true;
   _AccountsViewMode _viewMode = _AccountsViewMode.cards;
@@ -95,24 +96,32 @@ class _AccountsScreenState extends State<AccountsScreen> {
     }
   }
 
-  /// Display-only annotation: when a leaf account has a linked memo/weight
-  /// account (Account.memo_account_id) that is itself a leaf (category-level
-  /// nodes also carry memo_account_id, e.g. root "2 - الخصوم" <-> root
-  /// "72 - الخصوم وزني", but those always show a zero balance of their own
-  /// so there's nothing useful to annotate there), folds the memo account's
+  /// When a leaf account has a linked memo/weight account
+  /// (Account.memo_account_id) that is itself a leaf (category-level nodes
+  /// also carry memo_account_id, e.g. root "2 - الخصوم" <-> root "72 -
+  /// الخصوم وزني", but those always show a zero balance of their own so
+  /// there's nothing useful to merge there), folds the memo account's
   /// weight balance, name/number, and own map into the financial account's
-  /// map for the combined summary and the quick-jump ⚖️ shortcut. Both
-  /// accounts stay in the list as their own real, independent entries --
-  /// the list remains a faithful, complete reflection of every account.
+  /// map for the combined summary and the quick-jump ⚖️ shortcut, and
+  /// records the memo account's id in [_absorbedMemoIds] so _filterAccounts
+  /// can drop its now-redundant standalone card from the list (its balance
+  /// is already shown on the financial account's card). The memo account
+  /// still surfaces normally when "وزنية فقط" is active, since that filter
+  /// is an explicit ask to see weight accounts specifically.
   ///
-  /// Note: tapping the ⚖️ shortcut opens AccountStatementScreen for the
-  /// memo account's id, and the backend's get_account_statement may
-  /// auto-return a merged cash+gold statement (is_merged: true) for it
-  /// instead of a weight-only view -- see the NOTE in routes.py's
-  /// get_account_statement. Intentional, not a bug.
+  /// Note: tapping the ⚖️ shortcut (or "كشف الحساب" on the financial card)
+  /// opens AccountStatementScreen, which has its own دمج/ذهبي/نقدي toggle
+  /// (_viewMode in account_statement_screen.dart) -- so the single merged
+  /// card loses no access to either breakdown. The backend's
+  /// get_account_statement may also auto-return a merged cash+gold
+  /// statement (is_merged: true) for either id -- see the NOTE in
+  /// routes.py's get_account_statement. Intentional, not a bug.
   List<Map<String, dynamic>> _annotateMemoLinks(
     List<Map<String, dynamic>> accounts,
   ) {
+    // Rebuilt fresh each call (_fetchAccounts can re-run via pull-to-refresh
+    // or the refresh button), so stale ids from a previous load never stick.
+    _absorbedMemoIds.clear();
     final byId = <int, Map<String, dynamic>>{};
     for (final acc in accounts) {
       final id = _asInt(acc['id']);
@@ -141,6 +150,7 @@ class _AccountsScreenState extends State<AccountsScreen> {
       acc['_merged_memo_number'] = (memoAccount['account_number'] ?? '')
           .toString();
       acc['_merged_memo_account'] = memoAccount;
+      _absorbedMemoIds.add(memoId);
     }
 
     return accounts;
@@ -297,6 +307,12 @@ class _AccountsScreenState extends State<AccountsScreen> {
 
           if (!matchesQuery) {
             return false;
+          }
+          if (!_onlyWeightAccounts) {
+            final id = _asInt(account['id']);
+            if (id != null && _absorbedMemoIds.contains(id)) {
+              return false;
+            }
           }
           if (_onlyDetailAccounts && _hasChildren(account)) {
             return false;
