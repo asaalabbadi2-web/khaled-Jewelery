@@ -197,6 +197,40 @@ class CurrencyText extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// sarAwareSpans — reusable span-builder behind SarAwareText
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Splits [text] on every occurrence of `'ر.س'` and returns the equivalent
+/// [InlineSpan] list, swapping in a [SarSymbolSpan] image for each occurrence
+/// when [isNewSar] is true. Use this (instead of [SarAwareText]) when [text]
+/// needs to be just one piece of a larger [RichText]/[TextSpan] tree (e.g.
+/// alongside an icon or another label) rather than a whole [Text] widget.
+List<InlineSpan> sarAwareSpans(
+  String text, {
+  required bool isNewSar,
+  required TextStyle style,
+}) {
+  if (!isNewSar || !text.contains('ر.س')) {
+    return [TextSpan(text: text, style: style)];
+  }
+
+  final fontSize = style.fontSize ?? 14.0;
+  final color = style.color ?? Colors.black;
+
+  final parts = text.split('ر.س');
+  final spans = <InlineSpan>[];
+  for (int i = 0; i < parts.length; i++) {
+    if (parts[i].isNotEmpty) {
+      spans.add(TextSpan(text: parts[i], style: style));
+    }
+    if (i < parts.length - 1) {
+      spans.add(SarSymbolSpan(fontSize: fontSize, color: color));
+    }
+  }
+  return spans;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // SarAwareText — drop-in Text replacement that renders the new SAR graphic
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -248,22 +282,11 @@ class SarAwareText extends StatelessWidget {
 
     final effectiveStyle =
         style ?? DefaultTextStyle.of(context).style.copyWith(inherit: true);
-    final fontSize = effectiveStyle.fontSize ?? 14.0;
-    final color = effectiveStyle.color ?? Colors.black;
-
-    final parts = text.split('ر.س');
-    final spans = <InlineSpan>[];
-    for (int i = 0; i < parts.length; i++) {
-      if (parts[i].isNotEmpty) {
-        spans.add(TextSpan(text: parts[i], style: effectiveStyle));
-      }
-      if (i < parts.length - 1) {
-        spans.add(SarSymbolSpan(fontSize: fontSize, color: color));
-      }
-    }
 
     return RichText(
-      text: TextSpan(children: spans),
+      text: TextSpan(
+        children: sarAwareSpans(text, isNewSar: isNewSar, style: effectiveStyle),
+      ),
       textAlign: textAlign,
       maxLines: maxLines,
       overflow: overflow ?? TextOverflow.clip,

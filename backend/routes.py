@@ -22650,7 +22650,11 @@ def get_home_leaderboard():
 
     rows = []
     employee_points_map = {}
+    employee_points_sales_map = {}
+    employee_points_purchase_map = {}
     employee_profit_gold_map = {}
+    employee_profit_gold_sales_map = {}
+    employee_profit_gold_purchase_map = {}
     employee_sales_map = {}
     employee_purchase_map = {}
     points_invoices = None
@@ -22739,14 +22743,21 @@ def get_home_leaderboard():
 
             counts_by_employee[int(actor_id)] = counts_by_employee.get(int(actor_id), 0) + 1
             invoice_total = float(getattr(inv, 'total', 0.0) or 0.0)
-            if str(getattr(inv, 'invoice_type', '') or '').strip() == 'شراء من عميل':
+            earned_main = max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
+            is_purchase = str(getattr(inv, 'invoice_type', '') or '').strip() == 'شراء من عميل'
+            if is_purchase:
                 employee_purchase_map[int(actor_id)] = employee_purchase_map.get(int(actor_id), 0.0) + invoice_total
+                employee_profit_gold_purchase_map[int(actor_id)] = (
+                    employee_profit_gold_purchase_map.get(int(actor_id), 0.0) + earned_main
+                )
             else:
                 employee_sales_map[int(actor_id)] = employee_sales_map.get(int(actor_id), 0.0) + invoice_total
+                employee_profit_gold_sales_map[int(actor_id)] = (
+                    employee_profit_gold_sales_map.get(int(actor_id), 0.0) + earned_main
+                )
 
-            earned_main = float(getattr(inv, 'profit_gold', 0.0) or 0.0)
             employee_profit_gold_map[int(actor_id)] = (
-                employee_profit_gold_map.get(int(actor_id), 0.0) + max(0.0, earned_main)
+                employee_profit_gold_map.get(int(actor_id), 0.0) + earned_main
             )
 
         for actor_id, earned_main_total in employee_profit_gold_map.items():
@@ -22754,6 +22765,14 @@ def get_home_leaderboard():
                 0,
                 int(round(float(earned_main_total) * points_per_gram)),
             )
+        employee_points_sales_map = {
+            actor_id: max(0, int(round(float(v) * points_per_gram)))
+            for actor_id, v in employee_profit_gold_sales_map.items()
+        }
+        employee_points_purchase_map = {
+            actor_id: max(0, int(round(float(v) * points_per_gram)))
+            for actor_id, v in employee_profit_gold_purchase_map.items()
+        }
 
         # Create a rows-like list so downstream logic stays consistent.
         class _Row:
@@ -22829,6 +22848,8 @@ def get_home_leaderboard():
                 _to_float(employee_purchase_map.get(emp_id, 0.0), 0.0),
                 2,
             ),
+            'points_sales': int(employee_points_sales_map.get(emp_id, 0) or 0),
+            'points_purchase': int(employee_points_purchase_map.get(emp_id, 0) or 0),
         })
 
     metric_key = 'weight_g'
@@ -22904,6 +22925,8 @@ def get_home_leaderboard():
             'score': round(score_value, 3 if metric_key == 'weight_g' else 0),
             'sales_amount': round(_to_float(it.get('sales_amount', 0.0), 0.0), 2),
             'purchase_amount': round(_to_float(it.get('purchase_amount', 0.0), 0.0), 2),
+            'points_sales': int(it.get('points_sales') or 0),
+            'points_purchase': int(it.get('points_purchase') or 0),
             'share': round(float(share), 4),
             'goal_target': goal_target,
             'goal_progress': goal_progress,  # 0.0–1.0 أو null إن لم يُضبط هدف

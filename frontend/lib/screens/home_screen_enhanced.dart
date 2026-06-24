@@ -2631,6 +2631,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final count = (row['count'] as num?)?.toInt() ?? 0;
       final salesAmount = (row['sales_amount'] as num?)?.toDouble() ?? 0.0;
       final purchaseAmount = (row['purchase_amount'] as num?)?.toDouble() ?? 0.0;
+      final pointsSales = (row['points_sales'] as num?)?.toInt() ?? 0;
+      final pointsPurchase = (row['points_purchase'] as num?)?.toInt() ?? 0;
       // تقدم الهدف الشخصي للموظف (null = لم يُضبط هدف)
       final goalProgress = (row['goal_progress'] as num?)?.toDouble();
 
@@ -2671,6 +2673,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         _ => isAr ? 'جم' : 'g',
       };
       final numberFormat = NumberFormat('#,##0', 'en');
+      final pointsUnitAr = isAr ? 'نقطة' : 'pts';
+      final currencySymbolText = context.read<SettingsProvider>().currencySymbolText;
+      final salesValueText = metric == 'points'
+          ? '${numberFormat.format(salesAmount.round())} $currencySymbolText · $pointsSales $pointsUnitAr'
+          : '${numberFormat.format(salesAmount.round())} $currencySymbolText';
+      final purchaseValueText = metric == 'points'
+          ? '${numberFormat.format(purchaseAmount.round())} $currencySymbolText · $pointsPurchase $pointsUnitAr'
+          : '${numberFormat.format(purchaseAmount.round())} $currencySymbolText';
 
       bool hovered = false;
       return StatefulBuilder(
@@ -2800,13 +2810,13 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                           ),
                           _buildStatChip(
                             dotColor: AppColors.success,
-                            value: numberFormat.format(salesAmount.round()),
+                            value: salesValueText,
                             label: isAr ? 'مبيعات' : 'Sales',
                             valueColor: AppColors.success,
                           ),
                           _buildStatChip(
                             dotColor: const Color(0xFF5E35B1),
-                            value: numberFormat.format(purchaseAmount.round()),
+                            value: purchaseValueText,
                             label: isAr ? 'مشتريات' : 'Purch',
                             valueColor: const Color(0xFF5E35B1),
                           ),
@@ -3868,6 +3878,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     required String label,
     required Color valueColor,
   }) {
+    final isNewSar = context.read<SettingsProvider>().currencyIsNewSar;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -3887,8 +3898,9 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
           text: TextSpan(
             style: const TextStyle(fontSize: 11.5, fontFamily: 'Cairo'),
             children: [
-              TextSpan(
-                text: value,
+              ...cu.sarAwareSpans(
+                value,
+                isNewSar: isNewSar,
                 style: TextStyle(fontWeight: FontWeight.w800, color: valueColor),
               ),
               if (label.isNotEmpty)
