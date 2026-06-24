@@ -1057,21 +1057,17 @@ class _JournalEntriesListScreenState extends State<JournalEntriesListScreen>
     final theme = Theme.of(context);
     final maxHeight = MediaQuery.of(context).size.height * 0.28;
     _measureToolbarHeight();
-    return SliverPersistentHeader(
-      pinned: true,
-      floating: true,
-      delegate: PinnedHeaderDelegate(
-        height: _toolbarHeight.clamp(0.0, maxHeight),
-        backgroundColor: theme.scaffoldBackgroundColor,
-        child: ConstrainedBox(
-          constraints: BoxConstraints(maxHeight: maxHeight),
-          child: SingleChildScrollView(
-            child: KeyedSubtree(
-              key: _toolbarKey,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: _buildManagementToolbar(),
-              ),
+    return AnimatedPinnedHeader(
+      height: _toolbarHeight.clamp(0.0, maxHeight),
+      backgroundColor: theme.scaffoldBackgroundColor,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxHeight: maxHeight),
+        child: SingleChildScrollView(
+          child: KeyedSubtree(
+            key: _toolbarKey,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _buildManagementToolbar(),
             ),
           ),
         ),

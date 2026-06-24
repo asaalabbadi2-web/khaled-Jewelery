@@ -754,18 +754,14 @@ class _VouchersListScreenState extends State<VouchersListScreen>
 
   Widget _buildPinnedToolbarSliver(ThemeData themeData) {
     _measureToolbarHeight();
-    return SliverPersistentHeader(
-      pinned: true,
-      floating: true,
-      delegate: PinnedHeaderDelegate(
-        height: _toolbarHeight,
-        backgroundColor: themeData.scaffoldBackgroundColor,
-        child: KeyedSubtree(
-          key: _toolbarKey,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: _buildManagementToolbar(themeData),
-          ),
+    return AnimatedPinnedHeader(
+      height: _toolbarHeight,
+      backgroundColor: themeData.scaffoldBackgroundColor,
+      child: KeyedSubtree(
+        key: _toolbarKey,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: _buildManagementToolbar(themeData),
         ),
       ),
     );

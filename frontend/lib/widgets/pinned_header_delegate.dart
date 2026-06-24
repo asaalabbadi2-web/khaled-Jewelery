@@ -31,3 +31,46 @@ class PinnedHeaderDelegate extends SliverPersistentHeaderDelegate {
         oldDelegate.child != child;
   }
 }
+
+/// A pinned sliver header whose height animates smoothly when it changes,
+/// instead of snapping instantly. [PinnedHeaderDelegate]'s height is
+/// normally re-measured after each render and fed back via setState (since
+/// a sliver header's extent must be known before its content is measured
+/// directly) -- the very first time the true height differs from the
+/// initial guess (or whenever content grows/shrinks, e.g. a "مسح الفلاتر"
+/// button appearing), that produces a visible jump/snap on open. Wrapping
+/// the height in a [TweenAnimationBuilder] turns that into a smooth resize.
+class AnimatedPinnedHeader extends StatelessWidget {
+  const AnimatedPinnedHeader({
+    super.key,
+    required this.height,
+    required this.child,
+    required this.backgroundColor,
+    this.duration = const Duration(milliseconds: 220),
+  });
+
+  final double height;
+  final Widget child;
+  final Color backgroundColor;
+  final Duration duration;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(end: height),
+      duration: duration,
+      curve: Curves.easeOutCubic,
+      builder: (context, animatedHeight, _) {
+        return SliverPersistentHeader(
+          pinned: true,
+          floating: true,
+          delegate: PinnedHeaderDelegate(
+            height: animatedHeight,
+            backgroundColor: backgroundColor,
+            child: child,
+          ),
+        );
+      },
+    );
+  }
+}

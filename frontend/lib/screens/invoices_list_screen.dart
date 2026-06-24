@@ -1736,18 +1736,14 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
   Widget _buildPinnedFilterToolbarSliver() {
     _measureFilterToolbarHeight();
     final theme = Theme.of(context);
-    return SliverPersistentHeader(
-      pinned: true,
-      floating: true,
-      delegate: PinnedHeaderDelegate(
-        height: _filterToolbarHeight,
-        backgroundColor: theme.scaffoldBackgroundColor,
-        child: KeyedSubtree(
-          key: _invoiceFilterToolbarKey,
-          child: Padding(
-            padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 8, 8),
-            child: _buildFilterToolbar(),
-          ),
+    return AnimatedPinnedHeader(
+      height: _filterToolbarHeight,
+      backgroundColor: theme.scaffoldBackgroundColor,
+      child: KeyedSubtree(
+        key: _invoiceFilterToolbarKey,
+        child: Padding(
+          padding: const EdgeInsetsDirectional.fromSTEB(8, 8, 8, 8),
+          child: _buildFilterToolbar(),
         ),
       ),
     );
