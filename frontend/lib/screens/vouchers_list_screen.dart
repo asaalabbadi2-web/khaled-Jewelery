@@ -107,12 +107,10 @@ class _VouchersListScreenState extends State<VouchersListScreen>
       if (context == null) return;
       final renderObject = context.findRenderObject();
       if (renderObject is! RenderBox) return;
-      // Small safety margin: the pinned header's height is set from this
-      // measurement *after* the fact, so any frame where the toolbar grows
-      // (e.g. a wrapped row gaining a line, "مسح الفلاتر" appearing) renders
-      // once against the previous, now-too-small height before this
-      // callback corrects it -- a brief but visible "BOTTOM OVERFLOWED"
-      // warning. The margin absorbs that one-frame lag.
+      // Small safety margin for sub-pixel rounding only -- safe here
+      // because the measured child is wrapped in an OverflowBox (see
+      // _buildPinnedToolbarSliver), so this always reflects the content's
+      // true natural height, not whatever _toolbarHeight currently is.
       const heightSafetyMargin = 8.0;
       final measuredHeight = renderObject.size.height + heightSafetyMargin;
       if (measuredHeight <= 0) return;
@@ -754,14 +752,32 @@ class _VouchersListScreenState extends State<VouchersListScreen>
 
   Widget _buildPinnedToolbarSliver(ThemeData themeData) {
     _measureToolbarHeight();
-    return AnimatedPinnedHeader(
-      height: _toolbarHeight,
-      backgroundColor: themeData.scaffoldBackgroundColor,
-      child: KeyedSubtree(
-        key: _toolbarKey,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-          child: _buildManagementToolbar(themeData),
+    return SliverPersistentHeader(
+      pinned: true,
+      floating: true,
+      delegate: PinnedHeaderDelegate(
+        height: _toolbarHeight,
+        backgroundColor: themeData.scaffoldBackgroundColor,
+        // OverflowBox lets the measured child report its own true natural
+        // height instead of being forced to exactly _toolbarHeight (the
+        // sliver gives its child a *tight* height constraint -- min==max).
+        // Without this, _toolbarKey's RenderBox always measures back
+        // whatever _toolbarHeight already is, so any added margin (or
+        // rounding) keeps re-triggering setState with height+margin,
+        // forever -- the toolbar growing without bound on every frame
+        // ("auto-expanding"/sliding down), which is what a fixed +8px
+        // margin here previously caused.
+        child: OverflowBox(
+          alignment: Alignment.topCenter,
+          minHeight: 0,
+          maxHeight: double.infinity,
+          child: KeyedSubtree(
+            key: _toolbarKey,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: _buildManagementToolbar(themeData),
+            ),
+          ),
         ),
       ),
     );
