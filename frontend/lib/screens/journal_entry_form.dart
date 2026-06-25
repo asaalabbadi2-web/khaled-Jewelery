@@ -757,6 +757,13 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
     // Finally, check for balance and ask for confirmation if needed
     if (!await _checkBalances()) return;
 
+    // Warn (don't silently redirect) when a line posts a gold amount on a
+    // cash-only account or a cash amount on a gold-only account -- e.g. the
+    // financial side of a customer/supplier pair instead of its linked
+    // weight account. Accounts with transaction_type 'both' (safe-box-linked,
+    // real physical custody) are exempt, matching the voucher posting logic.
+    if (!await _checkAccountTypeMismatches()) return;
+
     final data = {
       'description': _descriptionController.text,
       'date': _dateController.text,
@@ -873,6 +880,75 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       return proceed ?? false;
     }
     return true;
+  }
+
+  Future<bool> _checkAccountTypeMismatches() async {
+    int? toInt(dynamic v) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+
+    final mismatches = <String>[];
+    for (var line in _lines) {
+      if (!line.hasValues || line.accountId == null) continue;
+      final account = _accounts.firstWhere(
+        (acc) => toInt(acc['id']) == line.accountId,
+        orElse: () => null,
+      );
+      if (account == null) continue;
+      final type = (account['transaction_type'] ?? '').toString().toLowerCase();
+      if (type == 'both') continue; // safe-box-linked, real custody — exempt
+
+      final hasCash =
+          (double.tryParse(line.cashDebitController.text) ?? 0.0) != 0.0 ||
+          (double.tryParse(line.cashCreditController.text) ?? 0.0) != 0.0;
+
+      if (type == 'cash' && line.hasGoldValues) {
+        mismatches.add(
+          '"${account['name']}" حساب نقدي، وله مبلغ ذهب مُدخَل عليه مباشرة.',
+        );
+      } else if (type == 'gold' && hasCash) {
+        mismatches.add(
+          '"${account['name']}" حساب وزني، وله مبلغ نقدي مُدخَل عليه مباشرة.',
+        );
+      }
+    }
+
+    if (mismatches.isEmpty) return true;
+
+    final proceed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('تنبيه: نوع مبلغ مخالف لنوع الحساب'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            for (final m in mismatches) Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Text('• $m'),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'إن لم يكن هذا مقصوداً، تحقق من اختيار الحساب الصحيح (المالي أو الوزني المرتبط).',
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('الرجوع والمراجعة'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('نعم، متابعة'),
+          ),
+        ],
+      ),
+    );
+    return proceed ?? false;
   }
 
   // --- Build Method ---

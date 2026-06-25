@@ -98,6 +98,35 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
             toInt(a['parent_id'] ?? a['parentId'])!,
       };
 
+      // Same merge as the accounts list screen (see _annotateMemoLinks in
+      // accounts_screen.dart): a leaf financial account paired with a leaf
+      // memo/weight account already gets both posted to it automatically
+      // (see _resolve_account_id_for_amount_type in routes.py), so picking
+      // either one is the same choice. Hide the memo side from the default
+      // list -- picking the financial side covers both -- and surface the
+      // pairing as a hint on the financial side's row instead. Category-
+      // level pairs (the memo side also has children) are left alone; only
+      // hide a leaf-to-leaf pair.
+      final accountsById = <int, Map<String, dynamic>>{};
+      for (final a in accounts) {
+        final id = toInt(a['id']);
+        if (id != null) accountsById[id] = a;
+      }
+      final absorbedMemoIds = <int>{};
+      final memoNameByFinancialId = <int, String>{};
+      for (final a in accounts) {
+        final id = toInt(a['id']);
+        if (id == null || accountTracksWeight(a)) continue;
+        if (parentIds.contains(id)) continue;
+        final memoId = toInt(a['memo_account_id'] ?? a['memoAccountId']);
+        if (memoId == null) continue;
+        final memo = accountsById[memoId];
+        if (memo == null || !accountTracksWeight(memo)) continue;
+        if (parentIds.contains(memoId)) continue;
+        absorbedMemoIds.add(memoId);
+        memoNameByFinancialId[id] = accountLabelOf(memo);
+      }
+
       List<Map<String, dynamic>> applyFilters(String q) {
         final query = q.trim().toLowerCase();
         final result = <Map<String, dynamic>>[];
@@ -157,12 +186,24 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
           return false;
         }
 
+        final explicitlyWantsWeight =
+            txFilter == AccountTransactionFilter.gold ||
+            weightFilter == AccountTracksWeightFilter.weightOnly;
+
         for (final a in accounts) {
           if (predicate != null && !predicate(a)) continue;
           if (!txOk(a)) continue;
           if (!weightOk(a)) continue;
           if (!leafOk(a)) continue;
           if (!queryOk(a)) continue;
+          if (!explicitlyWantsWeight) {
+            final id = toInt(a['id']);
+            if (id != null &&
+                absorbedMemoIds.contains(id) &&
+                id != selectedId) {
+              continue;
+            }
+          }
           result.add(a);
         }
 
@@ -412,10 +453,15 @@ Future<Map<String, dynamic>?> showAccountPickerBottomSheet({
                                   (selectedId != null && idInt == selectedId);
 
                               final label = accountLabelOf(a);
-                              final txLabel = accountTransactionTypeLabel(
-                                accountTransactionTypeOf(a),
-                                isArabic: isArabic,
-                              );
+                              final memoName = memoNameByFinancialId[idInt];
+                              final txLabel = memoName == null
+                                  ? accountTransactionTypeLabel(
+                                      accountTransactionTypeOf(a),
+                                      isArabic: isArabic,
+                                    )
+                                  : (isArabic
+                                        ? '⚖️ يشمل الحساب الوزني المرتبط: $memoName'
+                                        : '⚖️ Includes linked weight account: $memoName');
 
                               return ListTile(
                                 dense: true,

@@ -26399,10 +26399,58 @@ def generate_voucher_number(voucher_type, year=None, voucher_date=None):
         next_seq += 1
 
 
+def _resolve_account_id_for_amount_type(account_id, amount_type, *, safe_account_ids=None, account_cache=None):
+    """Resolve the posting account id for a voucher line.
+
+    Dual/memo rules:
+    - cash lines stay on the selected account
+    - gold lines should post to the memo (weight) account when the selected
+      account is a financial account linked via memo_account_id.
+    - never remap SafeBox accounts (they are the physical custody accounts)
+
+    Callers that already have a precomputed safe-account-id set / Account
+    cache (e.g. looping over many lines) should pass them in to avoid
+    repeated queries; single-line callers can omit both and this falls back
+    to querying just for that account.
+    """
+    if not account_id:
+        return account_id
+    account_id = int(account_id)
+
+    if safe_account_ids is not None:
+        if account_id in safe_account_ids:
+            return account_id
+    else:
+        try:
+            if SafeBox.query.filter_by(account_id=account_id).first():
+                return account_id
+        except Exception:
+            pass
+
+    if (amount_type or '').strip().lower() != 'gold':
+        return account_id
+
+    acc = account_cache.get(account_id) if account_cache is not None else None
+    if acc is None:
+        try:
+            acc = Account.query.get(account_id)
+        except Exception:
+            acc = None
+    if not acc:
+        return account_id
+
+    try:
+        if (not bool(getattr(acc, 'tracks_weight', False))) and getattr(acc, 'memo_account_id', None):
+            return int(acc.memo_account_id)
+    except Exception:
+        return account_id
+    return account_id
+
+
 def create_journal_entry_from_voucher(voucher):
     """
     إنشاء قيد محاسبي تلقائي من السند - نسخة محدّثة
-    
+
     يدعم قيود متعددة الأطراف:
     - نقد + عدة عيارات ذهب في نفس السند
     - يقرأ سطور الحسابات من VoucherAccountLine
@@ -26456,34 +26504,6 @@ def create_journal_entry_from_voucher(voucher):
                     _account_cache[int(_a.id)] = _a
         except Exception:
             safe_account_ids = set()
-
-        def _resolve_account_id_for_amount_type(account_id: int, amount_type: str) -> int:
-            """Resolve the posting account id for voucher lines.
-
-            Dual/memo rules:
-            - cash lines stay on the selected account
-            - gold lines should post to the memo (weight) account when the selected
-              account is a financial account linked via memo_account_id.
-            - never remap SafeBox accounts (they are the physical custody accounts)
-            """
-            if not account_id:
-                return account_id
-            if int(account_id) in safe_account_ids:
-                return int(account_id)
-            if (amount_type or '').strip().lower() != 'gold':
-                return int(account_id)
-            try:
-                acc = _account_cache.get(int(account_id)) or Account.query.get(int(account_id))
-            except Exception:
-                acc = None
-            if not acc:
-                return int(account_id)
-            try:
-                if (not bool(getattr(acc, 'tracks_weight', False))) and getattr(acc, 'memo_account_id', None):
-                    return int(acc.memo_account_id)
-            except Exception:
-                return int(account_id)
-            return int(account_id)
 
         # Resolve expected party account id (so we can tag it even if misconfigured as a SafeBox account).
         # IMPORTANT: use a SAVEPOINT so that if ensure_*_accounts() triggers a db.session.flush() that
@@ -26583,6 +26603,8 @@ def create_journal_entry_from_voucher(voucher):
             target_account_id = _resolve_account_id_for_amount_type(
                 int(account_line.account_id),
                 str(account_line.amount_type or ''),
+                safe_account_ids=safe_account_ids,
+                account_cache=_account_cache,
             )
 
             # إنشاء سطر القيد
@@ -27661,10 +27683,38 @@ def _upsert_voucher_from_payload(voucher, data, *, is_create=False):
     for existing_line in voucher.account_lines.all():
         db.session.delete(existing_line)
 
+    # Resolve gold-type lines to their memo/weight account immediately, not
+    # just at posting time (create_journal_entry_from_voucher applies the
+    # same resolution again, which is then a no-op). Otherwise the voucher's
+    # own stored lines show a misleading pending state -- e.g. a financial
+    # account appearing to carry a gold amount that approval will silently
+    # redirect away from it.
+    _line_safe_account_ids = set()
+    _line_account_cache = {}
+    try:
+        _line_account_ids = list({
+            int(ld['account_id']) for ld in summary['account_lines']
+            if ld.get('account_id') is not None
+        })
+        if _line_account_ids:
+            for sb in SafeBox.query.filter(SafeBox.account_id.in_(_line_account_ids)).all():
+                if getattr(sb, 'account_id', None) is not None:
+                    _line_safe_account_ids.add(int(sb.account_id))
+            for _a in Account.query.filter(Account.id.in_(_line_account_ids)).all():
+                _line_account_cache[int(_a.id)] = _a
+    except Exception:
+        _line_safe_account_ids = set()
+
     for line_data in summary['account_lines']:
+        resolved_account_id = _resolve_account_id_for_amount_type(
+            line_data['account_id'],
+            str(line_data['amount_type'] or ''),
+            safe_account_ids=_line_safe_account_ids,
+            account_cache=_line_account_cache,
+        )
         db.session.add(VoucherAccountLine(
             voucher_id=voucher.id,
-            account_id=line_data['account_id'],
+            account_id=resolved_account_id,
             line_type=str(line_data['line_type']).strip().lower(),
             amount_type=str(line_data['amount_type']).strip().lower(),
             amount=float(line_data['amount']),
