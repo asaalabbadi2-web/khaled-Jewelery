@@ -2675,12 +2675,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
       final numberFormat = NumberFormat('#,##0', 'en');
       final pointsUnitAr = isAr ? 'نقطة' : 'pts';
       final currencySymbolText = context.read<SettingsProvider>().currencySymbolText;
-      final salesValueText = metric == 'points'
-          ? '${numberFormat.format(salesAmount.round())} $currencySymbolText · $pointsSales $pointsUnitAr'
-          : '${numberFormat.format(salesAmount.round())} $currencySymbolText';
-      final purchaseValueText = metric == 'points'
-          ? '${numberFormat.format(purchaseAmount.round())} $currencySymbolText · $pointsPurchase $pointsUnitAr'
-          : '${numberFormat.format(purchaseAmount.round())} $currencySymbolText';
+      final isNewSar = context.read<SettingsProvider>().currencyIsNewSar;
 
       bool hovered = false;
       return StatefulBuilder(
@@ -2808,17 +2803,27 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                             label: '',
                             valueColor: colorScheme.onSurface.withValues(alpha: 0.55),
                           ),
-                          _buildStatChip(
+                          _buildCategoryChip(
                             dotColor: AppColors.success,
-                            value: salesValueText,
-                            label: isAr ? 'مبيعات' : 'Sales',
                             valueColor: AppColors.success,
+                            label: isAr ? 'مبيعات' : 'Sales',
+                            amount: salesAmount,
+                            points: metric == 'points' ? pointsSales : null,
+                            pointsUnit: pointsUnitAr,
+                            currencySymbolText: currencySymbolText,
+                            isNewSar: isNewSar,
+                            numberFormat: numberFormat,
                           ),
-                          _buildStatChip(
+                          _buildCategoryChip(
                             dotColor: const Color(0xFF5E35B1),
-                            value: purchaseValueText,
-                            label: isAr ? 'مشتريات' : 'Purch',
                             valueColor: const Color(0xFF5E35B1),
+                            label: isAr ? 'مشتريات' : 'Purch',
+                            amount: purchaseAmount,
+                            points: metric == 'points' ? pointsPurchase : null,
+                            pointsUnit: pointsUnitAr,
+                            currencySymbolText: currencySymbolText,
+                            isNewSar: isNewSar,
+                            numberFormat: numberFormat,
                           ),
                         ],
                       ),
@@ -3908,6 +3913,85 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                   text: ' $label',
                   style: const TextStyle(color: Color(0xFF9E9E9E)),
                 ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Sales/purchase stat chip — label first ("مبيعات: "), then points in a
+  /// color unified across both chips (not the category color, so the points
+  /// figure is recognizable at a glance regardless of sales vs purchase),
+  /// then the amount with its currency symbol rendered a notch smaller than
+  /// the amount digits themselves.
+  Widget _buildCategoryChip({
+    required Color dotColor,
+    required Color valueColor,
+    required String label,
+    required double amount,
+    required String currencySymbolText,
+    required bool isNewSar,
+    required NumberFormat numberFormat,
+    int? points,
+    String? pointsUnit,
+  }) {
+    const pointsColor = AppColors.darkGold;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 6,
+          height: 6,
+          margin: const EdgeInsetsDirectional.only(end: 4),
+          decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
+        ),
+        RichText(
+          text: TextSpan(
+            style: const TextStyle(fontSize: 11.5, fontFamily: 'Cairo'),
+            children: [
+              TextSpan(
+                text: '$label: ',
+                style: const TextStyle(
+                  color: Color(0xFF9E9E9E),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (points != null) ...[
+                TextSpan(
+                  text: '$points ',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    color: pointsColor,
+                  ),
+                ),
+                TextSpan(
+                  text: pointsUnit,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: pointsColor,
+                    fontSize: 9.5,
+                  ),
+                ),
+                const TextSpan(
+                  text: '  •  ',
+                  style: TextStyle(color: Color(0xFF9E9E9E)),
+                ),
+              ],
+              TextSpan(
+                text: numberFormat.format(amount.round()),
+                style: TextStyle(fontWeight: FontWeight.w800, color: valueColor),
+              ),
+              const TextSpan(text: ' '),
+              ...cu.sarAwareSpans(
+                currencySymbolText,
+                isNewSar: isNewSar,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: valueColor,
+                  fontSize: 9.5,
+                ),
+              ),
             ],
           ),
         ),
