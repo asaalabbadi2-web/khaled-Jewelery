@@ -26527,7 +26527,6 @@ def create_journal_entry_from_voucher(voucher):
             expected_party_account_id = None
 
         # إنشاء سطور القيد المحاسبي من سطور السند
-        created_journal_lines = []
         for account_line in account_lines:
             # تحديد المبالغ حسب نوع السطر (مدين/دائن) ونوع المبلغ (نقد/ذهب)
             cash_debit = 0
@@ -26628,7 +26627,6 @@ def create_journal_entry_from_voucher(voucher):
             )
 
             db.session.add(journal_line)
-            created_journal_lines.append(journal_line)
 
         db.session.flush()
 
@@ -26659,24 +26657,16 @@ def create_journal_entry_from_voucher(voucher):
         except Exception:
             pass
 
-        # Mirror the GL onto the SafeBoxTransaction sub-ledger for any line
-        # that hit a SafeBox-linked account -- without this, vouchers that
-        # aren't invoice-linked (transfers between safes, plain صرف/قبض,
-        # adjustments) update the real ledger/statement correctly but never
-        # touch the safe-box card or the transfer screen's "available"
-        # balance (both read SafeBoxTransaction, not the GL), so a safe can
-        # silently drift from its true balance every time one of these
-        # vouchers posts. _rebuild_safe_box_transactions_for_journal_entry
-        # itself requires is_posted=True and skips reference_type='manual'
-        # entries, so this is a no-op for draft/unposted/true-manual cases.
-        try:
-            _rebuild_safe_box_transactions_for_journal_entry(
-                journal_entry,
-                created_journal_lines,
-                created_by=voucher.created_by,
-            )
-        except Exception:
-            pass
+        # NOTE: do NOT also call _rebuild_safe_box_transactions_for_journal_entry
+        # here. Every voucher-creation call site already calls
+        # _append_safe_transactions_for_voucher(voucher, ...) right after this
+        # function returns (it has its own ref_type='voucher' idempotency
+        # guard) -- adding a second, parallel mechanism here just creates a
+        # duplicate ref_type='journal_entry' SafeBoxTransaction row for every
+        # voucher going forward. Confirmed by tracing a real voucher chain
+        # (employee gold-safe transfers AV-2026-00037..00206): every one
+        # already had a correct 'voucher'-ref_type row from day one; the
+        # safe-box card was never out of sync for vouchers specifically.
 
         return journal_entry
         
