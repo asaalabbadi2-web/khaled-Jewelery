@@ -26527,6 +26527,7 @@ def create_journal_entry_from_voucher(voucher):
             expected_party_account_id = None
 
         # إنشاء سطور القيد المحاسبي من سطور السند
+        created_journal_lines = []
         for account_line in account_lines:
             # تحديد المبالغ حسب نوع السطر (مدين/دائن) ونوع المبلغ (نقد/ذهب)
             cash_debit = 0
@@ -26625,9 +26626,10 @@ def create_journal_entry_from_voucher(voucher):
                 credit_24k=credit_24k,
                 description=(account_line.description or voucher.description),
             )
-            
+
             db.session.add(journal_line)
-        
+            created_journal_lines.append(journal_line)
+
         db.session.flush()
 
         # ── Auto-post: honour the voucher_auto_post / auto_post_entries setting ──
@@ -26638,7 +26640,11 @@ def create_journal_entry_from_voucher(voucher):
         # as unposted (is_posted=False / NULL) and never appear in reports that
         # filter on is_posted.
         try:
-            _post_settings = Settings.query.first()
+            # _get_settings_singleton (not a bare Settings.query.first()) --
+            # production has had duplicate Settings rows before, and an
+            # unordered .first() can land on a stale one with auto-post
+            # flags off even while /api/settings correctly reports them on.
+            _post_settings = _get_settings_singleton(create_if_missing=False)
             _should_auto_post = False
             if _post_settings:
                 _should_auto_post = (
@@ -26652,7 +26658,26 @@ def create_journal_entry_from_voucher(voucher):
                 journal_entry.posted_by = voucher.created_by or 'system'
         except Exception:
             pass
-        
+
+        # Mirror the GL onto the SafeBoxTransaction sub-ledger for any line
+        # that hit a SafeBox-linked account -- without this, vouchers that
+        # aren't invoice-linked (transfers between safes, plain صرف/قبض,
+        # adjustments) update the real ledger/statement correctly but never
+        # touch the safe-box card or the transfer screen's "available"
+        # balance (both read SafeBoxTransaction, not the GL), so a safe can
+        # silently drift from its true balance every time one of these
+        # vouchers posts. _rebuild_safe_box_transactions_for_journal_entry
+        # itself requires is_posted=True and skips reference_type='manual'
+        # entries, so this is a no-op for draft/unposted/true-manual cases.
+        try:
+            _rebuild_safe_box_transactions_for_journal_entry(
+                journal_entry,
+                created_journal_lines,
+                created_by=voucher.created_by,
+            )
+        except Exception:
+            pass
+
         return journal_entry
         
     except Exception as e:
@@ -33046,6 +33071,19 @@ def create_office_reservation():
                 **{_k_cr: weight_grams},
             ))
             db.session.flush()
+
+            # Mirror onto SafeBoxTransaction -- this entry is_posted=True
+            # already, but without this the office's gold safe-box card
+            # (and the transfer-between-safes availability check) never
+            # see this inflow; they read SafeBoxTransaction, not the GL.
+            try:
+                _rebuild_safe_box_transactions_for_journal_entry(
+                    _wgt_entry,
+                    [l for l in _wgt_entry.lines if not getattr(l, 'is_deleted', False)],
+                    created_by=str(data.get('created_by') or 'system'),
+                )
+            except Exception:
+                pass
 
         office.total_reservations = (office.total_reservations or 0) + 1
         office.total_weight_purchased = (office.total_weight_purchased or 0.0) + weight_main_karat
