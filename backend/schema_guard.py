@@ -979,3 +979,70 @@ def ensure_dashboard_performance_indexes(engine: Engine) -> None:
                         LOGGER.warning("schema_guard: index %s failed: %s", index_name, exc)
     except Exception as exc:
         LOGGER.error("ensure_dashboard_performance_indexes failed: %s", exc)
+
+
+def ensure_account_memo_pair_constraints(engine: Engine) -> None:
+    """قيود قاعدة بيانات لعلاقة Account.memo_account_id (مالي<->وزني) --
+    خط دفاع رابع بعد account_pair_service (الخدمة المركزية)، حارس
+    Account._validate_memo_account_id (ORM)، وaudit_account_memo_invariants.py
+    (التدقيق). يضمن سلامة العلاقة حتى لو تجاوز كود ما الـORM (SQL مباشر،
+    استيراد بيانات، إلخ) -- وهي الفجوة الوحيدة التي لا يغطيها أي مما سبق.
+
+    1) CHECK منع الإشارة الذاتية -- آمن للتطبيق فوراً (صفر مخالفات حالياً
+       في كل الفحوصات التي أُجريت).
+    2) UNIQUE جزئي (يسمح بعدة NULL) يمنع أكثر من حساب من الإشارة لنفس
+       الهدف -- سيفشل وتُسجَّل المحاولة فقط (لا يوقف التطبيق، كباقي دوال
+       هذا الملف) حتى تُصحَّح كل حالات duplicate_target الموجودة فعلياً
+       عبر repair_all_memo_account_links.py/المراجعة اليدوية. لحظة نجاحه
+       لأول مرة (عند أول إقلاع بعد تنظيف البيانات)، يصبح تكرار حادثة
+       #1213 (ومثيلاتها التاريخية) مستحيلاً بنيوياً، لا ممنوعاً إجرائياً فقط.
+    """
+    try:
+        with engine.connect() as conn:
+            dialect = _dialect_name(engine, conn)
+            if dialect != 'postgresql':
+                return
+            exists = conn.execute(text(
+                "SELECT 1 FROM pg_constraint WHERE conname = 'chk_account_memo_not_self'"
+            )).fetchone()
+            if not exists:
+                try:
+                    conn.execute(text("""
+                        ALTER TABLE account
+                        ADD CONSTRAINT chk_account_memo_not_self
+                        CHECK (memo_account_id IS NULL OR memo_account_id <> id)
+                    """))
+                    conn.commit()
+                    LOGGER.info("schema_guard: added chk_account_memo_not_self")
+                except Exception as exc:
+                    conn.rollback()
+                    LOGGER.warning("schema_guard: chk_account_memo_not_self failed: %s", exc)
+    except Exception as exc:
+        LOGGER.error("ensure_account_memo_pair_constraints (check) failed: %s", exc)
+
+    try:
+        with engine.connect() as conn:
+            dialect = _dialect_name(engine, conn)
+            if dialect != 'postgresql':
+                return
+            exists = conn.execute(text(
+                "SELECT 1 FROM pg_indexes WHERE indexname = 'uq_account_memo_account_id'"
+            )).fetchone()
+            if not exists:
+                try:
+                    conn.execute(text("""
+                        CREATE UNIQUE INDEX uq_account_memo_account_id
+                        ON account (memo_account_id)
+                        WHERE memo_account_id IS NOT NULL
+                    """))
+                    conn.commit()
+                    LOGGER.info("schema_guard: created uq_account_memo_account_id")
+                except Exception as exc:
+                    conn.rollback()
+                    LOGGER.warning(
+                        "schema_guard: uq_account_memo_account_id failed -- likely existing "
+                        "duplicate_target rows not yet cleaned up (see "
+                        "repair_all_memo_account_links.py): %s", exc,
+                    )
+    except Exception as exc:
+        LOGGER.error("ensure_account_memo_pair_constraints (unique index) failed: %s", exc)
