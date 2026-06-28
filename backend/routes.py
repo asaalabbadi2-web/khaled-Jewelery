@@ -10532,8 +10532,6 @@ def list_safe_box_balances():
         'filters': {
             'safe_type': safe_type or None,
             'is_active': (is_active_param if is_active_param in ('true', 'false') else None),
-            'from': from_value,
-            'to': to_value,
         },
         'count': len(results),
     })
