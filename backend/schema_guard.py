@@ -997,6 +997,9 @@ def ensure_account_memo_pair_constraints(engine: Engine) -> None:
        لأول مرة (عند أول إقلاع بعد تنظيف البيانات)، يصبح تكرار حادثة
        #1213 (ومثيلاتها التاريخية) مستحيلاً بنيوياً، لا ممنوعاً إجرائياً فقط.
     """
+    check_ok = False
+    unique_ok = False
+
     try:
         with engine.connect() as conn:
             dialect = _dialect_name(engine, conn)
@@ -1005,7 +1008,9 @@ def ensure_account_memo_pair_constraints(engine: Engine) -> None:
             exists = conn.execute(text(
                 "SELECT 1 FROM pg_constraint WHERE conname = 'chk_account_memo_not_self'"
             )).fetchone()
-            if not exists:
+            if exists:
+                check_ok = True
+            else:
                 try:
                     conn.execute(text("""
                         ALTER TABLE account
@@ -1013,7 +1018,7 @@ def ensure_account_memo_pair_constraints(engine: Engine) -> None:
                         CHECK (memo_account_id IS NULL OR memo_account_id <> id)
                     """))
                     conn.commit()
-                    LOGGER.info("schema_guard: added chk_account_memo_not_self")
+                    check_ok = True
                 except Exception as exc:
                     conn.rollback()
                     LOGGER.warning("schema_guard: chk_account_memo_not_self failed: %s", exc)
@@ -1028,7 +1033,9 @@ def ensure_account_memo_pair_constraints(engine: Engine) -> None:
             exists = conn.execute(text(
                 "SELECT 1 FROM pg_indexes WHERE indexname = 'uq_account_memo_account_id'"
             )).fetchone()
-            if not exists:
+            if exists:
+                unique_ok = True
+            else:
                 try:
                     conn.execute(text("""
                         CREATE UNIQUE INDEX uq_account_memo_account_id
@@ -1036,7 +1043,7 @@ def ensure_account_memo_pair_constraints(engine: Engine) -> None:
                         WHERE memo_account_id IS NOT NULL
                     """))
                     conn.commit()
-                    LOGGER.info("schema_guard: created uq_account_memo_account_id")
+                    unique_ok = True
                 except Exception as exc:
                     conn.rollback()
                     LOGGER.warning(
@@ -1046,3 +1053,18 @@ def ensure_account_memo_pair_constraints(engine: Engine) -> None:
                     )
     except Exception as exc:
         LOGGER.error("ensure_account_memo_pair_constraints (unique index) failed: %s", exc)
+
+    protection_level = 'FULL' if (check_ok and unique_ok) else 'PARTIAL'
+    check_line = '✓ CHECK(self_reference)' if check_ok else '✗ CHECK(self_reference) failed'
+    unique_line = (
+        '✓ UNIQUE(memo_account_id)' if unique_ok
+        else '⚠ UNIQUE skipped (duplicate_target detected)'
+    )
+    suffix = '' if protection_level == 'FULL' else (
+        ' -- run repair_all_memo_account_links.py then restart to reach FULL'
+    )
+    log_fn = LOGGER.info if protection_level == 'FULL' else LOGGER.warning
+    log_fn(
+        "Account memo pair constraints:\n  %s\n  %s\nProtection level: %s%s",
+        check_line, unique_line, protection_level, suffix,
+    )
