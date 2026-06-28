@@ -11,16 +11,22 @@ idempotent بالكامل: لا منطق إصلاح هنا على الإطلاق
 account_pair_service لكل حالة *لا غموض فيها*. أي تحسين مستقبلي على قواعد
 الخدمة يستفيد منه هذا السكربت تلقائياً دون أي تعديل هنا.
 
-يُصلَح تلقائياً (بلا حاجة لحكم بشري):
+يُصلَح تلقائياً (بلا حاجة لحكم بشري -- كل حالة هنا لها تفسير صحيح واحد فقط):
   - self_reference: فسخ الربط (unlink_account).
   - one_way_link حيث الطرف الآخر None فعلاً (ربط غير مكتمل، لا تعارض):
     إكماله عبر link_accounts().
+  - duplicate_target حيث أحد المتنازعين (أو أكثر) موسوم متروك صريحاً، ولا
+    يوجد أكثر من منازع واحد غير متروك: فسخ ربط الحساب(ات) المتروكة فقط
+    (unlink_account) -- حساب متروك لا يجوز أن يحمل ربطاً نشطاً أصلاً، بصرف
+    النظر عمّن "الصحيح" بين الباقين. قد يحتاج تشغيلاً ثانياً لإكمال الربط
+    المتبقي (يتحول تلقائياً إلى one_way_link قابل للإصلاح).
 
 يُترَك للمراجعة البشرية دائماً (يحتاج تحقيقاً كحادثة #1213 التي احتاجت
 فحص أرصدة دفتر الأستاذ لمعرفة أي حساب يحوي البيانات الحقيقية):
   - broken_reference (لا توجد طريقة لمعرفة الهدف الصحيح).
   - one_way_link حيث الطرف الآخر يشير لحساب ثالث (تعارض حقيقي).
-  - duplicate_target (أي الحسابين المتنازعين يحوي البيانات الحقيقية؟).
+  - duplicate_target حيث يوجد أكثر من منازع واحد غير متروك (تعارض حقيقي
+    لا تفسير واحد له -- أي الحسابين يحوي البيانات الحقيقية؟).
   - type_mismatch (أي الحسابين من النوع الخطأ؟).
   - أي حالة يرفضها account_pair_service فعلياً (مثل: حساب هدف موسوم متروك
     -- هذا تحديداً ما يحمي من تكرار حادثة #1213 لو حاول هذا السكربت
@@ -60,15 +66,46 @@ def run(apply: bool) -> int:
         by_id = {a.id: a for a in all_accounts}
         linked = [a for a in all_accounts if a.memo_account_id is not None]
 
-        checked = 0
+        checked = len(linked)
         already_correct = 0
         auto_fixable_self_ref = []
         auto_fixable_one_way = []
         needs_review = []
         seen_pairs = set()
 
+        # duplicate_target محسوب أولاً (لا بعد الحلقة الرئيسية) لأن أي حساب
+        # يُحسم مصيره هنا (سيُفسَخ ربطه) يجب أن يُستثنى من تصنيف one_way_link
+        # العادي أدناه -- وإلا ظهر مرتين: مرة "سيُصلَح تلقائياً" ومرة "يحتاج
+        # مراجعة"، رغم أن مصيره محسوم بالفعل.
+        auto_fixable_duplicate_unlink = []
+        duplicate_unlink_ids: set[int] = set()
+        targets_count: dict = {}
         for a in linked:
-            checked += 1
+            targets_count.setdefault(a.memo_account_id, []).append(a)
+        for target_id, pointers in targets_count.items():
+            if len(pointers) <= 1:
+                continue
+            target = by_id.get(target_id)
+            deprecated_pointers = [p for p in pointers if _is_deprecated(p)]
+            non_deprecated_pointers = [p for p in pointers if not _is_deprecated(p)]
+
+            if deprecated_pointers and len(non_deprecated_pointers) <= 1:
+                # غير ملتبس: حساب متروك لا يجوز أن يحمل ربطاً نشطاً، بصرف
+                # النظر عمّن "الصحيح" بين الباقين (واحد على الأكثر هنا).
+                for p in deprecated_pointers:
+                    auto_fixable_duplicate_unlink.append((
+                        p, target, f'duplicate_target غير ملتبس: {_label(p)} موسوم متروك -- يُفسَخ ربطه فقط'
+                    ))
+                    duplicate_unlink_ids.add(p.id)
+            else:
+                needs_review.append((
+                    None, target,
+                    f'duplicate_target: ' + ', '.join(_label(p) for p in pointers) + f' كلهم يشيرون لـ{_label(target)}'
+                ))
+
+        for a in linked:
+            if a.id in duplicate_unlink_ids:
+                continue
             target = by_id.get(a.memo_account_id)
 
             if target is None:
@@ -92,6 +129,11 @@ def run(apply: bool) -> int:
                 continue
 
             if target.memo_account_id is not None:
+                if target.id in duplicate_unlink_ids:
+                    # target نفسه سيُفسَخ ربطه عبر duplicate_target أعلاه --
+                    # سيتحول هذا الزوج تلقائياً لـone_way_link قابل للإصلاح
+                    # في تشغيل لاحق، لا تعارض حقيقي الآن.
+                    continue
                 needs_review.append((
                     a, target,
                     f'one_way_link متعارض: {target.id}.memo_account_id={target.memo_account_id} (ليس {a.id})'
@@ -107,18 +149,6 @@ def run(apply: bool) -> int:
                 continue
 
             auto_fixable_one_way.append((a, target))
-
-        # duplicate_target: عدة حسابات (مختلفة) تشير لنفس الهدف -- يحتاج مراجعة دائماً.
-        targets_count: dict = {}
-        for a in linked:
-            targets_count.setdefault(a.memo_account_id, []).append(a)
-        for target_id, pointers in targets_count.items():
-            if len(pointers) > 1:
-                target = by_id.get(target_id)
-                needs_review.append((
-                    None, target,
-                    f'duplicate_target: ' + ', '.join(_label(p) for p in pointers) + f' كلهم يشيرون لـ{_label(target)}'
-                ))
 
         fixed = 0
         errors = []
@@ -140,9 +170,16 @@ def run(apply: bool) -> int:
                 except Exception as exc:
                     errors.append((a, target, f'خطأ غير متوقَّع: {exc}'))
 
+            for p, target, _reason in auto_fixable_duplicate_unlink:
+                try:
+                    unlink_account(p, created_by='repair_all_memo_account_links')
+                    fixed += 1
+                except Exception as exc:
+                    errors.append((p, target, f'فشل فسخ duplicate_target المتروك: {exc}'))
+
             db.session.commit()
         else:
-            fixed = len(auto_fixable_self_ref) + len(auto_fixable_one_way)
+            fixed = len(auto_fixable_self_ref) + len(auto_fixable_one_way) + len(auto_fixable_duplicate_unlink)
             db.session.rollback()
 
         print(f"{'='*60}")
@@ -154,12 +191,14 @@ def run(apply: bool) -> int:
         print(f"Needs review: {len(needs_review)}")
         print(f"Errors: {len(errors)}")
 
-        if not apply and (auto_fixable_self_ref or auto_fixable_one_way):
+        if not apply and (auto_fixable_self_ref or auto_fixable_one_way or auto_fixable_duplicate_unlink):
             print(f"\n--- سيُصلَح تلقائياً لو طُبِّق --apply ({fixed}) ---")
             for a in auto_fixable_self_ref:
                 print(f"  {_label(a)}: فسخ self_reference")
             for a, target in auto_fixable_one_way:
                 print(f"  {_label(a)} <-> {_label(target)}: إكمال ربط ثنائي")
+            for p, target, reason in auto_fixable_duplicate_unlink:
+                print(f"  {_label(p)} <-> {_label(target)}: {reason}")
 
         if needs_review:
             print(f"\n--- يحتاج مراجعة بشرية ({len(needs_review)}) ---")
