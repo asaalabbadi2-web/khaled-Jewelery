@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime
 
@@ -48,6 +49,24 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from app import app
 from models import Account
+
+
+def _git_commit() -> str:
+    """أفضل محاولة لمعرفة نسخة الكود وقت هذه اللقطة -- يُرجع 'unknown' بصمت
+    لو .git غير متاح (وهي الحال على الإنتاج عادةً: Dockerfile ينسخ مجلد
+    backend/ فقط، بلا .git من جذر المشروع)، فلا يُفترض أن يُعتمَد عليه دائماً
+    -- generated_at (الطابع الزمني) هو المرجع الموثوق على الإنتاج."""
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=os.path.dirname(__file__),
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return 'unknown'
 
 
 def _label(acc) -> str:
@@ -163,6 +182,7 @@ def run(json_out: str | None) -> int:
 
         snapshot = {
             'generated_at': datetime.now().isoformat(),
+            'git_commit': _git_commit(),
             'total_accounts': len(all_accounts),
             'accounts_with_memo_link': len(linked),
             'summary': {
