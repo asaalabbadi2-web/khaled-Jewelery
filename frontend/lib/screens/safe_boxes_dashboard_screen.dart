@@ -238,10 +238,10 @@ class _SafeBoxesDashboardScreenState extends State<SafeBoxesDashboardScreen>
     // حساب إجمالي الأوزان
     double total18k = 0, total21k = 0, total22k = 0, total24k = 0;
     for (final safe in _safes.where((s) => s.safeType == 'gold')) {
-      total18k += safe.weightBalance?['18'] ?? 0;
-      total21k += safe.weightBalance?['21'] ?? 0;
-      total22k += safe.weightBalance?['22'] ?? 0;
-      total24k += safe.weightBalance?['24'] ?? 0;
+      total18k += safe.goldBalance18k;
+      total21k += safe.goldBalance21k;
+      total22k += safe.goldBalance22k;
+      total24k += safe.goldBalance24k;
     }
     
     final totalWeight = total18k + total21k + total22k + total24k;
@@ -455,10 +455,10 @@ class _SafeBoxesDashboardScreenState extends State<SafeBoxesDashboardScreen>
   }
 
   Widget _buildSafeCard(SafeBoxModel safe, ThemeData theme, bool isDark) {
-final hasLowBalance = (safe.weightBalance?['18'] ?? 0) < 10 &&
-                          (safe.weightBalance?['21'] ?? 0) < 10 &&
-                          (safe.weightBalance?['22'] ?? 0) < 10 &&
-                          (safe.weightBalance?['24'] ?? 0) < 10;
+final hasLowBalance = safe.goldBalance18k < 10 &&
+                          safe.goldBalance21k < 10 &&
+                          safe.goldBalance22k < 10 &&
+                          safe.goldBalance24k < 10;
 
     return Container(
       decoration: BoxDecoration(
@@ -627,13 +627,13 @@ final hasLowBalance = (safe.weightBalance?['18'] ?? 0) < 10 &&
                   ),
                 ),
                 const SizedBox(height: 12),
-                _buildBalanceRow('18k', safe.weightBalance?['18'] ?? 0, AppColors.karat18, isDark),
+                _buildBalanceRow('18k', safe.goldBalance18k, AppColors.karat18, isDark),
                 const SizedBox(height: 8),
-                _buildBalanceRow('21k', safe.weightBalance?['21'] ?? 0, AppColors.karat21, isDark),
+                _buildBalanceRow('21k', safe.goldBalance21k, AppColors.karat21, isDark),
                 const SizedBox(height: 8),
-                _buildBalanceRow('22k', safe.weightBalance?['22'] ?? 0, AppColors.karat22, isDark),
+                _buildBalanceRow('22k', safe.goldBalance22k, AppColors.karat22, isDark),
                 const SizedBox(height: 8),
-                _buildBalanceRow('24k', safe.weightBalance?['24'] ?? 0, AppColors.karat24, isDark),
+                _buildBalanceRow('24k', safe.goldBalance24k, AppColors.karat24, isDark),
               ],
             ),
           ),

@@ -656,38 +656,25 @@ class _SafeBoxesScreenState extends State<SafeBoxesScreen> {
     });
   }
 
+  // كانت هذه الدالة تُفضِّل totalWeightMainKarat الخام (محسوب من
+  // SafeBoxTransaction في الباكند) كل مرة كان غير صفر، متجاوزةً تماماً
+  // goldBalance*k (التي تُفضِّل القيد المحاسبي أصلاً بعد إصلاح الموديل) --
+  // وهذا بالضبط ما جعل كل الانحرافات التي تتبَّعناها اليوم تظهر هنا. الآن
+  // مصدر واحد فقط دائماً: goldBalance*k، بلا أي تفرّع بين "وضع كشوفات" أو
+  // "حمولة ledger".
   double _effectiveGoldMainKaratBalance(SafeBoxModel safeBox) {
-    // When balance rows come from the ledger endpoint, treat zero as valid
-    // ledger data (not as missing data) to avoid falling back to stale account balances.
-    final hasLedgerPayload = (safeBox.weightBalance != null);
-    if (widget.balancesView || hasLedgerPayload) {
-      final direct = safeBox.totalWeightMainKarat;
-      if (direct != null && direct.abs() > 1e-9) {
-        return direct;
-      }
-      return safeBox.goldBalance18k * 18 / 21 +
-          safeBox.goldBalance21k +
-          safeBox.goldBalance22k * 22 / 21 +
-          safeBox.goldBalance24k * 24 / 21;
-    }
-    return safeBox.accountTotalWeightMainKarat;
+    return safeBox.goldBalance18k * 18 / 21 +
+        safeBox.goldBalance21k +
+        safeBox.goldBalance22k * 22 / 21 +
+        safeBox.goldBalance24k * 24 / 21;
   }
 
   List<MapEntry<String, double>> _goldBreakdown(SafeBoxModel safeBox) {
-    final hasLedgerPayload = (safeBox.weightBalance != null);
-    if (widget.balancesView || hasLedgerPayload) {
-      return [
-        MapEntry('24k', safeBox.goldBalance24k),
-        MapEntry('22k', safeBox.goldBalance22k),
-        MapEntry('21k', safeBox.goldBalance21k),
-        MapEntry('18k', safeBox.goldBalance18k),
-      ];
-    }
     return [
-      MapEntry('24k', safeBox.accountGoldBalance24k),
-      MapEntry('22k', safeBox.accountGoldBalance22k),
-      MapEntry('21k', safeBox.accountGoldBalance21k),
-      MapEntry('18k', safeBox.accountGoldBalance18k),
+      MapEntry('24k', safeBox.goldBalance24k),
+      MapEntry('22k', safeBox.goldBalance22k),
+      MapEntry('21k', safeBox.goldBalance21k),
+      MapEntry('18k', safeBox.goldBalance18k),
     ];
   }
 

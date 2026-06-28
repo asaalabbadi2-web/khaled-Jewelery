@@ -218,11 +218,15 @@ class SafeBoxModel {
         accountGoldBalance24k * 24 / mainKarat;
   }
 
-  /// الرصيد الوزني (إن توفر من الـ ledger)
-  double get goldBalance24k => weightBalance?['24k'] ?? 0.0;
-  double get goldBalance22k => weightBalance?['22k'] ?? 0.0;
-  double get goldBalance21k => weightBalance?['21k'] ?? 0.0;
-  double get goldBalance18k => weightBalance?['18k'] ?? 0.0;
+  /// الرصيد الوزني -- يُفضِّل رصيد الحساب (القيد المحاسبي، صحيح دائماً)
+  // تماماً كما تفعل cashBalance أعلاه؛ SafeBoxTransaction (ledger) هو فقط
+  // احتياط حين يغيب balance.weight كلياً (حساب لا يتتبّع الوزن، أو استجابة
+  // قديمة من /api/safe-boxes العادي بلا ledger). هذا يمنع أي انحراف مستقبلي
+  // في SafeBoxTransaction من الظهور كرصيد خاطئ على البطاقة أو أداة التحويل.
+  double get goldBalance24k => balance?.weight?.karat24 ?? weightBalance?['24k'] ?? 0.0;
+  double get goldBalance22k => balance?.weight?.karat22 ?? weightBalance?['22k'] ?? 0.0;
+  double get goldBalance21k => balance?.weight?.karat21 ?? weightBalance?['21k'] ?? 0.0;
+  double get goldBalance18k => balance?.weight?.karat18 ?? weightBalance?['18k'] ?? 0.0;
 
   /// نسخة من الكائن مع تحديثات
   SafeBoxModel copyWith({

@@ -79,7 +79,11 @@ from dual_system_helpers import (
 )
 from services.journals import create_wage_weight_release_journal
 from services.weight_execution import list_weight_profiles, resolve_weight_profile
-from services.live_balances import live_balances_by_account_ids
+from services.live_balances import (
+    live_balances_by_account_ids,
+    safe_box_balance,
+    safe_box_balances_bulk,
+)
 from gold_costing_service import GoldCostingService, ScrapCostingService
 from category_weight_tracking import (
     get_category_weight_balances,
@@ -10460,78 +10464,41 @@ def list_safe_box_transactions(safe_box_id: int):
 @api.route('/safe-boxes/<int:safe_box_id>/balance', methods=['GET'])
 @require_permission('safe_boxes.view')
 def get_safe_box_balance(safe_box_id: int):
-    """Compute safe box balance from ledger transactions."""
+    """الرصيد الرسمي لخزينة واحدة -- غلاف رفيع حول safe_box_balance (دفتر
+    الأستاذ مباشرة). كان هذا الـ endpoint يحسب من SafeBoxTransaction بالكامل
+    رغم أن اسمه ووثائقه يَعِدان بـ"ledger" -- وهذا تناقض بين العقد والتنفيذ
+    اكتُشف أثناء تتبع انحرافات أرصدة الخزائن عن كشوف حساباتها. لا تُعدّل هذا
+    ليعتمد على SafeBoxTransaction مجدداً -- استخدم /safe-boxes/reconciliation
+    لو احتجت القيمة المشتقة منه للتشخيص.
+    """
     safe_box = SafeBox.query.get_or_404(safe_box_id)
-
-    q = SafeBoxTransaction.query.filter_by(safe_box_id=safe_box_id)
-    from_value = request.args.get('from')
-    to_value = request.args.get('to')
-    try:
-        if from_value:
-            q = q.filter(SafeBoxTransaction.created_at >= datetime.fromisoformat(from_value))
-    except Exception:
-        return jsonify({'error': 'invalid_from_date'}), 400
-    try:
-        if to_value:
-            q = q.filter(SafeBoxTransaction.created_at <= datetime.fromisoformat(to_value))
-    except Exception:
-        return jsonify({'error': 'invalid_to_date'}), 400
-
-    cash_in = q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0)).filter(
-        SafeBoxTransaction.direction == 'in'
-    ).scalar() or 0.0
-    cash_out = q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0)).filter(
-        SafeBoxTransaction.direction == 'out'
-    ).scalar() or 0.0
-
-    def _sum_weight(field_name: str, direction: str) -> float:
-        col = getattr(SafeBoxTransaction, field_name)
-        return (
-            q.with_entities(func.coalesce(func.sum(col), 0.0))
-            .filter(SafeBoxTransaction.direction == direction)
-            .scalar()
-            or 0.0
-        )
-
-    w_in = {
-        '18k': float(_sum_weight('weight_18k', 'in')),
-        '21k': float(_sum_weight('weight_21k', 'in')),
-        '22k': float(_sum_weight('weight_22k', 'in')),
-        '24k': float(_sum_weight('weight_24k', 'in')),
-    }
-    w_out = {
-        '18k': float(_sum_weight('weight_18k', 'out')),
-        '21k': float(_sum_weight('weight_21k', 'out')),
-        '22k': float(_sum_weight('weight_22k', 'out')),
-        '24k': float(_sum_weight('weight_24k', 'out')),
-    }
+    main_karat = float(get_main_karat() or 21)
+    balance = safe_box_balance(safe_box, main_karat=main_karat)
 
     return jsonify({
         'safe_box_id': safe_box.id,
         'safe_box_name': safe_box.name,
-        'cash_in': round(float(cash_in), 2),
-        'cash_out': round(float(cash_out), 2),
-        'cash_balance': round(float(cash_in) - float(cash_out), 2),
-        'weight_in': {k: round(v, 3) for k, v in w_in.items()},
-        'weight_out': {k: round(v, 3) for k, v in w_out.items()},
-        'weight_balance': {
-            k: round(float(w_in.get(k, 0.0)) - float(w_out.get(k, 0.0)), 3)
-            for k in ['18k', '21k', '22k', '24k']
-        },
+        'cash_balance': balance['cash'],
+        'weight_balance': {k: v for k, v in balance['weight'].items() if k != 'total'},
+        'total_weight_main_karat': balance['weight']['total'],
+        'main_karat': main_karat,
     })
 
 
 @api.route('/safe-boxes/balances', methods=['GET'])
 @require_permission('safe_boxes.view')
 def list_safe_box_balances():
-    """List safe box balances computed from SafeBoxTransaction ledger.
+    """List safe boxes with their official balance (from the general ledger
+    via safe_box_balances_bulk -- never SafeBoxTransaction). This is the
+    single source of truth for "current balance"; any screen needing the
+    SafeBoxTransaction-derived view for diagnostics should call
+    /safe-boxes/reconciliation instead.
 
     Query params:
       - type or safe_type: filter by safe type (cash/bank/gold/check)
       - is_active: true/false
-      - from, to: ISO datetime filters applied on transaction created_at
 
-    Returns: list of SafeBox dicts enriched with ledger balance fields.
+    Returns: list of SafeBox dicts with a `balance` field.
     """
 
     safe_type = (request.args.get('type') or request.args.get('safe_type') or '').strip()
@@ -10545,127 +10512,19 @@ def list_safe_box_balances():
 
     safes = q_safes.order_by(SafeBox.safe_type.asc(), SafeBox.is_default.desc(), SafeBox.name.asc()).all()
 
-    from_value = request.args.get('from')
-    to_value = request.args.get('to')
-    from_dt = None
-    to_dt = None
-    try:
-        if from_value:
-            from_dt = datetime.fromisoformat(from_value)
-    except Exception:
-        return jsonify({'error': 'invalid_from_date'}), 400
-    try:
-        if to_value:
-            to_dt = datetime.fromisoformat(to_value)
-    except Exception:
-        return jsonify({'error': 'invalid_to_date'}), 400
-
     main_karat = float(get_main_karat() or 21)
-
-    def _ledger_balance_for_safe(safe_id: int) -> dict:
-        q = SafeBoxTransaction.query.filter_by(safe_box_id=safe_id)
-        if from_dt:
-            q = q.filter(SafeBoxTransaction.created_at >= from_dt)
-        if to_dt:
-            q = q.filter(SafeBoxTransaction.created_at <= to_dt)
-
-        cash_in = (
-            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-            .filter(SafeBoxTransaction.direction == 'in')
-            .scalar()
-            or 0.0
-        )
-        cash_out = (
-            q.with_entities(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-            .filter(SafeBoxTransaction.direction == 'out')
-            .scalar()
-            or 0.0
-        )
-
-        def _sum_weight(field_name: str, direction: str) -> float:
-            col = getattr(SafeBoxTransaction, field_name)
-            return (
-                q.with_entities(func.coalesce(func.sum(col), 0.0))
-                .filter(SafeBoxTransaction.direction == direction)
-                .scalar()
-                or 0.0
-            )
-
-        w_in = {
-            '18k': float(_sum_weight('weight_18k', 'in')),
-            '21k': float(_sum_weight('weight_21k', 'in')),
-            '22k': float(_sum_weight('weight_22k', 'in')),
-            '24k': float(_sum_weight('weight_24k', 'in')),
-        }
-        w_out = {
-            '18k': float(_sum_weight('weight_18k', 'out')),
-            '21k': float(_sum_weight('weight_21k', 'out')),
-            '22k': float(_sum_weight('weight_22k', 'out')),
-            '24k': float(_sum_weight('weight_24k', 'out')),
-        }
-        w_bal = {
-            k: float(w_in.get(k, 0.0) or 0.0) - float(w_out.get(k, 0.0) or 0.0)
-            for k in ['18k', '21k', '22k', '24k']
-        }
-
-        total_weight_main = 0.0
-        try:
-            for k, grams in w_bal.items():
-                karat = float(str(k).replace('k', ''))
-                total_weight_main += float(convert_to_main_karat(float(grams or 0.0), karat))
-        except Exception:
-            total_weight_main = 0.0
-
-        first_dt = q.with_entities(func.min(SafeBoxTransaction.created_at)).scalar()
-        last_dt = q.with_entities(func.max(SafeBoxTransaction.created_at)).scalar()
-
-        return {
-            'cash_in': round(float(cash_in), 2),
-            'cash_out': round(float(cash_out), 2),
-            'cash_balance': round(float(cash_in) - float(cash_out), 2),
-            'weight_in': {k: round(v, 3) for k, v in w_in.items()},
-            'weight_out': {k: round(v, 3) for k, v in w_out.items()},
-            'weight_balance': {k: round(v, 3) for k, v in w_bal.items()},
-            'total_weight_main_karat': round(float(total_weight_main), 3),
-            'main_karat': round(float(main_karat), 3),
-            'first_date': first_dt.isoformat() if first_dt else None,
-            'last_date': last_dt.isoformat() if last_dt else None,
-        }
+    balances_by_safe_id = safe_box_balances_bulk(safes, main_karat=main_karat)
 
     results = []
-    live_by_id = live_balances_by_account_ids([
-        sb.account_id for sb in safes if getattr(sb, 'account_id', None) is not None
-    ])
     for sb in safes:
         sb_dict = sb.to_dict(include_account=True, include_balance=False)
 
-        live = live_by_id.get(int(sb.account_id)) if getattr(sb, 'account_id', None) is not None else None
-        live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
-        balance = {
-            'cash': round(float(live.get('cash') or 0.0), 2),
-        }
+        bal = balances_by_safe_id.get(sb.id) or {'cash': 0.0, 'weight': {}}
+        balance = {'cash': bal['cash']}
         account = getattr(sb, 'account', None)
         if bool(getattr(account, 'tracks_weight', False)):
-            w18 = float(live.get('18k') or 0.0)
-            w21 = float(live.get('21k') or 0.0)
-            w22 = float(live.get('22k') or 0.0)
-            w24 = float(live.get('24k') or 0.0)
-            balance['weight'] = {
-                '18k': round(w18, 3),
-                '21k': round(w21, 3),
-                '22k': round(w22, 3),
-                '24k': round(w24, 3),
-                'total': round(
-                    convert_to_main_karat(w18, 18) +
-                    convert_to_main_karat(w21, 21) +
-                    convert_to_main_karat(w22, 22) +
-                    convert_to_main_karat(w24, 24),
-                    3
-                ),
-            }
+            balance['weight'] = bal['weight']
         sb_dict['balance'] = balance
-
-        sb_dict.update(_ledger_balance_for_safe(sb.id))
         results.append(sb_dict)
 
     return jsonify({
@@ -28194,27 +28053,27 @@ def cancel_voucher(voucher_id):
 @api.route('/vouchers/stats', methods=['GET'])
 def get_vouchers_stats():
     """Get vouchers statistics"""
-    
+
     # Total counts by type
     stats = {
         'total_receipt': Voucher.query.filter_by(voucher_type='receipt', status='active').count(),
         'total_payment': Voucher.query.filter_by(voucher_type='payment', status='active').count(),
         'total_adjustment': Voucher.query.filter_by(voucher_type='adjustment', status='active').count(),
     }
-    
+
     # Total amounts
     # Total amounts
     receipt_cash = db.session.query(db.func.sum(Voucher.amount_cash)).filter_by(
         voucher_type='receipt', status='active'
     ).scalar() or 0
-    
+
     payment_cash = db.session.query(db.func.sum(Voucher.amount_cash)).filter_by(
         voucher_type='payment', status='active'
     ).scalar() or 0
     stats['total_receipt_cash'] = float(receipt_cash)
     stats['total_payment_cash'] = float(payment_cash)
     stats['net_cash'] = float(receipt_cash - payment_cash)
-    
+
     return jsonify(stats)
 
 
@@ -35764,45 +35623,29 @@ def get_admin_dashboard():
         liquidity_coverage_ratio = (cash_balance / payables_due_7_days) * 100
 
     # --- Safe boxes summary ---
+    # مصدر الرصيد الرسمي الوحيد: safe_box_balances_bulk (دفتر الأستاذ مباشرة)
+    # -- نفس الدالة التي تستخدمها /safe-boxes/balances و/safe-boxes/<id>/balance،
+    # فلا يبقى أي مكان يحسب رصيد خزينة بمنطق مستقل خاص به.
     safe_boxes_summary = []
     try:
         safe_boxes = SafeBox.query.filter(SafeBox.is_active.is_(True)).all()
-        live_by_account = live_balances_by_account_ids([sb.account_id for sb in safe_boxes if getattr(sb, 'account_id', None)])
+        balances_by_id = safe_box_balances_bulk(safe_boxes, main_karat=main_karat)
         for sb in safe_boxes:
-            # NOTE: use live journal-derived balances for consistency across screens.
-            live = live_by_account.get(int(sb.account_id)) if getattr(sb, 'account_id', None) is not None else None
-            live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
-
-            cash = float(live.get('cash') or 0.0)
-            g18 = float(live.get('18k') or 0.0)
-            g21 = float(live.get('21k') or 0.0)
-            g22 = float(live.get('22k') or 0.0)
-            g24 = float(live.get('24k') or 0.0)
-
-            total_main = 0.0
-            try:
-                mk = float(main_karat or 21)
-                if mk <= 0:
-                    mk = 21.0
-                total_main = (g18 * (18.0 / mk)) + g21 + (g22 * (22.0 / mk)) + (g24 * (24.0 / mk))
-            except Exception:
-                total_main = 0.0
-            
+            bal = balances_by_id.get(sb.id) or {
+                'cash': 0.0,
+                'weight': {'18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0, 'total': 0.0},
+            }
+            weight = bal['weight']
             safe_boxes_summary.append({
                 'id': sb.id,
                 'name': sb.name,
                 'safe_type': sb.safe_type,
-                'balance_cash': round(float(cash), 2),
+                'balance_cash': bal['cash'],
                 # Keep legacy single-field gold balance used by older UI.
-                'balance_gold_21k': round(g21, 3),
+                'balance_gold_21k': weight.get('21k', 0.0),
                 # New: detailed weights per karat (ledger-based) for richer UI.
-                'weight_balance': {
-                    '18k': round(g18, 3),
-                    '21k': round(g21, 3),
-                    '22k': round(g22, 3),
-                    '24k': round(g24, 3),
-                },
-                'total_weight_main_karat': round(float(total_main), 3),
+                'weight_balance': {k: v for k, v in weight.items() if k != 'total'},
+                'total_weight_main_karat': weight.get('total', 0.0),
                 'main_karat': int(main_karat or 21),
             })
     except Exception:

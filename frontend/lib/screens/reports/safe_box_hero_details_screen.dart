@@ -79,15 +79,14 @@ class _SafeBoxHeroDetailsScreenState extends State<SafeBoxHeroDetailsScreen> {
   }
 
   Map<String, dynamic> _mergeFromSafeBoxModel(SafeBoxModel m) {
-    final wb = m.weightBalance;
     return <String, dynamic>{
       'id': m.id,
       'name': m.name,
       'safe_type': m.safeType,
-      'weight_balance': wb,
-      'total_weight_main_karat': m.totalWeightMainKarat,
+      'weight_balance': m.weightBalance,
+      'total_weight_main_karat': m.accountTotalWeightMainKarat,
       'balance_cash': m.cashBalance,
-      'balance_gold_21k': wb?['21k'] ?? 0.0,
+      'balance_gold_21k': m.goldBalance21k,
       'has_recent_activity': _safeBox['has_recent_activity'] == true,
       'main_karat': m.karat,
     };

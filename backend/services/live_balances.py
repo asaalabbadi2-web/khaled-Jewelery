@@ -105,3 +105,53 @@ def live_balances_by_account_ids(account_ids: Iterable[int]) -> Dict[int, dict]:
         out.setdefault(account_id, {"cash": 0.0, "18k": 0.0, "21k": 0.0, "22k": 0.0, "24k": 0.0})
 
     return out
+
+
+def _format_safe_box_balance(live: dict, main_karat: float) -> dict:
+    cash = round(float(live.get("cash") or 0.0), 2)
+    w18 = round(float(live.get("18k") or 0.0), 3)
+    w21 = round(float(live.get("21k") or 0.0), 3)
+    w22 = round(float(live.get("22k") or 0.0), 3)
+    w24 = round(float(live.get("24k") or 0.0), 3)
+    mk = float(main_karat or 21.0) or 21.0
+
+    def _to_main(weight: float, karat: float) -> float:
+        return (weight * karat) / mk
+
+    total = round(_to_main(w18, 18) + _to_main(w21, 21) + _to_main(w22, 22) + _to_main(w24, 24), 3)
+    return {
+        "cash": cash,
+        "weight": {"18k": w18, "21k": w21, "22k": w22, "24k": w24, "total": total},
+    }
+
+
+def safe_box_balance(safe_box, main_karat: float = 21.0) -> dict:
+    """الرصيد الرسمي الوحيد لخزينة واحدة -- من دفتر الأستاذ مباشرة عبر
+    live_balances_by_account_ids أعلاه، بلا أي مصدر آخر (لا SafeBoxTransaction
+    ولا أي حقل مخزَّن/مشتق). أي endpoint أو شاشة تحتاج "رصيد خزينة حالي"
+    يجب أن يمر من هنا فقط، فيحصل دائماً على نفس الرقم الذي يظهر في كشف
+    الحساب وميزان المراجعة.
+
+    Returns: {'cash': float, 'weight': {'18k','21k','22k','24k','total'}}
+    """
+    account_id = getattr(safe_box, "account_id", None)
+    live = (
+        live_balances_by_account_ids([account_id]).get(int(account_id))
+        if account_id is not None
+        else None
+    )
+    return _format_safe_box_balance(live if isinstance(live, dict) else {}, main_karat)
+
+
+def safe_box_balances_bulk(safe_boxes, main_karat: float = 21.0) -> Dict[int, dict]:
+    """نفس safe_box_balance لكن لمجموعة خزائن بنداء واحد لقاعدة البيانات."""
+    account_ids = [
+        sb.account_id for sb in safe_boxes if getattr(sb, "account_id", None) is not None
+    ]
+    live_by_account = live_balances_by_account_ids(account_ids)
+    out: Dict[int, dict] = {}
+    for sb in safe_boxes:
+        account_id = getattr(sb, "account_id", None)
+        live = live_by_account.get(int(account_id)) if account_id is not None else None
+        out[sb.id] = _format_safe_box_balance(live if isinstance(live, dict) else {}, main_karat)
+    return out
