@@ -18,8 +18,13 @@ memo_account_id فيه يشير إلى حساب #1213 -- حساب اسمه ال�
 الإصلاح (بخطوتين، باختيار المستخدم: تعديل مباشر لسطر القيد، لا قيد عكسي --
 لأنه خطأ اختيار حساب حديث (يوم واحد) لم يُبنَ عليه أي شيء آخر):
 
-  1. تحديث Account(1072).memo_account_id من 1213 إلى 1074 -- يمنع أي حجز
-     جديد لهذا المكتب من تكرار الخطأ.
+  1. ربط Account(1072) بـAccount(1074) عبر account_pair_service.link_accounts
+     (لا تعيين مباشر لـmemo_account_id -- هذا أول استخدام فعلي للخدمة
+     المركزية الجديدة؛ انظر audit_account_memo_invariants.py الذي كشف أن
+     الكتابة المباشرة من 36 موضعاً مختلفاً هي السبب الجذري لهذه الفئة من
+     الأخطاء). الخدمة تفسخ تلقائياً أي ربط سابق على أي من الطرفين، شاملاً
+     أي حساب ثالث آخر قد يشير خطأً لـ1074 (duplicate_target لم نتحقق منه
+     يدوياً لـ1074 تحديداً -- الخدمة تضمنه تلقائياً).
   2. تعديل JournalEntryLine الوحيد على JE#4709 الذي account_id=1213 ليصبح
      account_id=1074 مباشرة (لا حذف/إعادة إنشاء -- نفس السطر، حقل واحد فقط).
 
@@ -40,6 +45,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from app import app
 from models import db, Account, JournalEntry, JournalEntryLine
 from services.live_balances import live_balances_by_account_ids
+from account_pair_service import link_accounts, AccountPairLinkError
 
 OLD_ACCOUNT_ID = 1213
 NEW_ACCOUNT_ID = 1074
@@ -89,8 +95,15 @@ def run(apply: bool) -> None:
             return
 
         if will_update_memo:
-            office_account.memo_account_id = NEW_ACCOUNT_ID
-            db.session.add(office_account)
+            new_memo_account = Account.query.get(NEW_ACCOUNT_ID)
+            if not new_memo_account:
+                print(f"❌ الحساب #{NEW_ACCOUNT_ID} غير موجود -- إيقاف.")
+                return
+            try:
+                link_accounts(office_account, new_memo_account, created_by='fix_office6_weight_account_1213_to_1074')
+            except AccountPairLinkError as exc:
+                print(f"❌ رفضت خدمة الربط العملية: {exc}")
+                return
 
         for line in target_lines:
             line.account_id = NEW_ACCOUNT_ID

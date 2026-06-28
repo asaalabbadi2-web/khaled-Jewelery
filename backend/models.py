@@ -10,6 +10,7 @@ import logging
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy import event, text
+from sqlalchemy.orm import validates
 
 db = SQLAlchemy()
 
@@ -206,6 +207,46 @@ class Account(db.Model):
         """هل يُسمح لهذا الحساب بإنشاء حساب موازي وزني؟"""
         num = (self.account_number or '').strip()
         return num.startswith(self._PARALLEL_ALLOWED_PREFIXES)
+
+    # علامات نصية تُستخدم في هذا النظام لوضع حساب كـ"متروك" بعد دمج/استبدال
+    # (لا يوجد حقل is_active على Account، فالاتفاقية الوحيدة المتاحة هي
+    # إضافة هذه العلامة لاسم الحساب). يستخدمها أيضاً audit_account_memo_invariants.py.
+    _DEPRECATED_ACCOUNT_MARKERS = ('غير مستخدم', 'مكرَّر', 'مكرر', 'متروك')
+
+    @validates('memo_account_id')
+    def _validate_memo_account_id(self, key, value):
+        """ضمان دائم يمنع تكرار حادثة حساب #1213: حساب #1072 (مكتب تسكير
+        فورية واشخاص) ظلّ memo_account_id فيه يشير لحساب أُعيدت تسميته
+        لاحقاً كـ"متروك/مكرَّر" بعد استبداله بحساب آخر، فاستمرت حجوزات
+        ذهب جديدة بالتسجيل عليه شهوراً دون أن يُلاحظ أحد -- لأن لا شيء في
+        البنية كان يرفض هذا التعيين عند حدوثه، رغم 36 موضع كتابة مختلفاً
+        لهذا الحقل في الكود.
+
+        هذا الحارس يعمل بغضّ النظر عن أي مسار كتابة استدعاه (وليس فقط
+        create_parallel_account)، ويرفض فوراً:
+          - حساب يشير لنفسه.
+          - حساب يشير لحساب آخر موسوم صراحةً كمتروك/مكرَّر.
+
+        لفحص شامل لكل الحسابات الموجودة فعلاً وعلاقاتها (one-way link،
+        duplicate target، إلخ) استخدم audit_account_memo_invariants.py --
+        هذا الحارس يمنع فقط حالات *جديدة* مستقبلاً.
+        """
+        if value is None:
+            return value
+        if self.id is not None and value == self.id:
+            raise ValueError(f'لا يمكن لحساب #{self.id} أن يشير لنفسه عبر memo_account_id.')
+        try:
+            target = db.session.query(Account).filter(Account.id == value).first()
+        except Exception:
+            target = None
+        if target is not None and target.name and any(
+            marker in target.name for marker in self._DEPRECATED_ACCOUNT_MARKERS
+        ):
+            raise ValueError(
+                f"لا يمكن ربط memo_account_id بحساب #{target.id} ({target.name}) "
+                "لأنه موسوم كمتروك/مكرَّر -- هذا تحديداً ما سبّب حادثة حساب #1213."
+            )
+        return value
 
     def create_parallel_account(self):
         """
