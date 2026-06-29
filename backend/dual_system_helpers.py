@@ -778,9 +778,10 @@ def link_memo_accounts_helper():
     """
     from flask import current_app
     from models import Account
-    
+    from account_pair_service import link_accounts
+
     db = current_app.extensions['sqlalchemy']
-    
+
     def digits_only(value: str) -> str:
         return ''.join(ch for ch in str(value or '').strip() if ch.isdigit())
 
@@ -811,13 +812,13 @@ def link_memo_accounts_helper():
             continue
         if memo_acc.transaction_type != 'gold' or not bool(memo_acc.tracks_weight):
             continue
-        if financial_acc.memo_account_id != memo_acc.id:
-            financial_acc.memo_account_id = memo_acc.id
+        # عملية link/relink صريحة (الفحصان كانا منفصلين سابقاً، فيمكن أن
+        # يُصلَح اتجاه واحد فقط ويبقى الآخر معطوباً -- بالضبط نمط
+        # one_way_link الذي اكتُشف مراراً على الإنتاج). عبر الخدمة المركزية فقط.
+        if financial_acc.memo_account_id != memo_acc.id or memo_acc.memo_account_id != financial_acc.id:
+            link_accounts(financial_acc, memo_acc, created_by='link_memo_accounts_helper_explicit')
             changed = True
             count += 1
-        if memo_acc.memo_account_id != financial_acc.id:
-            memo_acc.memo_account_id = financial_acc.id
-            changed = True
 
     # 2) Generic fallback for any other already-linked financial accounts (repair common mislinks).
     candidates: set[str] = set()
@@ -847,14 +848,11 @@ def link_memo_accounts_helper():
         if memo_acc.transaction_type != 'gold' or not bool(memo_acc.tracks_weight):
             continue
 
-        if financial_acc.memo_account_id != memo_acc.id:
-            financial_acc.memo_account_id = memo_acc.id
+        # نفس منطق link/relink أعلاه -- عبر الخدمة المركزية فقط.
+        if financial_acc.memo_account_id != memo_acc.id or memo_acc.memo_account_id != financial_acc.id:
+            link_accounts(financial_acc, memo_acc, created_by='link_memo_accounts_helper_fallback')
             changed = True
             count += 1
-
-        if memo_acc.memo_account_id != financial_acc.id:
-            memo_acc.memo_account_id = financial_acc.id
-            changed = True
 
     if changed:
         db.session.commit()
