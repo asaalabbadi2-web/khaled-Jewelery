@@ -182,6 +182,29 @@ def run(apply: bool) -> int:
             fixed = len(auto_fixable_self_ref) + len(auto_fixable_one_way) + len(auto_fixable_duplicate_unlink)
             db.session.rollback()
 
+        # كل عناصر AUTO-FIX هنا "ثقة عالية" بالتصميم: أي حالة أقل ثقة تُوجَّه
+        # إلى needs_review منذ التصنيف أعلاه، فلا يوجد تدرّج ثقة داخل هذه
+        # القائمة أصلاً -- التصنيف نفسه هو ضمانة الثقة.
+        auto_fix_report = (
+            [(a, None, 'self_reference', 'عالية') for a in auto_fixable_self_ref]
+            + [(a, target, 'one_way_link (الطرف الآخر غير مربوط، لا تعارض)', 'عالية')
+               for a, target in auto_fixable_one_way]
+            + [(p, target, reason, 'عالية') for p, target, reason in auto_fixable_duplicate_unlink]
+        )
+
+        # تحقق صريح: لا حساب مشترك بين AUTO-FIX وMANUAL REVIEW. مضمون بنيوياً
+        # (memo_account_id حقل واحد لكل حساب، فلا يمكن تصنيفه مرتين) لكن
+        # يُتحقَّق منه فعلياً هنا لا يُفترَض فقط -- لو ظهر تداخل يوماً (خطأ
+        # برمجي مستقبلي) فهذا يوقفه بصوت عالٍ بدل تمريره بصمت.
+        auto_fix_ids = {a.id for a, _t, _r, _c in auto_fix_report}
+        review_ids = set()
+        for a, target, _reason in needs_review:
+            if a is not None:
+                review_ids.add(a.id)
+            if target is not None:
+                review_ids.add(target.id)
+        overlap = auto_fix_ids & review_ids
+
         print(f"{'='*60}")
         print(f"{'تطبيق فعلي' if apply else 'DRY RUN -- لا كتابة'}")
         print(f"{'='*60}")
@@ -191,29 +214,39 @@ def run(apply: bool) -> int:
         print(f"Needs review: {len(needs_review)}")
         print(f"Errors: {len(errors)}")
 
-        if not apply and (auto_fixable_self_ref or auto_fixable_one_way or auto_fixable_duplicate_unlink):
-            print(f"\n--- سيُصلَح تلقائياً لو طُبِّق --apply ({fixed}) ---")
-            for a in auto_fixable_self_ref:
-                print(f"  {_label(a)}: فسخ self_reference")
-            for a, target in auto_fixable_one_way:
-                print(f"  {_label(a)} <-> {_label(target)}: إكمال ربط ثنائي")
-            for p, target, reason in auto_fixable_duplicate_unlink:
-                print(f"  {_label(p)} <-> {_label(target)}: {reason}")
+        if overlap:
+            print(f"\n🛑 تحقق التداخل فشل: {len(overlap)} حساباً ظهر في الفئتين معاً: "
+                  f"{sorted(overlap)} -- هذا لا يجوز حدوثه، أوقف ولا تُطبِّق --apply.")
+        else:
+            print("\n✓ تحقق التداخل: لا يوجد أي حساب مشترك بين AUTO-FIX وMANUAL REVIEW.")
+
+        if auto_fix_report:
+            label = "AUTO-FIX" if apply else "AUTO-FIX (سيُصلَح لو طُبِّق --apply)"
+            print(f"\n=== {label} ({len(auto_fix_report)}) ===")
+            for a, target, reason, confidence in auto_fix_report:
+                pair = f"{_label(a)} -> فسخ" if target is None and reason == 'self_reference' else (
+                    f"{_label(a)} -> فسخ الربط عن {_label(target)}" if 'duplicate_target' in reason
+                    else f"{_label(a)} <-> {_label(target)}"
+                )
+                print(f"\n{pair}")
+                print(f"  السبب: {reason}")
+                print(f"  الثقة: {confidence}")
 
         if needs_review:
-            print(f"\n--- يحتاج مراجعة بشرية ({len(needs_review)}) ---")
+            print(f"\n=== MANUAL REVIEW ({len(needs_review)}) ===")
             for a, target, reason in needs_review:
-                print(f"  {_label(a)} <-> {_label(target)}: {reason}")
+                print(f"\n{_label(a)} <-> {_label(target)}")
+                print(f"  السبب: {reason}")
 
         if errors:
-            print(f"\n--- أخطاء ({len(errors)}) ---")
+            print(f"\n=== أخطاء ({len(errors)}) ===")
             for a, target, reason in errors:
                 print(f"  {_label(a)} <-> {_label(target)}: {reason}")
 
         if not apply:
             print("\n(DRY RUN) لتطبيق التغيير فعليًا أضف --apply")
 
-        return 0 if (not needs_review and not errors) else 1
+        return 0 if (not needs_review and not errors and not overlap) else 1
 
 
 if __name__ == '__main__':
