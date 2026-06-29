@@ -1,14 +1,19 @@
 """اختبارات تكاملية لضمان أن علاقة Account.memo_account_id تبقى محكومة دائماً:
 كل إنشاء/تعديل يمر عبر account_pair_service فقط، والحارس على مستوى ORM
-يرفض ما يتجاوزها، وaudit_account_memo_invariants.py (نفس منطق التصنيف
-المستورد من repair_all_memo_account_links._classify) لا يُخرج أي مخالفة
-بعد أي عملية إنشاء أو ربط أو فسخ.
+يرفض ما يتجاوزها، وأن التصنيف المشترك (account_pair_invariants.classify --
+نفس الدالة التي يستخدمها audit_account_memo_invariants.py على الإنتاج
+وrepair_all_memo_account_links.py للإصلاح) لا يُخرج أي مخالفة بعد أي عملية
+إنشاء أو ربط أو فسخ.
 
 السياق: حادثة حساب #1213 (مكتب تسكير فورية واشخاص) تراكمت شهوراً دون أن
 يُلاحَظ أحد أن قيدها المالي يشير لحساب متروك بدل الحساب الوزني الصحيح --
 لأنه لم يكن هناك أي اختبار يفحص هذه العلاقة. هذا الملف يمنع عودة هذا الصنف
-من الخلل صمتاً: أي موضع كتابة (الـ36 موضعاً الحالية، أو أي موضع جديد
+من الخلل صمتاً: أي موضع كتابة (33 موضعاً رُحِّلت جميعها، أو أي موضع جديد
 مستقبلي) يتجاوز account_pair_service سيُظهر أثره هنا فوراً، قبل النشر.
+
+استخدام account_pair_invariants.classify() هنا (لا نسخة منفصلة من منطق
+الفحص) مقصود: لو اختلف معيار "ما يُعتبر مخالفة" بين الاختبارات وأداة
+التدقيق المستخدمة على الإنتاج، يفقد الاختباران قيمتهما الحقيقية.
 """
 
 import pytest
@@ -19,13 +24,14 @@ from party_account_service import ensure_supplier_accounts, ensure_customer_acco
 from office_account_service import ensure_office_account
 from employee_account_helpers import create_employee_account, get_or_create_employee_payables_accounts
 from account_pair_service import link_accounts, unlink_account, AccountPairLinkError
-from repair_all_memo_account_links import _classify
+from account_pair_invariants import classify as _classify
 
 
 def _no_violations(all_accounts) -> bool:
     """True فقط لو لم توجد أي مخالفة إطلاقاً (لا HIGH قابل للإصلاح، ولا
     MANUAL يحتاج مراجعة) -- نفس القواعد الخمس المستخدمة في
-    audit_account_memo_invariants.py وrepair_all_memo_account_links.py."""
+    audit_account_memo_invariants.py وrepair_all_memo_account_links.py
+    (كليهما يستوردان account_pair_invariants.classify، لا نسخة محلية)."""
     return len(_classify(all_accounts)['decisions']) == 0
 
 
@@ -248,4 +254,74 @@ def test_link_accounts_resolves_pre_existing_duplicate_target():
         assert deprecated.memo_account_id is None, "الحساب المتروك يجب أن يُفسَخ ربطه تلقائياً"
         assert real.memo_account_id == target.id
         assert target.memo_account_id == real.id
+        assert _no_violations(Account.query.all())
+
+
+def test_full_lifecycle_link_unlink_relink_stays_audit_clean():
+    """اختبار شامل يثبت خمس خصائص أساسية للعلاقة، لا فقط أن الخدمة "تعمل":
+
+      - Correctness: كل عملية شرعية تنتج حالة سليمة (تدقيق صفري) فوراً.
+      - Idempotency: تكرار link_accounts() بنفس الطرفين لا يُغيّر شيئاً.
+      - Uniqueness: لا يمكن لحساب أن يملك أكثر من شريك نشط -- إعادة ربط A
+        بشريك جديد تفسخ شريكه القديم تلقائياً.
+      - Symmetry: الرابط ثنائي الاتجاه دائماً في كل خطوة، بلا استثناء.
+      - Convergence: بغض النظر عن تسلسل link/unlink/relink، تعود البيانات
+        دائماً لحالة تحقق كل القواعد الخمس.
+
+    التدقيق بعد كل خطوة عبر account_pair_invariants.classify() مباشرة --
+    نفس الدالة التي يستخدمها audit_account_memo_invariants.py على
+    الإنتاج، لا منطقاً محلياً للاختبار قد ينجرف عنها.
+    """
+    with app.app_context():
+        a = _ensure_account_number('TEST-LC-A', name='حساب اختبار دورة حياة أ', acc_type='Asset', tracks_weight=False)
+        b = _ensure_account_number('TEST-LC-B', name='حساب اختبار دورة حياة ب', acc_type='Asset', tracks_weight=True)
+        db.session.commit()
+
+        # 1) حالة ابتدائية: حسابان مستقلان بلا ربط -- نظيفة بداهة.
+        assert _no_violations(Account.query.all())
+
+        # 2) Correctness + Symmetry: link_accounts(A, B).
+        link_accounts(a, b, created_by='pytest_lifecycle')
+        db.session.commit()
+        assert a.memo_account_id == b.id
+        assert b.memo_account_id == a.id
+        assert _no_violations(Account.query.all())
+
+        # 3) Idempotency: نفس الاستدعاء مرة ثانية لا يُغيّر شيئاً.
+        state_before = (a.memo_account_id, b.memo_account_id)
+        link_accounts(a, b, created_by='pytest_lifecycle')
+        db.session.commit()
+        assert (a.memo_account_id, b.memo_account_id) == state_before
+        assert _no_violations(Account.query.all())
+
+        # 4) unlink_account(A) -> كلا الجانبين None، لا أثر متبقٍّ.
+        unlink_account(a, created_by='pytest_lifecycle')
+        db.session.commit()
+        assert a.memo_account_id is None
+        assert b.memo_account_id is None
+        assert _no_violations(Account.query.all())
+
+        # 5) حساب ثالث C، ثم link_accounts(A, C).
+        c = _ensure_account_number('TEST-LC-C', name='حساب اختبار دورة حياة ج', acc_type='Asset', tracks_weight=True)
+        db.session.commit()
+        link_accounts(a, c, created_by='pytest_lifecycle')
+        db.session.commit()
+        assert a.memo_account_id == c.id
+        assert c.memo_account_id == a.id
+        assert _no_violations(Account.query.all())
+
+        # 6) Uniqueness + Convergence: relink -- إعادة ربط A بـB يجب أن
+        # يفسخ C تلقائياً (لا يمكن أن يبقى C مرتبطاً بـA بعد أن صار A
+        # مرتبطاً بحساب آخر -- علاقة 1:1 محفوظة دائماً).
+        link_accounts(a, b, created_by='pytest_lifecycle')
+        db.session.commit()
+        db.session.refresh(c)
+        assert a.memo_account_id == b.id
+        assert b.memo_account_id == a.id
+        assert c.memo_account_id is None, "Uniqueness: C يجب أن يُفسَخ تلقائياً بعد إعادة ربط A بـB"
+        assert _no_violations(Account.query.all())
+
+        # تنظيف نهائي -- يجب أن يبقى التدقيق صفرياً.
+        unlink_account(a, created_by='pytest_lifecycle')
+        db.session.commit()
         assert _no_violations(Account.query.all())
