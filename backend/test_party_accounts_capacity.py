@@ -51,14 +51,22 @@ def test_supplier_account_capacity_expanded_under_2100():
         assert len(created_numbers) == 12
 
 
-def test_customer_account_created_under_1200_category():
-    """ensure_customer_accounts should create a financial child account under category 1200."""
+def test_customer_account_created_under_customer_category():
+    """ensure_customer_accounts should create a financial child account under its category.
+
+    Uses account number 1260 rather than 1200 -- conftest.py's session-scoped
+    seed already defines 1200 as a gold-inventory account (tracks_weight=True)
+    for unrelated tests; reusing that number here would create a financial
+    category with a conflicting type, which account_pair_service.link_accounts
+    now correctly rejects (it used to fail silently before that validation
+    existed).
+    """
 
     with app.app_context():
-        category_1200 = _ensure_account_number('1200', name='حسابات العملاء', acc_type='Asset')
+        category = _ensure_account_number('1260', name='حسابات العملاء', acc_type='Asset')
 
-        customer = Customer(customer_code='C-TCAP-000001', name='عميل سعة 1200')
-        customer.account_category_id = category_1200.id
+        customer = Customer(customer_code='C-TCAP-000001', name='عميل سعة 1260')
+        customer.account_category_id = category.id
         db.session.add(customer)
         db.session.flush()
 
@@ -67,4 +75,4 @@ def test_customer_account_created_under_1200_category():
 
         financial = db.session.get(Account, customer.account_id)
         assert financial is not None
-        assert financial.parent_id == category_1200.id
+        assert financial.parent_id == category.id

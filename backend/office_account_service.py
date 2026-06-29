@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Optional
 
+from account_pair_service import link_accounts
 from models import db, Account, Office
 
 # Default parent for closing offices: under manufactured-gold suppliers (per current COA).
@@ -191,11 +192,9 @@ def _ensure_memo_account_for_office_account(financial_or_bridge: Account) -> Acc
         db.session.add(memo)
         db.session.flush()
 
-    # Link both ways.
-    financial_or_bridge.memo_account_id = memo.id
-    memo.memo_account_id = financial_or_bridge.id
-    db.session.add(financial_or_bridge)
-    db.session.add(memo)
+    # الربط الثنائي عبر الخدمة المركزية فقط (لا تعيين مباشر -- انظر
+    # account_pair_service.py لسبب هذا التحول).
+    link_accounts(financial_or_bridge, memo, created_by='office_account_service')
     db.session.flush()
 
     return memo

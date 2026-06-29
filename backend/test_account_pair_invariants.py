@@ -14,8 +14,9 @@
 import pytest
 
 from app import app
-from models import db, Account, Supplier, Customer
+from models import db, Account, Supplier, Customer, Office
 from party_account_service import ensure_supplier_accounts, ensure_customer_accounts
+from office_account_service import ensure_office_account
 from account_pair_service import link_accounts, unlink_account, AccountPairLinkError
 from repair_all_memo_account_links import _classify
 
@@ -91,6 +92,25 @@ def test_new_customer_account_pair_is_valid_and_audit_clean():
             assert weight is not None
             assert weight.memo_account_id == financial.id
             assert bool(financial.tracks_weight) != bool(weight.tracks_weight)
+
+        assert _no_violations(Account.query.all())
+
+
+def test_new_office_account_pair_is_valid_and_audit_clean():
+    """نفس الضمان لمسار المكتب (ensure_office_account -> _ensure_memo_account_for_office_account)."""
+    with app.app_context():
+        office = Office(office_code='O-PAIRTEST-001', name='مكتب اختبار ربط')
+        db.session.add(office)
+        db.session.flush()
+
+        financial = ensure_office_account(office, auto_commit=True)
+
+        assert financial is not None
+        assert financial.memo_account_id is not None, "الحساب المالي للمكتب يجب أن يملك memo_account_id"
+        weight = db.session.get(Account, financial.memo_account_id)
+        assert weight is not None
+        assert weight.memo_account_id == financial.id, "الربط يجب أن يكون ثنائي الاتجاه"
+        assert bool(financial.tracks_weight) != bool(weight.tracks_weight)
 
         assert _no_violations(Account.query.all())
 

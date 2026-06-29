@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 
 from sqlalchemy import and_
 
+from account_pair_service import link_accounts
 from models import Account, Customer, Supplier, db
 
 
@@ -192,10 +193,9 @@ def _ensure_memo_account_for_financial(
         db.session.add(memo)
         db.session.flush()
 
-    # Link the financial -> memo (primary link).
-    financial.memo_account_id = memo.id
-    # Optional reverse link for easier navigation.
-    memo.memo_account_id = financial.id
+    # الربط الثنائي عبر الخدمة المركزية فقط (لا تعيين مباشر -- انظر
+    # account_pair_service.py لسبب هذا التحول).
+    link_accounts(financial, memo, created_by='party_account_service')
     db.session.flush()
     return memo
 
