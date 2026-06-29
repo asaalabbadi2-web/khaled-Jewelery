@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from app import app, db
+from account_pair_service import link_accounts, unlink_account
 from models import Account
 
 
@@ -160,12 +161,21 @@ def upsert_accounts(normalized: List[Dict[str, Any]]) -> Dict[str, int]:
         new_parent_id = number_to_id.get(parent_num) if parent_num else None
         new_memo_id = number_to_id.get(memo_num) if memo_num else None
 
-        if acc.parent_id != new_parent_id or acc.memo_account_id != new_memo_id:
+        memo_changed = acc.memo_account_id != new_memo_id
+        if acc.parent_id != new_parent_id or memo_changed:
             relinked += 1
 
         acc.parent_id = new_parent_id
-        acc.memo_account_id = new_memo_id
         db.session.add(acc)
+
+        # الربط/الفسخ عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+        if memo_changed:
+            if new_memo_id is None:
+                unlink_account(acc, created_by='upsert_accounts_from_json')
+            else:
+                memo_acc = accounts_by_number.get(memo_num)
+                if memo_acc:
+                    link_accounts(acc, memo_acc, created_by='upsert_accounts_from_json')
 
     return {"created": created, "updated": updated, "relinked": relinked, "count": len(normalized)}
 

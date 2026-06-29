@@ -44,6 +44,7 @@ if BACKEND_DIR not in sys.path:
     sys.path.insert(0, BACKEND_DIR)
 
 from app import app  # noqa: E402
+from account_pair_service import link_accounts  # noqa: E402
 from models import Account, db  # noqa: E402
 from config import WEIGHT_SUPPORT_ACCOUNTS  # noqa: E402
 
@@ -152,17 +153,12 @@ def main(argv: list[str]) -> int:
             set_if_diff(memo, 'transaction_type', 'gold')
             set_if_diff(memo, 'tracks_weight', True)
 
-            if acc.memo_account_id != memo.id:
+            if acc.memo_account_id != memo.id or memo.memo_account_id != acc.id:
                 planned_links.append(
-                    f"link financial {acc.account_number} memo_account_id {acc.memo_account_id} -> {memo.id}"
+                    f"link financial {acc.account_number} <-> memo {memo.account_number}"
                 )
-                acc.memo_account_id = memo.id
-
-            if memo.memo_account_id != acc.id:
-                planned_links.append(
-                    f"link memo {memo.account_number} memo_account_id {memo.memo_account_id} -> {acc.id}"
-                )
-                memo.memo_account_id = acc.id
+                # الربط الثنائي عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+                link_accounts(acc, memo, created_by='enforce_dual_account_conventions')
 
         # Memo: ensure reverse link points to stripped financial number (create optionally).
         for acc in accounts:
@@ -204,17 +200,12 @@ def main(argv: list[str]) -> int:
             set_if_diff(fin, 'transaction_type', 'cash')
             set_if_diff(fin, 'tracks_weight', False)
 
-            if fin.memo_account_id != acc.id:
+            if fin.memo_account_id != acc.id or acc.memo_account_id != fin.id:
                 planned_links.append(
-                    f"link financial {fin.account_number} memo_account_id {fin.memo_account_id} -> {acc.id}"
+                    f"link financial {fin.account_number} <-> memo {acc.account_number}"
                 )
-                fin.memo_account_id = acc.id
-
-            if acc.memo_account_id != fin.id:
-                planned_links.append(
-                    f"link memo {acc.account_number} memo_account_id {acc.memo_account_id} -> {fin.id}"
-                )
-                acc.memo_account_id = fin.id
+                # الربط الثنائي عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+                link_accounts(fin, acc, created_by='enforce_dual_account_conventions')
 
         print(f"Total accounts: {len(accounts)}")
         print(f"Planned field updates: {len(planned_field_updates)}")
