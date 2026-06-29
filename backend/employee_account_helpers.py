@@ -24,6 +24,7 @@ possible, without force-changing existing account parents/types.
 
 # استخدم نفس الوحدة التي يهيئها app.py لتفادي إنشاء نسخة SQLAlchemy ثانية
 from models import Account, db
+from account_pair_service import link_accounts
 
 from employee_account_naming import (
     employee_payable_account_name,
@@ -108,7 +109,11 @@ def ensure_memo_for_account(fin_account: Account) -> Optional[Account]:
     memo_number = f"7{str(fin_account.account_number)}"
     existing = Account.query.filter_by(account_number=memo_number).first()
     if existing:
-        fin_account.memo_account_id = existing.id
+        # الربط الثنائي عبر الخدمة المركزية فقط -- كانت هذه الدالة تضبط
+        # اتجاهاً واحداً فقط (fin_account.memo_account_id) بلا أي تحديث
+        # لمؤشر الحساب الوزني نفسه، وهي السبب الجذري لعشرات حالات
+        # one_way_link لحسابات الموظفين المكتشفة على الإنتاج.
+        link_accounts(fin_account, existing, created_by='employee_account_helpers')
         db.session.flush()
         return existing
 
@@ -137,7 +142,7 @@ def ensure_memo_for_account(fin_account: Account) -> Optional[Account]:
     db.session.add(memo_account)
     db.session.flush()
 
-    fin_account.memo_account_id = memo_account.id
+    link_accounts(fin_account, memo_account, created_by='employee_account_helpers')
     db.session.flush()
     return memo_account
 

@@ -17,6 +17,7 @@ from app import app
 from models import db, Account, Supplier, Customer, Office
 from party_account_service import ensure_supplier_accounts, ensure_customer_accounts
 from office_account_service import ensure_office_account
+from employee_account_helpers import create_employee_account, get_or_create_employee_payables_accounts
 from account_pair_service import link_accounts, unlink_account, AccountPairLinkError
 from repair_all_memo_account_links import _classify
 
@@ -111,6 +112,41 @@ def test_new_office_account_pair_is_valid_and_audit_clean():
         assert weight is not None
         assert weight.memo_account_id == financial.id, "الربط يجب أن يكون ثنائي الاتجاه"
         assert bool(financial.tracks_weight) != bool(weight.tracks_weight)
+
+        assert _no_violations(Account.query.all())
+
+
+def test_new_employee_account_pair_is_valid_and_audit_clean():
+    """ensure_memo_for_account (عبر create_employee_account) كانت تضبط
+    fin_account.memo_account_id فقط، بلا أي تحديث لمؤشر الحساب الوزني نفسه
+    -- السبب الجذري لعشرات حالات one_way_link لحسابات الموظفين المكتشفة
+    على الإنتاج (راجع repair_all_memo_account_links.py)."""
+    with app.app_context():
+        account = create_employee_account('موظف اختبار ربط', department='administration')
+        db.session.commit()
+
+        assert account.memo_account_id is not None, "الحساب الشخصي للموظف يجب أن يملك memo_account_id"
+        weight = db.session.get(Account, account.memo_account_id)
+        assert weight is not None
+        assert weight.memo_account_id == account.id, "الربط يجب أن يكون ثنائي الاتجاه"
+        assert bool(account.tracks_weight) != bool(weight.tracks_weight)
+
+        assert _no_violations(Account.query.all())
+
+
+def test_new_employee_payables_accounts_are_valid_and_audit_clean():
+    """نفس الضمان لحسابات ذمم الموظفين (2400/2410/2420/2310)."""
+    with app.app_context():
+        accounts = get_or_create_employee_payables_accounts('موظف اختبار ذمم')
+        db.session.commit()
+
+        assert len(accounts) > 0
+        for acc in accounts:
+            assert acc.memo_account_id is not None, f"#{acc.id} يجب أن يملك memo_account_id"
+            weight = db.session.get(Account, acc.memo_account_id)
+            assert weight is not None
+            assert weight.memo_account_id == acc.id, f"#{acc.id} الربط يجب أن يكون ثنائي الاتجاه"
+            assert bool(acc.tracks_weight) != bool(weight.tracks_weight)
 
         assert _no_violations(Account.query.all())
 
