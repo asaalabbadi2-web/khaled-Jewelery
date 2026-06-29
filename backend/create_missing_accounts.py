@@ -40,6 +40,7 @@ def main():
 
     with flask_app.app_context():
         from models import db, Account
+        from account_pair_service import link_accounts
 
         def get_by_number(num):
             return Account.query.filter_by(account_number=str(num)).first()
@@ -194,10 +195,8 @@ def main():
             obj  = created.get(ac['account_number'])
             memo = created.get(ac['memo_number']) or get_by_number(ac['memo_number'])
             if obj and memo:
-                obj.memo_account_id = memo.id
-                # ربط الاتجاه العكسي إذا لم يكن موجوداً
-                if not memo.memo_account_id:
-                    memo.memo_account_id = obj.id
+                # الربط الثنائي عبر الخدمة المركزية فقط -- انظر account_pair_service.py
+                link_accounts(obj, memo, created_by='create_missing_accounts')
 
         db.session.commit()
 
