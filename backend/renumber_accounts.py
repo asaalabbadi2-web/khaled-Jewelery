@@ -16,6 +16,7 @@
 
 import sys
 from app import app, db
+from account_pair_service import link_accounts
 from config import WEIGHT_SUPPORT_ACCOUNTS
 from models import Account, JournalEntry, JournalEntryLine
 
@@ -202,8 +203,10 @@ def create_financial_and_memo_accounts(*, force_delete_existing: bool = False):
                 # حفظ في الخريطة
                 memo_accounts_map[fin_account.account_number] = memo_account
                 
-                # ربط الحساب المالي بالحساب الوزني
-                fin_account.memo_account_id = memo_account.id
+                # الربط الثنائي عبر الخدمة المركزية فقط -- كان هذا يضبط
+                # اتجاهاً واحداً فقط (نفس علّة employee_account_helpers.py
+                # التي سبّبت 41 حالة one_way_link على الإنتاج).
+                link_accounts(fin_account, memo_account, created_by='renumber_accounts')
                 
                 print(f"   ✅ {fin_account.account_number} ({fin_account.name}) → {memo_number} ({memo_name})")
             

@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from app import app
 from models import db, Account
+from account_pair_service import link_accounts, unlink_account
 
 # Support: next to script, one level up, or /tmp/
 def _find_json():
@@ -131,12 +132,21 @@ def run():
             new_pid = all_acc_map[p_num].id if p_num and p_num in all_acc_map else None
             new_mid = all_acc_map[m_num].id if m_num and m_num in all_acc_map else None
 
-            if acc.parent_id != new_pid or acc.memo_account_id != new_mid:
+            memo_changed = acc.memo_account_id != new_mid
+            if acc.parent_id != new_pid or memo_changed:
                 relinked += 1
 
             acc.parent_id = new_pid
-            acc.memo_account_id = new_mid
             db.session.add(acc)
+
+            # الربط/الفسخ عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+            if memo_changed:
+                if new_mid is None:
+                    unlink_account(acc, created_by='import_coa_v2')
+                else:
+                    memo_acc = all_acc_map.get(m_num)
+                    if memo_acc:
+                        link_accounts(acc, memo_acc, created_by='import_coa_v2')
 
         db.session.commit()
 

@@ -52,6 +52,7 @@ if BACKEND_DIR not in sys.path:
 
 from sqlalchemy import and_, or_
 
+from account_pair_service import link_accounts
 from models import db, Account, Office, SafeBox, Supplier
 
 
@@ -152,10 +153,8 @@ def _ensure_memo_account_for_any(financial_or_bridge: Account) -> Account:
         db.session.add(memo)
         db.session.flush()
 
-    financial_or_bridge.memo_account_id = memo.id
-    memo.memo_account_id = financial_or_bridge.id
-    db.session.add(financial_or_bridge)
-    db.session.add(memo)
+    # الربط الثنائي عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+    link_accounts(financial_or_bridge, memo, created_by='migrate_gold_safe_links_to_memo_accounts')
     db.session.flush()
 
     return memo

@@ -68,6 +68,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from app import app, db
+from account_pair_service import link_accounts
 from models import (
     Account,
     AccountingMapping,
@@ -274,14 +275,24 @@ def _import_accounts(rows: List[Dict[str, Any]]) -> int:
 
     number_to_id = {n: a.id for n, a in by_number.items()}
 
-    # Pass 2: set relationships
+    # Pass 2: parent relationships
     for r in rows:
         acc = by_number[r['account_number']]
         parent_num = r.get('parent_account_number')
-        memo_num = r.get('memo_account_number')
         acc.parent_id = number_to_id.get(parent_num) if parent_num else None
-        acc.memo_account_id = number_to_id.get(memo_num) if memo_num else None
         db.session.add(acc)
+    db.session.flush()
+
+    # الربط الثنائي عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+    # آمن تماماً هنا: يأتي دائماً بعد --wipe (قاعدة فارغة)، فلا بيانات قائمة لتتأثر.
+    for r in rows:
+        memo_num = r.get('memo_account_number')
+        if not memo_num:
+            continue
+        memo_acc = by_number.get(memo_num)
+        if not memo_acc:
+            continue
+        link_accounts(by_number[r['account_number']], memo_acc, created_by='wipe_and_import_accounts_from_json')
 
     db.session.commit()
     return created

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from account_pair_service import link_accounts
 from models import Account
 
 
@@ -130,10 +131,21 @@ def seed_chart_of_accounts_if_empty(db, file_path: str) -> int:
     for r in rows:
         acc = by_number[r['account_number']]
         parent_num = r.get('parent_account_number')
-        memo_num = r.get('memo_account_number')
         acc.parent_id = number_to_id.get(parent_num) if parent_num else None
-        acc.memo_account_id = number_to_id.get(memo_num) if memo_num else None
         db.session.add(acc)
+    db.session.flush()
+
+    # الربط الثنائي عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+    # هذا التزامن (bootstrap على قاعدة فارغة فقط، انظر الحارس أعلى الدالة)
+    # يعني صفر مخاطرة على بيانات قائمة.
+    for r in rows:
+        memo_num = r.get('memo_account_number')
+        if not memo_num:
+            continue
+        memo_acc = by_number.get(memo_num)
+        if not memo_acc:
+            continue
+        link_accounts(by_number[r['account_number']], memo_acc, created_by='coa_seed')
 
     db.session.commit()
     return len(rows)
