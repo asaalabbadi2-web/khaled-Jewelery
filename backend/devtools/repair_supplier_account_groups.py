@@ -24,6 +24,7 @@ import sys, os, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import app
+from account_pair_service import link_accounts
 from models import db, Account, Supplier, JournalEntryLine
 
 APPLY = '--apply' in sys.argv
@@ -148,9 +149,11 @@ with app.app_context():
                 if memo_lines == 0:
                     print(f"  [MEM] sup {s.id:3} {s.name[:30]} — DELETE orphan {memo.account_number} (0 lines), keep {correct_memo.account_number}")
                     if APPLY:
-                        # Re-link financial account → correct memo
+                        # عملية relink صريحة (الفسخ عن memo القديم سيحدث
+                        # تلقائياً عبر الخدمة، قبل حذفه أدناه) -- عبر الخدمة
+                        # المركزية فقط.
                         if fin:
-                            fin.memo_account_id = correct_memo.id
+                            link_accounts(fin, correct_memo, created_by='repair_supplier_account_groups')
                             db.session.flush()
                         db.session.delete(memo)
                         db.session.flush()
@@ -163,7 +166,8 @@ with app.app_context():
                         JournalEntryLine.query.filter_by(account_id=memo.id).update({'account_id': correct_memo.id})
                         db.session.flush()
                         if fin:
-                            fin.memo_account_id = correct_memo.id
+                            # عملية relink صريحة -- نفس الملاحظة أعلاه.
+                            link_accounts(fin, correct_memo, created_by='repair_supplier_account_groups')
                             db.session.flush()
                         db.session.delete(memo)
                         db.session.flush()

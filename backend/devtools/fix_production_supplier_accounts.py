@@ -28,6 +28,7 @@ import sys, os, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app import app
+from account_pair_service import link_accounts
 from models import db, Account, Supplier, JournalEntryLine, SafeBox, Office
 
 APPLY = '--apply' in sys.argv
@@ -222,8 +223,10 @@ with app.app_context():
                     action(f'[MEM] sup {s.id:3} {s.name[:32]}  '
                            f'DELETE orphan {memo.account_number} (0 lines) → use {correct_m.account_number}')
                     if APPLY:
+                        # عملية relink صريحة (الفسخ عن memo القديم تلقائي عبر
+                        # الخدمة، قبل حذفه أدناه) -- عبر الخدمة المركزية فقط.
                         if fin:
-                            fin.memo_account_id = correct_m.id
+                            link_accounts(fin, correct_m, created_by='fix_production_supplier_accounts')
                             db.session.flush()
                         db.session.delete(memo)
                         db.session.flush()
@@ -236,7 +239,8 @@ with app.app_context():
                             {'account_id': correct_m.id}, synchronize_session=False)
                         db.session.flush()
                         if fin:
-                            fin.memo_account_id = correct_m.id
+                            # عملية relink صريحة -- نفس الملاحظة أعلاه.
+                            link_accounts(fin, correct_m, created_by='fix_production_supplier_accounts')
                             db.session.flush()
                         db.session.delete(memo)
                         db.session.flush()
