@@ -70,6 +70,7 @@ except ImportError:  # Local scripts running from backend/ directory
 from office_supplier_service import ensure_office_supplier
 from office_account_service import ensure_office_account
 from party_account_service import ensure_customer_accounts, ensure_supplier_accounts
+from account_pair_service import link_accounts, unlink_account
 from code_generator import generate_item_code, generate_barcode_from_item_code, validate_item_code
 from dual_system_helpers import (
     create_dual_journal_entry,
@@ -1139,8 +1140,8 @@ def _repair_inventory_wage_memo_links():
         # even if optional 24k inventory accounts are missing in this DB.
         for acc in (acc_1350, acc_1320):
             if acc and wage_memo and acc.memo_account_id != wage_memo.id:
-                acc.memo_account_id = wage_memo.id
-                db.session.add(acc)
+                # عملية link صريحة -- عبر الخدمة المركزية فقط.
+                link_accounts(acc, wage_memo, created_by='_repair_inventory_wage_memo_links')
                 changed += 1
 
         # If the optional 24k inventory accounts are missing, still commit the safe fixes above.
@@ -1214,8 +1215,9 @@ def _repair_inventory_wage_memo_links():
                     "Please review accounts 71330 and wage memo usage before manual migration."
                 )
 
-            # Link 1340 to correct 24k memo account (71330)
-            acc_1340.memo_account_id = memo_71330.id
+            # عملية relink صريحة (كان مرتبطاً بـwage_memo): الخدمة تفسخ الرابط
+            # القديم تلقائياً عند ربط 1340 بـ71330 الصحيح.
+            link_accounts(acc_1340, memo_71330, created_by='_repair_inventory_wage_memo_links')
             changed += 1
 
         # Note: wage-inventory link is already enforced above; keep this section for readability.
@@ -1340,7 +1342,9 @@ def ensure_weight_closing_support_accounts():
                     updated += 1
 
         if financial_account and memo_account and financial_account.memo_account_id != memo_account.id:
-            financial_account.memo_account_id = memo_account.id
+            # عملية link (أو relink لو كان مرتبطاً بحساب آخر سابقاً) -- عبر
+            # الخدمة المركزية فقط، تضمن الاتجاه العكسي أيضاً.
+            link_accounts(financial_account, memo_account, created_by='ensure_weight_closing_support_accounts')
             linked_pairs += 1
 
     if created or linked_pairs or updated:
@@ -1371,7 +1375,9 @@ def ensure_weight_closing_support_accounts():
                     if not memo_acc and entry_key == 'manufacturing_wage' and memo_no == '71340':
                         memo_acc = Account.query.filter_by(account_number='7340').first()
                     if fin_acc and memo_acc and fin_acc.memo_account_id != memo_acc.id:
-                        fin_acc.memo_account_id = memo_acc.id
+                        # عملية link بعد تعارض إنشاء متزامن (race condition) --
+                        # عبر الخدمة المركزية فقط.
+                        link_accounts(fin_acc, memo_acc, created_by='ensure_weight_closing_support_accounts_race_recovery')
                         relinked += 1
                 if relinked:
                     db.session.commit()
@@ -17927,12 +17933,21 @@ def import_accounts():
         new_parent_id = number_to_id_extended.get(parent_num) if parent_num else None
         new_memo_id = number_to_id_extended.get(memo_num) if memo_num else None
 
-        if acc.parent_id != new_parent_id or acc.memo_account_id != new_memo_id:
+        memo_changed = acc.memo_account_id != new_memo_id
+        if acc.parent_id != new_parent_id or memo_changed:
             relinked += 1
 
         acc.parent_id = new_parent_id
-        acc.memo_account_id = new_memo_id
         db.session.add(acc)
+
+        # الربط/الفسخ عبر الخدمة المركزية فقط -- انظر account_pair_service.py.
+        if memo_changed:
+            if new_memo_id is None:
+                unlink_account(acc, created_by='import_accounts_route')
+            else:
+                memo_acc = accounts_by_number.get(memo_num) or Account.query.get(new_memo_id)
+                if memo_acc:
+                    link_accounts(acc, memo_acc, created_by='import_accounts_route')
 
     db.session.commit()
 
