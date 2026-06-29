@@ -218,6 +218,41 @@ def _apply_auto_fixes(decisions, created_by: str):
     return fixed, errors
 
 
+MAX_CONVERGE_ITERATIONS = 10
+
+
+def _converge(created_by: str):
+    """يطبّق AUTO-FIX، يُعيد التصنيف، ويكرر ذلك حتى لا يبقى أي قرار HIGH --
+    لأن إصلاح حالة واحدة قد "يحرّر" حالة أخرى لم تكن قابلة للإصلاح وقت
+    التصنيف الأول (مثال حقيقي من الإنتاج: فسخ حساب #1213 المتروك عن #1072
+    يُصفّر memo_account_id لـ#1072 نفسه أيضاً -- لأنهما كانا مرتبطين
+    ببعضهما تبادلياً -- فيتحول ربط #1074 بـ#1072 من "متعارض" إلى "قابل
+    للإكمال تلقائياً" فوراً، دون أي تعارض جديد). لا commit هنا أبداً --
+    فقط flush، يستخدمها كل من المعاينة (تُتبَع بـrollback دائماً) والتنفيذ
+    الفعلي (تُتبَع بـcommit لو نجحت كل الفحوصات).
+
+    يُرجع: (total_fixed, all_errors, final_classification, iterations).
+    """
+    total_fixed = 0
+    all_errors = []
+    iterations = 0
+    final_classification = None
+
+    while iterations < MAX_CONVERGE_ITERATIONS:
+        iterations += 1
+        final_classification = _classify(Account.query.all())
+        auto_fix_now = [d for d in final_classification['decisions'] if d['confidence'] == 'HIGH']
+        if not auto_fix_now:
+            break
+        fixed, errors = _apply_auto_fixes(auto_fix_now, created_by=created_by)
+        total_fixed += fixed
+        all_errors.extend(errors)
+        if errors:
+            break
+
+    return total_fixed, all_errors, final_classification, iterations
+
+
 def _print_table(decisions, title: str):
     if not decisions:
         return
@@ -293,50 +328,69 @@ def run(apply: bool) -> int:
             print(f"\n🛑 تحقق التداخل فشل: {sorted(overlap)} ظهر في الفئتين معاً -- توقف، هذا خطأ برمجي.")
             return 1
 
-        # ── Verify: تطبيق AUTO-FIX في الذاكرة (flush بلا commit)، وإعادة
-        # التصنيف للتأكد من الوصول للنتيجة المتوقعة قبل أي commit فعلي.
-        created_by = 'repair_all_memo_account_links' + ('' if apply else '_preview')
-        fixed, errors = _apply_auto_fixes(auto_fix, created_by=created_by)
+        # ── Verify: تطبيق AUTO-FIX في الذاكرة (flush بلا commit)، مع تكرار
+        # الدورة حتى التقارب (إصلاح حالة قد يُحرّر حالة أخرى لم تكن قابلة
+        # للإصلاح عند التصنيف الأول -- مثال حقيقي: فسخ #1213 المتروك عن
+        # #1072 يُصفّر #1072 نفسه، فيتحول ربطها بـ#1074 من متعارض لقابل
+        # للإكمال فوراً). نتحقق من النتيجة النهائية قبل أي commit فعلي.
+        created_by_preview = 'repair_all_memo_account_links_preview'
+        fixed, errors, final, iterations = _converge(created_by=created_by_preview)
 
-        preview = _classify(Account.query.all())
-        preview_auto_fix = [d for d in preview['decisions'] if d['confidence'] == 'HIGH']
-        preview_manual = [d for d in preview['decisions'] if d['confidence'] == 'MANUAL']
-        preview_manual_by_issue = {}
-        for d in preview_manual:
-            preview_manual_by_issue[d['issue']] = preview_manual_by_issue.get(d['issue'], 0) + 1
+        final_auto_fix = [d for d in final['decisions'] if d['confidence'] == 'HIGH']
+        final_manual = [d for d in final['decisions'] if d['confidence'] == 'MANUAL']
+        final_manual_by_issue = {}
+        for d in final_manual:
+            final_manual_by_issue[d['issue']] = final_manual_by_issue.get(d['issue'], 0) + 1
 
         conflicting_ops = len(errors)
+        # التقارب يجب أن يصل لصفر auto-fix متبقٍّ، بلا أخطاء، وألا يظهر أي
+        # نوع مخالفة جديد لم يكن موجوداً أصلاً (الإصلاح يُفترض أن يُقلّص
+        # المشاكل لا أن يُنشئ نوعاً جديداً منها) ولا عدد أكبر لنوع موجود.
+        new_issue_types = set(final_manual_by_issue) - set(by_issue_manual)
+        increased_counts = {
+            issue: (final_manual_by_issue[issue], by_issue_manual.get(issue, 0))
+            for issue in final_manual_by_issue
+            if final_manual_by_issue[issue] > by_issue_manual.get(issue, 0)
+        }
         idempotent_ok = (
-            not preview_auto_fix
+            not final_auto_fix
             and not conflicting_ops
-            and preview_manual_by_issue == by_issue_manual
+            and not new_issue_types
+            and not increased_counts
+            and iterations < MAX_CONVERGE_ITERATIONS
         )
 
         print(f"{'Conflicting operations':<26}: {'PASS' if conflicting_ops == 0 else 'FAIL'} ({conflicting_ops})")
+        print(f"{'Convergence iterations':<26}: {iterations} {'(⚠️ بلغ الحد الأقصى)' if iterations >= MAX_CONVERGE_ITERATIONS else ''}")
         print(f"{'Idempotency preview':<26}: {'PASS' if idempotent_ok else 'FAIL'}")
         if not idempotent_ok:
-            print(f"   متوقَّع بعد الإصلاح: AUTO-FIX المتبقي=0، MANUAL REVIEW={by_issue_manual}")
-            print(f"   فعلياً بعد المحاكاة: AUTO-FIX المتبقي={len(preview_auto_fix)}، MANUAL REVIEW={preview_manual_by_issue}")
+            print(f"   AUTO-FIX المتبقي بعد التقارب: {len(final_auto_fix)} (يجب أن يكون 0)")
+            print(f"   MANUAL REVIEW قبل: {by_issue_manual}")
+            print(f"   MANUAL REVIEW بعد التقارب: {final_manual_by_issue}")
+            if new_issue_types:
+                print(f"   🛑 أنواع مخالفة جديدة ظهرت ولم تكن موجودة أصلاً: {new_issue_types}")
+            if increased_counts:
+                print(f"   🛑 ازداد عدد حالات موجودة (يجب أن يتناقص أو يبقى ثابتاً فقط): {increased_counts}")
 
-        db.session.rollback()  # المحاكاة أعلاه تُفسَخ دائماً -- لا commit إلا أدناه فقط لو كل الفحوصات نجحت.
+        db.session.rollback()  # المعاينة أعلاه تُفسَخ دائماً -- لا commit إلا أدناه فقط لو نجحت كل الفحوصات.
 
         print(f"\n{'='*60}")
-        if not idempotent_ok or conflicting_ops:
+        if not idempotent_ok:
             print("❌ لن يُنفَّذ أي شيء -- معاينة الإصلاح لم تصل للنتيجة المتوقعة. راجع التفاصيل أعلاه.")
             return 1
 
         if not apply:
-            print(f"✅ معاينة الإصلاح نجحت ({fixed} سيُصلَح). أضف --apply للتنفيذ الفعلي.")
+            print(f"✅ معاينة الإصلاح نجحت ({fixed} سيُصلَح عبر {iterations} دورة/دورات). أضف --apply للتنفيذ الفعلي.")
             return 0
 
         # المعاينة نجحت وapply=True -- نُعيد التطبيق فعلياً هذه المرة مع commit.
-        fixed, errors = _apply_auto_fixes(auto_fix, created_by='repair_all_memo_account_links')
-        if errors:
+        fixed, errors, final, iterations = _converge(created_by='repair_all_memo_account_links')
+        if errors or iterations >= MAX_CONVERGE_ITERATIONS:
             db.session.rollback()
-            print(f"❌ فشل التنفيذ الفعلي بعد نجاح المعاينة (غير متوقَّع): {errors}")
+            print(f"❌ فشل التنفيذ الفعلي بعد نجاح المعاينة (غير متوقَّع): errors={errors}, iterations={iterations}")
             return 1
         db.session.commit()
-        print(f"✅ تم التنفيذ الفعلي: {fixed} إصلاحاً.")
+        print(f"✅ تم التنفيذ الفعلي: {fixed} إصلاحاً عبر {iterations} دورة/دورات.")
         return 0
 
 
