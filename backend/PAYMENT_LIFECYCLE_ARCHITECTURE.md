@@ -1,5 +1,21 @@
 # تصميم: دورة حياة الدفعة ووسيلة الدفع
 
+## المبدأ المعماري الموحَّد
+
+> **Single Source of Truth + Single Writer + Atomic Transaction**
+
+هذه القاعدة الثلاثية هي الخلاصة المشتركة لكل ما بُني في هذا المشروع:
+
+| التطبيق | Single Writer | Single Source of Truth | Atomic Transaction |
+|---|---|---|---|
+| `memo_account_id` | `AccountPairService` | `account_pair_invariants.classify()` | ORM guard + DB constraint |
+| Settlement calculation | `SettlementStateService` | استعلام واحد، لا 10 نسخ | — |
+| Payment Lifecycle | `PaymentLifecycleService` (مخطَّط) | `PaymentConfigurationValidator` | كل الآثار أو لا شيء |
+
+أي خدمة مالية جديدة في النظام تبدأ بتحديد هذه الثلاثة، وإلا لن تختلف عما سبقها.
+
+---
+
 ## Atomic Financial Operations Principle
 
 > **لا تبدأ أي عملية مالية قبل التحقق من أن جميع آثارها الذرية إما مضمونة
