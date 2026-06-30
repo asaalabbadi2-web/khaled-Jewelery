@@ -28026,6 +28026,16 @@ def cancel_voucher(voucher_id):
         voucher.cancellation_reason = reason
         voucher.cancelled_at = datetime.now()
 
+        # حذف صفوف SettlementLine عند إلغاء سند تسوية مقاصة -- يُعيد الدفعات
+        # لقائمة "غير مسوّاة" فعلاً (لا ترك بيانات أيتام تُسبّب phantom-settled).
+        # السبب: cancel_voucher يعكس القيد المحاسبي والخزينة ، لكن SettlementLine
+        # لم تكن تُحذف، مما منع المجدوِّل من رؤية الدفعات كغير مسوّاة.
+        # حادثة إنتاجية: AV-2026-00223 (2026-06-29) -- 5 دفعات، 21,770 ريال معلَّقة.
+        if voucher.reference_type == 'clearing_settlement':
+            SettlementLine.query.filter_by(voucher_id=voucher.id).delete(
+                synchronize_session=False
+            )
+
         # Audit log
         try:
             AuditLog.log_action(
@@ -31094,40 +31104,16 @@ def _create_clearing_settlement_voucher(
             ).all(),
             key=lambda x: x.created_at or datetime.min,
         )
-        # ============================================================
-        # INTENTIONAL DIVERGENCE -- do not "fix" by swapping this for
-        # settlement_state_service.get_settled_amounts().
+        # Root-cause fix (2026-07-01): cancel_voucher() now deletes SettlementLine
+        # rows for clearing_settlement vouchers, so future cancellations won't
+        # leave phantom-settled IPs. See the cancel_voucher() edit above.
         #
-        # This query intentionally counts APPROVED-voucher settlements only
-        # (.filter(Voucher.status == 'approved') below).
-        #
-        # Production incident: AV-2026-00133
-        #   IP#1547 looked "940 already settled" from two since-cancelled
-        #   vouchers (AV-130/AV-131) that were reversed minutes before
-        #   AV-133 ran -- this filter was added here, at this one call
-        #   site, to fix that specific incident.
-        #
-        # Reason: cancel_voucher() flips Voucher.status to 'cancelled' but
-        # never deletes the SettlementLine rows tied to it. Raw
-        # SettlementLine totals (what get_settled_amounts() returns, by
-        # design, matching the other 9 call sites) therefore overstate how
-        # much of a payment is genuinely settled whenever a settlement
-        # voucher gets cancelled after creation.
-        #
-        # This was never generalized. Production check on 2026-06-30
-        # (diagnose_cancelled_settlement_impact.py) confirmed the other 9
-        # call sites still exhibit the exact same bug today: 9 InvoicePayments,
-        # 27,820 phantom-settled, across 4 cancelled vouchers -- including
-        # this same AV-130/AV-131 pair. Whether to extend this approved-only
-        # filter to all 10 sites (as "effective settled amount", vs. today's
-        # "raw settled amount") is an open BUSINESS decision pending review
-        # with the user -- see PAYMENT_LIFECYCLE_ARCHITECTURE.md and
-        # diagnose_cancelled_settlement_impact.py. Until decided: when that
-        # call is made, add get_effective_settled_amount() alongside the
-        # existing get_raw_settled_amount() in settlement_state_service.py
-        # rather than changing either function's existing meaning --
-        # callers migrate one at a time, by explicit choice.
-        # ============================================================
+        # This approved-filter predates that fix (added after incident
+        # AV-2026-00133 in May 2026 -- IP#1547 phantom-settled from cancelled
+        # AV-130/AV-131). It is kept here as protection against the existing
+        # historical orphaned rows from those 3 vouchers (AV-130/131/132) until
+        # they are cleaned up in the DB. Once cleaned, this filter becomes
+        # redundant with get_settled_amounts() and can be simplified.
         _all_ids = [ip.id for ip in ip_rows]
         _prev_settled: dict = {}
         if _all_ids:
