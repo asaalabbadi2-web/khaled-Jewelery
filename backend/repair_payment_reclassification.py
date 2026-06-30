@@ -168,11 +168,9 @@ def run(ip_id: int, amount: float, from_pm_id: int, apply: bool) -> int:
         print(f"  رصيد {_label(acc_from)} قبل:  {bal_from_before:,.2f}")
         print(f"  رصيد {_label(acc_to)}  قبل:  {bal_to_before:,.2f}")
 
-        if bal_from_before < amount - EPSILON:
-            errors.append(
-                f"رصيد حساب المصدر {_label(acc_from)} ({bal_from_before:,.2f}) "
-                f"أقل من المبلغ المطلوب ({amount:,.2f})."
-            )
+        # ملاحظة: لا يوجد فحص "رصيد >= مبلغ" لحساب المصدر -- حساب المقاصة
+        # (مدى) حساب دائن طبيعياً، وإضافة دائن إليه صحيحة بغض النظر عن رصيده
+        # الحالي. الرصيد السالب يعني تراكم تسويات تاريخية، لا خطأ.
 
         if errors:
             _print_errors(errors)
