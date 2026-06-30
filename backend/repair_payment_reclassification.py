@@ -49,21 +49,12 @@ def _label(obj, id_attr='id', name_attr='name') -> str:
     return f"#{getattr(obj, id_attr, '?')} {getattr(obj, name_attr, '')}"
 
 
-def _gl_balance(account_id: int) -> float:
-    """إجمالي مدين - دائن للحساب من جميع سطور القيود."""
-    from sqlalchemy import func
-    row = (
-        db.session.query(
-            func.coalesce(func.sum(JournalEntryLine.cash_debit), 0.0),
-            func.coalesce(func.sum(JournalEntryLine.cash_credit), 0.0),
-        )
-        .filter(
-            JournalEntryLine.account_id == account_id,
-            JournalEntryLine.is_deleted == False,
-        )
-        .one()
-    )
-    return round(float(row[0]) - float(row[1]), 2)
+def _live_balance(account_id: int) -> float:
+    """الرصيد الحي من Account.balance_cash — نفس الرقم الذي تعرضه الواجهة.
+    النظام يُحدِّثه عبر update_balance() مع كل عملية؛ مجموع سطور القيود
+    التاريخية يختلف عنه ولا يمثّل الرصيد الحالي الصحيح."""
+    acc = Account.query.get(account_id)
+    return round(float(getattr(acc, 'balance_cash', 0.0) or 0.0), 2) if acc else 0.0
 
 
 def _has_cash_sbt(ip_id: int, to_safe_box_id: int) -> bool:
@@ -172,8 +163,8 @@ def run(ip_id: int, amount: float, from_pm_id: int, apply: bool) -> int:
                 f"لـIP #{ip_id}. تأكد من عدم التكرار."
             )
 
-        bal_from_before = _gl_balance(acc_from.id)
-        bal_to_before = _gl_balance(acc_to.id)
+        bal_from_before = _live_balance(acc_from.id)
+        bal_to_before = _live_balance(acc_to.id)
         print(f"  رصيد {_label(acc_from)} قبل:  {bal_from_before:,.2f}")
         print(f"  رصيد {_label(acc_to)}  قبل:  {bal_to_before:,.2f}")
 
@@ -252,6 +243,11 @@ def run(ip_id: int, amount: float, from_pm_id: int, apply: bool) -> int:
                 cash_credit=float(amount),
             ))
 
+            # تحديث balance_cash -- نفس ما يفعله correct_invoice_payment_method
+            # عند إنشاء سند إعادة التصنيف: بدونه يبقى رصيد الواجهة مجمَّداً.
+            acc_to.update_balance(cash_amount=float(amount))    # Dr نقدية +8850
+            acc_from.update_balance(cash_amount=-float(amount)) # Cr مدى -8850
+
             # AuditLog
             import json
             AuditLog.log_action(
@@ -300,8 +296,8 @@ def run(ip_id: int, amount: float, from_pm_id: int, apply: bool) -> int:
             else:
                 print(f"  ✓ لا SBT جديد في خزينة المصدر {_label(sb_from)}")
 
-            bal_from_after = _gl_balance(acc_from.id)
-            bal_to_after = _gl_balance(acc_to.id)
+            bal_from_after = _live_balance(acc_from.id)
+            bal_to_after = _live_balance(acc_to.id)
             expected_from = round(bal_from_before - amount, 2)
             expected_to = round(bal_to_before + amount, 2)
 
