@@ -23,6 +23,7 @@ from sqlalchemy import case, func
 
 from models import db, PaymentMethod, SafeBoxTransaction, Voucher, InvoicePayment, SettlementLine
 from services.live_balances import live_balances_by_account_ids
+from settlement_state_service import get_settled_amounts
 
 
 @dataclass
@@ -237,18 +238,7 @@ class ClearingSettlementScheduler:
         if not ips:
             return 0.0
         ip_ids = [ip.id for ip in ips]
-        settled_by_ip = {}
-        if ip_ids:
-            rows = (
-                db.session.query(
-                    SettlementLine.invoice_payment_id,
-                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                )
-                .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
-                .group_by(SettlementLine.invoice_payment_id)
-                .all()
-            )
-            settled_by_ip = {r[0]: float(r[1]) for r in rows}
+        settled_by_ip = get_settled_amounts(ip_ids)
         total = 0.0
         for ip in ips:
             ip_amt = float(ip.amount or 0)
@@ -273,18 +263,7 @@ class ClearingSettlementScheduler:
         if not ips:
             return []
         ip_ids = [ip.id for ip in ips]
-        settled_by_ip = {}
-        if ip_ids:
-            rows = (
-                db.session.query(
-                    SettlementLine.invoice_payment_id,
-                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                )
-                .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
-                .group_by(SettlementLine.invoice_payment_id)
-                .all()
-            )
-            settled_by_ip = {r[0]: float(r[1]) for r in rows}
+        settled_by_ip = get_settled_amounts(ip_ids)
         result = []
         for ip in ips:
             ip_amt = float(ip.amount or 0)
@@ -307,18 +286,7 @@ class ClearingSettlementScheduler:
         if not ips:
             return []
         ip_ids = [ip.id for ip in ips]
-        settled_by_ip = {}
-        if ip_ids:
-            rows = (
-                db.session.query(
-                    SettlementLine.invoice_payment_id,
-                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                )
-                .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
-                .group_by(SettlementLine.invoice_payment_id)
-                .all()
-            )
-            settled_by_ip = {r[0]: float(r[1]) for r in rows}
+        settled_by_ip = get_settled_amounts(ip_ids)
         result = []
         for ip in ips:
             ip_amt = float(ip.amount or 0)
@@ -348,18 +316,7 @@ class ClearingSettlementScheduler:
         )
         # Re-check settled amounts (SettlementLine) to get the actual remaining per IP.
         all_ids = [ip.id for ip in ip_rows]
-        settled_by_ip: dict[int, float] = {}
-        if all_ids:
-            rows = (
-                db.session.query(
-                    SettlementLine.invoice_payment_id,
-                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                )
-                .filter(SettlementLine.invoice_payment_id.in_(all_ids))
-                .group_by(SettlementLine.invoice_payment_id)
-                .all()
-            )
-            settled_by_ip = {r[0]: float(r[1]) for r in rows}
+        settled_by_ip = get_settled_amounts(all_ids)
         result: list[int] = []
         remaining = round(float(gross_amount), 2)
         for ip in ip_rows:
@@ -521,18 +478,13 @@ class ClearingSettlementScheduler:
 
                     # Compute total unsettled amount from those IPs
                     _ip_rows = (
-                        db.session.query(
-                            InvoicePayment.id,
-                            InvoicePayment.amount,
-                            func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                        )
-                        .outerjoin(SettlementLine, SettlementLine.invoice_payment_id == InvoicePayment.id)
+                        db.session.query(InvoicePayment.id, InvoicePayment.amount)
                         .filter(InvoicePayment.id.in_(unsettled_ip_ids))
-                        .group_by(InvoicePayment.id)
                         .all()
                     )
+                    _settled_by_ip = get_settled_amounts(unsettled_ip_ids)
                     gross_amount = round(sum(
-                        max(0.0, float(r[1]) - float(r[2])) for r in _ip_rows
+                        max(0.0, float(r[1]) - _settled_by_ip.get(r[0], 0.0)) for r in _ip_rows
                     ), 2)
 
                     # Nothing due
@@ -652,6 +604,11 @@ class ClearingSettlementScheduler:
                     # ================================================================
                     # نبدأ من أقدم عملية غير مسوّاة (بدل last_settlement + 1)
                     # هذا يضمن التقاط العمليات القديمة التي لم تشملها تسويات سابقة
+                    # ملاحظة: هذا الموضع الوحيد المتبقي خارج settlement_state_service
+                    # عمداً -- يحتاج التعبير مُركَّباً داخل HAVING على مستوى SQL
+                    # (للحصول على أقدم created_at عبر subquery)، لا قاموس Python
+                    # جاهز كباقي المواضع المرحَّلة. انظر settlement_state_service.py
+                    # لتفاصيل الاستثناء الآخر (routes.py:31108، فلتر approved).
                     _unsettled_sub = (
                         db.session.query(
                             InvoicePayment.id,
@@ -844,18 +801,10 @@ class ClearingSettlementScheduler:
         try:
             all_ip_ids = [tx.invoice_payment_id for tx in unsettled_txs if tx.invoice_payment_id]
             if all_ip_ids:
-                sl_rows = (
-                    db.session.query(
-                        SettlementLine.invoice_payment_id,
-                        func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                    )
-                    .filter(SettlementLine.invoice_payment_id.in_(all_ip_ids))
-                    .group_by(SettlementLine.invoice_payment_id)
-                    .all()
-                )
+                settled_by_ip = get_settled_amounts(all_ip_ids)
                 # Build map of ip_id → amount for partial check
                 ip_amount_map = {tx.invoice_payment_id: float(tx.amount_cash or 0) for tx in unsettled_txs if tx.invoice_payment_id}
-                for ip_id, sl_total in sl_rows:
+                for ip_id, sl_total in settled_by_ip.items():
                     ip_amt = ip_amount_map.get(ip_id, 0)
                     if float(sl_total) >= ip_amt - 0.005:
                         settled_ip_ids.add(ip_id)

@@ -71,6 +71,7 @@ from office_supplier_service import ensure_office_supplier
 from office_account_service import ensure_office_account
 from party_account_service import ensure_customer_accounts, ensure_supplier_accounts
 from account_pair_service import link_accounts, unlink_account
+from settlement_state_service import get_settled_amounts, is_locked
 from code_generator import generate_item_code, generate_barcode_from_item_code, validate_item_code
 from dual_system_helpers import (
     create_dual_journal_entry,
@@ -9264,12 +9265,7 @@ def correct_invoice_payment_method(invoice_id: int, payment_id: int):
         return jsonify({'error': 'not_found', 'message': 'الدفعة غير موجودة'}), 404
 
     # Block if already settled -- payment_method_id is now a historical fact.
-    settled = (
-        db.session.query(func.coalesce(func.sum(SettlementLine.amount_settled), 0.0))
-        .filter(SettlementLine.invoice_payment_id == payment_id)
-        .scalar()
-    ) or 0.0
-    if float(settled) > 0.005:
+    if is_locked(payment_id):
         return jsonify({
             'error': 'already_settled',
             'message': (
@@ -31098,13 +31094,40 @@ def _create_clearing_settlement_voucher(
             ).all(),
             key=lambda x: x.created_at or datetime.min,
         )
-        # Look up already-settled amounts so partial settlements are handled correctly.
-        # Only count SettlementLine rows whose voucher is still approved: a
-        # cancelled/rejected voucher's lines must not keep suppressing
-        # re-settlement of the same invoice payment (this is exactly what
-        # under-allocated AV-2026-00133 — IP 1547 looked "940 already settled"
-        # from two since-cancelled vouchers, AV-130/AV-131, that were reversed
-        # minutes before AV-133 ran).
+        # ============================================================
+        # INTENTIONAL DIVERGENCE -- do not "fix" by swapping this for
+        # settlement_state_service.get_settled_amounts().
+        #
+        # This query intentionally counts APPROVED-voucher settlements only
+        # (.filter(Voucher.status == 'approved') below).
+        #
+        # Production incident: AV-2026-00133
+        #   IP#1547 looked "940 already settled" from two since-cancelled
+        #   vouchers (AV-130/AV-131) that were reversed minutes before
+        #   AV-133 ran -- this filter was added here, at this one call
+        #   site, to fix that specific incident.
+        #
+        # Reason: cancel_voucher() flips Voucher.status to 'cancelled' but
+        # never deletes the SettlementLine rows tied to it. Raw
+        # SettlementLine totals (what get_settled_amounts() returns, by
+        # design, matching the other 9 call sites) therefore overstate how
+        # much of a payment is genuinely settled whenever a settlement
+        # voucher gets cancelled after creation.
+        #
+        # This was never generalized. Production check on 2026-06-30
+        # (diagnose_cancelled_settlement_impact.py) confirmed the other 9
+        # call sites still exhibit the exact same bug today: 9 InvoicePayments,
+        # 27,820 phantom-settled, across 4 cancelled vouchers -- including
+        # this same AV-130/AV-131 pair. Whether to extend this approved-only
+        # filter to all 10 sites (as "effective settled amount", vs. today's
+        # "raw settled amount") is an open BUSINESS decision pending review
+        # with the user -- see PAYMENT_LIFECYCLE_ARCHITECTURE.md and
+        # diagnose_cancelled_settlement_impact.py. Until decided: when that
+        # call is made, add get_effective_settled_amount() alongside the
+        # existing get_raw_settled_amount() in settlement_state_service.py
+        # rather than changing either function's existing meaning --
+        # callers migrate one at a time, by explicit choice.
+        # ============================================================
         _all_ids = [ip.id for ip in ip_rows]
         _prev_settled: dict = {}
         if _all_ids:
@@ -31631,17 +31654,7 @@ def get_pending_settlement_transactions():
     # Sum settled amount per IP from SettlementLine table.
     settled_by_ip = {}  # ip_id → total amount already settled
     try:
-        if all_ip_ids:
-            sl_rows = (
-                db.session.query(
-                    SettlementLine.invoice_payment_id,
-                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                )
-                .filter(SettlementLine.invoice_payment_id.in_(all_ip_ids))
-                .group_by(SettlementLine.invoice_payment_id)
-                .all()
-            )
-            settled_by_ip = {row[0]: float(row[1]) for row in sl_rows}
+        settled_by_ip = get_settled_amounts(all_ip_ids)
     except Exception:
         pass
 
