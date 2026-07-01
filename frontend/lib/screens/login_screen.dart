@@ -92,13 +92,9 @@ class _LoginScreenState extends State<LoginScreen>
       _shimmerCtrl.stop();
       _shimmerCtrl.value = 0;
     }
-    // مسح أخطاء الحقل المُركَّز عليه عند العودة للكتابة
-    if (_usernameFocusNode.hasFocus && _usernameError != null) {
-      setState(() => _usernameError = null);
-    }
-    if (_passwordFocusNode.hasFocus && _loginError != null) {
-      setState(() => _loginError = null);
-    }
+    // نُعيد البناء فقط لتحديث لون الأيقونة/الحدود عند تغيّر التركيز
+    // الأخطاء تُمسح عند الكتابة (onChanged) لا عند التركيز
+    setState(() {});
   }
 
   Future<void> _pingServer() async {
@@ -164,15 +160,15 @@ class _LoginScreenState extends State<LoginScreen>
     if (!mounted) return;
 
     if (success) {
-      // أخبر المتصفح بحفظ بيانات الاعتماد
       TextInput.finishAutofillContext(shouldSave: true);
     } else {
-      // لا تحفظ، ولا تُعيد تحميل الصفحة
-      TextInput.finishAutofillContext(shouldSave: false);
+      // اضبط الخطأ أولاً، ثم انقل التركيز، ثم هز، ثم أخبر المتصفح
+      // (finishAutofillContext بعد الـ shake حتى لا يتدخل في setState)
       setState(() => _loginError = 'اسم المستخدم أو كلمة المرور غير صحيحة');
       _passwordController.clear();
       _passwordFocusNode.requestFocus();
       await _shakeCtrl.forward(from: 0);
+      TextInput.finishAutofillContext(shouldSave: false);
     }
   }
 
@@ -350,6 +346,11 @@ class _LoginScreenState extends State<LoginScreen>
                       keyboardType: TextInputType.text,
                       autofillHints: const [AutofillHints.username],
                       onSubmitted: (_) => _passwordFocusNode.requestFocus(),
+                      onChanged: (_) {
+                        if (_usernameError != null) {
+                          setState(() => _usernameError = null);
+                        }
+                      },
                       style: const TextStyle(color: _textPrimary, fontSize: 15),
                       decoration: _fieldDecoration(
                         icon: Icons.person_outline,
@@ -372,6 +373,11 @@ class _LoginScreenState extends State<LoginScreen>
                         obscureText: _obscurePassword,
                         textInputAction: TextInputAction.go,
                         onSubmitted: (_) => _attemptLogin(),
+                        onChanged: (_) {
+                          if (_loginError != null) {
+                            setState(() => _loginError = null);
+                          }
+                        },
                         keyboardType: TextInputType.visiblePassword,
                         autofillHints: const [AutofillHints.password],
                         style: const TextStyle(
