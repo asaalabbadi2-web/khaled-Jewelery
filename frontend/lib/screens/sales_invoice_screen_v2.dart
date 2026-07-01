@@ -2395,6 +2395,21 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               accentColor: AppColors.success,
               emphasize: true,
             ),
+            if (_payments.length == 1)
+              InvoiceSummaryMetric(
+                label: 'وسيلة الدفع',
+                value: _payments.first.paymentMethodName,
+                icon: Icons.credit_card_outlined,
+                accentColor: AppColors.info,
+              )
+            else
+              for (final p in _payments)
+                InvoiceSummaryMetric(
+                  label: p.paymentMethodName,
+                  value: '${p.amount.toStringAsFixed(2)} $currency',
+                  icon: Icons.credit_card_outlined,
+                  accentColor: AppColors.info,
+                ),
             InvoiceSummaryMetric(
               label: 'المتبقي',
               value: '${remaining.toStringAsFixed(2)} $currency',

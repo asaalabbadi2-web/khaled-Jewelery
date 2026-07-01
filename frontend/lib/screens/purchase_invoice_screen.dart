@@ -3012,6 +3012,24 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               accentColor: AppColors.primaryGold,
               emphasize: true,
             ),
+            if (_selectedPaymentMethodId != null)
+              InvoiceSummaryMetric(
+                label: 'وسيلة الدفع',
+                value: _paymentMethods
+                        .where((m) => m['id'] == _selectedPaymentMethodId)
+                        .map<String>((m) => m['name']?.toString() ?? 'غير محدد')
+                        .firstOrNull ??
+                    'غير محدد',
+                icon: Icons.credit_card_outlined,
+                accentColor: AppColors.info,
+              ),
+            if (paidCash > 0.01)
+              InvoiceSummaryMetric(
+                label: 'المبلغ المدفوع',
+                value: '${_fmtMoney(paidCash)} $currency',
+                icon: Icons.account_balance_wallet_outlined,
+                accentColor: AppColors.success,
+              ),
             if (totalWeight > 0)
               InvoiceSummaryMetric(
                 label: 'إجمالي الوزن',
