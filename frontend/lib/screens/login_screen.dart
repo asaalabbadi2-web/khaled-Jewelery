@@ -162,13 +162,12 @@ class _LoginScreenState extends State<LoginScreen>
     if (success) {
       TextInput.finishAutofillContext(shouldSave: true);
     } else {
-      // اضبط الخطأ أولاً، ثم انقل التركيز، ثم هز، ثم أخبر المتصفح
-      // (finishAutofillContext بعد الـ shake حتى لا يتدخل في setState)
-      _passwordController.clear();   // قبل setState حتى لا يُطلق onChanged مسح الخطأ
+      // لا نستدعي finishAutofillContext(false) هنا —
+      // يُعيد المتصفح على الويب مسح حقول AutofillGroup كليهما عند استدعائه.
+      _passwordController.clear();
       setState(() => _loginError = 'اسم المستخدم أو كلمة المرور غير صحيحة');
       _passwordFocusNode.requestFocus();
       await _shakeCtrl.forward(from: 0);
-      TextInput.finishAutofillContext(shouldSave: false);
     }
   }
 
