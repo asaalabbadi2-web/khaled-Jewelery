@@ -3012,23 +3012,29 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
               accentColor: AppColors.primaryGold,
               emphasize: true,
             ),
-            if (_selectedPaymentMethodId != null)
+            if (_selectedPaymentMethodId != null && paidCash > 0.01)
               InvoiceSummaryMetric(
-                label: 'وسيلة الدفع',
-                value: _paymentMethods
-                        .where((m) => m['id'] == _selectedPaymentMethodId)
-                        .map<String>((m) => m['name']?.toString() ?? 'غير محدد')
-                        .firstOrNull ??
-                    'غير محدد',
+                label: 'طريقة السداد',
+                value: '${_fmtMoney(paidCash)} $currency',
                 icon: Icons.credit_card_outlined,
                 accentColor: AppColors.info,
-              ),
-            if (paidCash > 0.01)
-              InvoiceSummaryMetric(
-                label: 'المبلغ المدفوع',
-                value: '${_fmtMoney(paidCash)} $currency',
-                icon: Icons.account_balance_wallet_outlined,
-                accentColor: AppColors.success,
+                fullWidth: true,
+                highlightCard: true,
+                details: [
+                  InvoiceSummaryMetricDetail(
+                    label: _paymentMethods
+                            .where(
+                              (m) => m['id'] == _selectedPaymentMethodId,
+                            )
+                            .map<String>(
+                              (m) => m['name']?.toString() ?? 'غير محدد',
+                            )
+                            .firstOrNull ??
+                        'غير محدد',
+                    value: '${_fmtMoney(paidCash)} $currency',
+                    accentColor: AppColors.info,
+                  ),
+                ],
               ),
             if (totalWeight > 0)
               InvoiceSummaryMetric(
