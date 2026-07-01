@@ -21,16 +21,19 @@ enum _ServerStatus { checking, online, offline }
 
 class _LoginScreenState extends State<LoginScreen>
     with TickerProviderStateMixin {
-  final _formKey = GlobalKey<FormState>();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _usernameFocusNode = FocusNode();
   final _passwordFocusNode = FocusNode();
+  // FocusNode ثابت للـ KeyboardListener بدلاً من إنشائه في كل build
+  final _kbFocusNode = FocusNode();
+
   bool _obscurePassword = true;
-  String? _loginError;
+  String? _usernameError; // خطأ حقل اسم المستخدم
+  String? _loginError;    // خطأ المصادقة (أسفل كلمة المرور)
   _ServerStatus _serverStatus = _ServerStatus.checking;
 
-  // ── Animations ──────────────────────────────────────────────────────────
+  // ── Animations ─────────────────────────────────────────────────────────
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
 
@@ -40,41 +43,38 @@ class _LoginScreenState extends State<LoginScreen>
   late AnimationController _shimmerCtrl;
   late Animation<Color?> _shimmerAnim;
 
-  // ── Colors ───────────────────────────────────────────────────────────────
-  static const _gold = Color(0xFFB8860B);
+  // ── Colors ──────────────────────────────────────────────────────────────
+  static const _gold      = Color(0xFFB8860B);
   static const _goldLight = Color(0xFFE8C55A);
-  static const _bgStart = Color(0xFFC9962A);
-  static const _bgEnd = Color(0xFF8B6508);
-  static const _textPrimary = Color(0xFF2D2D2D);
+  static const _bgStart   = Color(0xFFC9962A);
+  static const _bgEnd     = Color(0xFF8B6508);
+  static const _textPrimary   = Color(0xFF2D2D2D);
   static const _textSecondary = Color(0xFF505050);
-  static const _textMuted = Color(0xFF6B6B6B);
+  static const _textMuted     = Color(0xFF6B6B6B);
 
   @override
   void initState() {
     super.initState();
 
-    // Fade-in الشاشة — 180ms
     _fadeCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 180));
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeIn);
     _fadeCtrl.forward();
 
-    // Shake لحقل كلمة المرور عند الخطأ — 500ms
     _shakeCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 500));
     _shakeAnim = TweenSequence<double>([
       TweenSequenceItem(tween: Tween(begin: 0.0, end: -9.0), weight: 1),
-      TweenSequenceItem(tween: Tween(begin: -9.0, end: 9.0), weight: 2),
-      TweenSequenceItem(tween: Tween(begin: 9.0, end: -9.0), weight: 2),
-      TweenSequenceItem(tween: Tween(begin: -9.0, end: 9.0), weight: 2),
-      TweenSequenceItem(tween: Tween(begin: 9.0, end: 0.0), weight: 1),
+      TweenSequenceItem(tween: Tween(begin: -9.0, end:  9.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin:  9.0, end: -9.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -9.0, end:  9.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin:  9.0, end:  0.0), weight: 1),
     ]).animate(CurvedAnimation(parent: _shakeCtrl, curve: Curves.easeInOut));
 
-    // Shimmer ذهبي عند التركيز على أي حقل — 700ms متكرر
     _shimmerCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 700));
-    _shimmerAnim = ColorTween(begin: _gold, end: _goldLight)
-        .animate(CurvedAnimation(parent: _shimmerCtrl, curve: Curves.easeInOut));
+    _shimmerAnim = ColorTween(begin: _gold, end: _goldLight).animate(
+        CurvedAnimation(parent: _shimmerCtrl, curve: Curves.easeInOut));
 
     _usernameFocusNode.addListener(_onFocusChange);
     _passwordFocusNode.addListener(_onFocusChange);
@@ -92,7 +92,10 @@ class _LoginScreenState extends State<LoginScreen>
       _shimmerCtrl.stop();
       _shimmerCtrl.value = 0;
     }
-    // إخفاء رسالة الخطأ عند العودة للكتابة في حقل كلمة المرور
+    // مسح أخطاء الحقل المُركَّز عليه عند العودة للكتابة
+    if (_usernameFocusNode.hasFocus && _usernameError != null) {
+      setState(() => _usernameError = null);
+    }
     if (_passwordFocusNode.hasFocus && _loginError != null) {
       setState(() => _loginError = null);
     }
@@ -102,13 +105,12 @@ class _LoginScreenState extends State<LoginScreen>
     try {
       final base =
           ApiService.resolvedBaseUrl.replaceFirst(RegExp(r'/api$'), '');
-      final response = await http
+      final res = await http
           .get(Uri.parse('$base/health'))
           .timeout(const Duration(seconds: 5));
       if (mounted) {
-        setState(() => _serverStatus = response.statusCode < 500
-            ? _ServerStatus.online
-            : _ServerStatus.offline);
+        setState(() => _serverStatus =
+            res.statusCode < 500 ? _ServerStatus.online : _ServerStatus.offline);
       }
     } catch (_) {
       if (mounted) setState(() => _serverStatus = _ServerStatus.offline);
@@ -125,15 +127,34 @@ class _LoginScreenState extends State<LoginScreen>
     _passwordFocusNode
       ..removeListener(_onFocusChange)
       ..dispose();
+    _kbFocusNode.dispose();
     _fadeCtrl.dispose();
     _shakeCtrl.dispose();
     _shimmerCtrl.dispose();
     super.dispose();
   }
 
+  // ── Validation يدوي — بدون Form لتجنب HTML form-submit على Flutter Web ──
+  bool _validate() {
+    final username = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
+
+    if (username.isEmpty) {
+      setState(() { _usernameError = 'اسم المستخدم مطلوب'; _loginError = null; });
+      _usernameFocusNode.requestFocus();
+      return false;
+    }
+    if (password.isEmpty) {
+      setState(() { _loginError = 'كلمة المرور مطلوبة'; _usernameError = null; });
+      _passwordFocusNode.requestFocus();
+      return false;
+    }
+    return true;
+  }
+
   Future<void> _attemptLogin() async {
-    setState(() => _loginError = null);
-    if (!_formKey.currentState!.validate()) return;
+    setState(() { _loginError = null; _usernameError = null; });
+    if (!_validate()) return;
 
     final auth = context.read<AuthProvider>();
     final success = await auth.login(
@@ -142,10 +163,15 @@ class _LoginScreenState extends State<LoginScreen>
     );
     if (!mounted) return;
 
-    if (!success) {
+    if (success) {
+      // أخبر المتصفح بحفظ بيانات الاعتماد
+      TextInput.finishAutofillContext(shouldSave: true);
+    } else {
+      // لا تحفظ، ولا تُعيد تحميل الصفحة
+      TextInput.finishAutofillContext(shouldSave: false);
       setState(() => _loginError = 'اسم المستخدم أو كلمة المرور غير صحيحة');
-      _passwordFocusNode.requestFocus();
       _passwordController.clear();
+      _passwordFocusNode.requestFocus();
       await _shakeCtrl.forward(from: 0);
     }
   }
@@ -153,7 +179,7 @@ class _LoginScreenState extends State<LoginScreen>
   void _clearFields() {
     _usernameController.clear();
     _passwordController.clear();
-    setState(() => _loginError = null);
+    setState(() { _loginError = null; _usernameError = null; });
     _usernameFocusNode.requestFocus();
   }
 
@@ -161,10 +187,10 @@ class _LoginScreenState extends State<LoginScreen>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isLoading = context.watch<AuthProvider>().isLoading;
-    final settings = context.watch<SettingsProvider>();
+    final settings  = context.watch<SettingsProvider>();
 
     return KeyboardListener(
-      focusNode: FocusNode(),
+      focusNode: _kbFocusNode,
       onKeyEvent: (event) {
         if (event is KeyDownEvent &&
             event.logicalKey == LogicalKeyboardKey.escape) {
@@ -176,7 +202,7 @@ class _LoginScreenState extends State<LoginScreen>
           opacity: _fadeAnim,
           child: Stack(
             children: [
-              // ── خلفية ──────────────────────────────────────────────
+              // ── خلفية ─────────────────────────────────────────────
               Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
@@ -187,15 +213,13 @@ class _LoginScreenState extends State<LoginScreen>
                 ),
               ),
 
-              // ── ماسة هندسية — عنصر زخرفي وحيد ─────────────────────
+              // ── ماسة هندسية — زخرفة وحيدة ────────────────────────
               Positioned(
-                top: -80,
-                right: -80,
+                top: -80, right: -80,
                 child: Transform.rotate(
                   angle: 0.7854,
                   child: Container(
-                    width: 300,
-                    height: 300,
+                    width: 300, height: 300,
                     decoration: BoxDecoration(
                       border: Border.all(
                           color: Colors.white.withOpacity(0.10), width: 1.5),
@@ -204,13 +228,11 @@ class _LoginScreenState extends State<LoginScreen>
                 ),
               ),
               Positioned(
-                top: -20,
-                right: -20,
+                top: -20, right: -20,
                 child: Transform.rotate(
                   angle: 0.7854,
                   child: Container(
-                    width: 170,
-                    height: 170,
+                    width: 170, height: 170,
                     decoration: BoxDecoration(
                       border: Border.all(
                           color: Colors.white.withOpacity(0.06), width: 1),
@@ -219,7 +241,7 @@ class _LoginScreenState extends State<LoginScreen>
                 ),
               ),
 
-              // ── المحتوى ─────────────────────────────────────────────
+              // ── المحتوى ───────────────────────────────────────────
               Column(
                 children: [
                   Expanded(
@@ -263,24 +285,21 @@ class _LoginScreenState extends State<LoginScreen>
           shadowColor: Colors.black.withOpacity(0.22),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: _gold.withOpacity(0.18),
-              width: 1,
-            ),
+            side: BorderSide(color: _gold.withOpacity(0.18), width: 1),
           ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 560),
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 36, vertical: 36),
-              child: Form(
-                key: _formKey,
+              padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 36),
+              // AutofillGroup بدلاً من Form — لا ينشئ HTML <form> فلا reload
+              child: AutofillGroup(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // ── شعار ───────────────────────────────────────
-                    const Center(child: AppLogo.gold(width: 120, height: 120)),
+                    // ── شعار ────────────────────────────────────────
+                    const Center(
+                        child: AppLogo.gold(width: 120, height: 120)),
                     const SizedBox(height: 12),
 
                     Text(
@@ -303,61 +322,56 @@ class _LoginScreenState extends State<LoginScreen>
                       textAlign: TextAlign.center,
                     ),
 
-                    // ── فاصل ◇ ─────────────────────────────────────
+                    // ── فاصل ◇ ──────────────────────────────────────
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 22),
                       child: Row(
                         children: [
-                          Expanded(
-                              child: Divider(
-                                  color: Colors.grey.shade200, thickness: 1)),
+                          Expanded(child: Divider(
+                              color: Colors.grey.shade200, thickness: 1)),
                           Padding(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 12),
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
                             child: Icon(Icons.diamond_outlined,
                                 size: 14, color: Colors.grey.shade400),
                           ),
-                          Expanded(
-                              child: Divider(
-                                  color: Colors.grey.shade200, thickness: 1)),
+                          Expanded(child: Divider(
+                              color: Colors.grey.shade200, thickness: 1)),
                         ],
                       ),
                     ),
 
-                    // ── اسم المستخدم ────────────────────────────────
+                    // ── اسم المستخدم ─────────────────────────────────
                     _fieldLabel('اسم المستخدم'),
                     const SizedBox(height: 6),
-                    TextFormField(
+                    TextField(
                       controller: _usernameController,
                       focusNode: _usernameFocusNode,
                       textInputAction: TextInputAction.next,
                       keyboardType: TextInputType.text,
                       autofillHints: const [AutofillHints.username],
-                      onFieldSubmitted: (_) =>
-                          _passwordFocusNode.requestFocus(),
-                      style: const TextStyle(
-                          color: _textPrimary, fontSize: 15),
+                      onSubmitted: (_) => _passwordFocusNode.requestFocus(),
+                      style: const TextStyle(color: _textPrimary, fontSize: 15),
                       decoration: _fieldDecoration(
                         icon: Icons.person_outline,
                         hasFocus: _usernameFocusNode.hasFocus,
+                        hasError: _usernameError != null,
                       ),
-                      validator: (v) => (v == null || v.trim().isEmpty)
-                          ? 'اسم المستخدم مطلوب'
-                          : null,
                     ),
+                    if (_usernameError != null)
+                      _inlineError(_usernameError!),
                     const SizedBox(height: 18),
 
-                    // ── كلمة المرور ─────────────────────────────────
+                    // ── كلمة المرور ──────────────────────────────────
                     _fieldLabel('كلمة المرور'),
                     const SizedBox(height: 6),
                     Transform.translate(
                       offset: Offset(_shakeAnim.value, 0),
-                      child: TextFormField(
+                      child: TextField(
                         controller: _passwordController,
                         focusNode: _passwordFocusNode,
                         obscureText: _obscurePassword,
-                        textInputAction: TextInputAction.done,
-                        onFieldSubmitted: (_) => _attemptLogin(),
+                        textInputAction: TextInputAction.go,
+                        onSubmitted: (_) => _attemptLogin(),
                         keyboardType: TextInputType.visiblePassword,
                         autofillHints: const [AutofillHints.password],
                         style: const TextStyle(
@@ -378,27 +392,12 @@ class _LoginScreenState extends State<LoginScreen>
                                 () => _obscurePassword = !_obscurePassword),
                           ),
                         ),
-                        validator: (v) => (v == null || v.trim().isEmpty)
-                            ? 'كلمة المرور مطلوبة'
-                            : null,
                       ),
                     ),
-
-                    // ── رسالة الخطأ أسفل الحقل ─────────────────────
                     if (_loginError != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6, right: 4),
-                        child: Text(
-                          _loginError!,
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.red.shade600,
-                          ),
-                          textAlign: TextAlign.right,
-                        ),
-                      ),
+                      _inlineError(_loginError!),
 
-                    // ── نسيت كلمة المرور ────────────────────────────
+                    // ── نسيت كلمة المرور ─────────────────────────────
                     Align(
                       alignment: AlignmentDirectional.centerEnd,
                       child: TextButton(
@@ -421,15 +420,14 @@ class _LoginScreenState extends State<LoginScreen>
                     ),
                     const SizedBox(height: 16),
 
-                    // ── زر دخول النظام ──────────────────────────────
+                    // ── دخول النظام ──────────────────────────────────
                     SizedBox(
                       height: 52,
                       child: ElevatedButton.icon(
                         onPressed: isLoading ? null : _attemptLogin,
                         icon: isLoading
                             ? const SizedBox(
-                                width: 18,
-                                height: 18,
+                                width: 18, height: 18,
                                 child: CircularProgressIndicator(
                                     strokeWidth: 2, color: Colors.white),
                               )
@@ -468,8 +466,8 @@ class _LoginScreenState extends State<LoginScreen>
   Widget _buildFooter() {
     final (dotColor, label) = switch (_serverStatus) {
       _ServerStatus.checking => (Colors.amber.shade300, 'جارٍ الفحص...'),
-      _ServerStatus.online => (const Color(0xFF4CAF50), 'متصل'),
-      _ServerStatus.offline => (Colors.red.shade400, 'غير متصل'),
+      _ServerStatus.online   => (const Color(0xFF4CAF50), 'متصل'),
+      _ServerStatus.offline  => (Colors.red.shade400, 'غير متصل'),
     };
 
     return Column(
@@ -478,22 +476,20 @@ class _LoginScreenState extends State<LoginScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 8,
-              height: 8,
+              width: 8, height: 8,
               decoration: BoxDecoration(
                 color: dotColor,
                 shape: BoxShape.circle,
                 boxShadow: _serverStatus == _ServerStatus.online
-                    ? [BoxShadow(color: dotColor.withOpacity(0.6), blurRadius: 6)]
+                    ? [BoxShadow(
+                        color: dotColor.withOpacity(0.6), blurRadius: 6)]
                     : null,
               ),
             ),
             const SizedBox(width: 6),
-            Text(
-              'الخادم: $label',
-              style: TextStyle(
-                  fontSize: 12, color: Colors.white.withOpacity(0.85)),
-            ),
+            Text('الخادم: $label',
+                style: TextStyle(
+                    fontSize: 12, color: Colors.white.withOpacity(0.85))),
           ],
         ),
         const SizedBox(height: 6),
@@ -506,16 +502,23 @@ class _LoginScreenState extends State<LoginScreen>
     );
   }
 
-  Widget _fieldLabel(String text) {
-    return Text(
-      text,
-      style: const TextStyle(
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-        color: _textSecondary,
-      ),
-    );
-  }
+  Widget _fieldLabel(String text) => Text(
+        text,
+        style: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          color: _textSecondary,
+        ),
+      );
+
+  Widget _inlineError(String message) => Padding(
+        padding: const EdgeInsets.only(top: 5, right: 4),
+        child: Text(
+          message,
+          style: TextStyle(fontSize: 12, color: Colors.red.shade600),
+          textAlign: TextAlign.right,
+        ),
+      );
 
   InputDecoration _fieldDecoration({
     required IconData icon,
@@ -554,7 +557,6 @@ class _LoginScreenState extends State<LoginScreen>
           const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
       filled: true,
       fillColor: Colors.grey.shade50,
-      errorStyle: const TextStyle(height: 0),
     );
   }
 }
