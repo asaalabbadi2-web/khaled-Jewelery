@@ -2403,6 +2403,33 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                 fullWidth: true,
                 details: weightBreakdown,
               ),
+            // ── تفاصيل ثانوية (تظهر بعد الثلاثة الأساسية عند التمرير) ──
+            if (customerLabel.trim().isNotEmpty)
+              InvoiceSummaryMetric(
+                label: 'العميل',
+                value: customerLabel.trim(),
+                icon: Icons.person_outline_rounded,
+                accentColor: AppColors.info,
+              ),
+            InvoiceSummaryMetric(
+              label: 'عدد الأصناف',
+              value: itemsCount.toString(),
+              icon: Icons.inventory_2_outlined,
+              accentColor: AppColors.info,
+            ),
+            if (totalTax > 0)
+              InvoiceSummaryMetric(
+                label: 'الضريبة',
+                value: '${totalTax.toStringAsFixed(2)} $currency',
+                icon: Icons.receipt_long_outlined,
+                accentColor: AppColors.warning,
+              ),
+            InvoiceSummaryMetric(
+              label: 'المدفوع (نقدي)',
+              value: '${paidCash.toStringAsFixed(2)} $currency',
+              icon: Icons.account_balance_wallet_outlined,
+              accentColor: AppColors.success,
+            ),
             if (barterTotal > 0.01)
               InvoiceSummaryMetric(
                 label: 'المقايضة',
