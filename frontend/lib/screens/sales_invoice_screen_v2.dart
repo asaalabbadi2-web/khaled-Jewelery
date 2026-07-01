@@ -2361,19 +2361,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               ? InvoiceSummaryStatusTone.due
               : InvoiceSummaryStatusTone.success,
           metrics: [
-            if (customerLabel.trim().isNotEmpty)
-              InvoiceSummaryMetric(
-                label: 'العميل',
-                value: customerLabel.trim(),
-                icon: Icons.person_outline_rounded,
-                accentColor: AppColors.info,
-              ),
-            InvoiceSummaryMetric(
-              label: 'عدد الأصناف',
-              value: itemsCount.toString(),
-              icon: Icons.inventory_2_outlined,
-              accentColor: AppColors.info,
-            ),
             InvoiceSummaryMetric(
               label: 'الإجمالي',
               value: '${total.toStringAsFixed(2)} $currency',
@@ -2381,20 +2368,13 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
               accentColor: AppColors.primaryGold,
               emphasize: true,
             ),
-            if (totalTax > 0)
+            if (remaining > 0.01)
               InvoiceSummaryMetric(
-                label: 'الضريبة',
-                value: '${totalTax.toStringAsFixed(2)} $currency',
-                icon: Icons.receipt_long_outlined,
-                accentColor: AppColors.warning,
+                label: 'المتبقي',
+                value: '${remaining.toStringAsFixed(2)} $currency',
+                icon: Icons.pending_outlined,
+                accentColor: AppColors.error,
               ),
-            InvoiceSummaryMetric(
-              label: 'المدفوع (نقدي)',
-              value: '${paidCash.toStringAsFixed(2)} $currency',
-              icon: Icons.account_balance_wallet_outlined,
-              accentColor: AppColors.success,
-              emphasize: true,
-            ),
             if (_payments.isNotEmpty)
               InvoiceSummaryMetric(
                 label: 'طريقة السداد',
@@ -2414,14 +2394,6 @@ class _SalesInvoiceScreenV2State extends State<SalesInvoiceScreenV2> {
                     ),
                 ],
               ),
-            InvoiceSummaryMetric(
-              label: 'المتبقي',
-              value: '${remaining.toStringAsFixed(2)} $currency',
-              icon: Icons.pending_outlined,
-              accentColor: remaining > 0.01
-                  ? AppColors.error
-                  : AppColors.success,
-            ),
             if (totalWeight > 0)
               InvoiceSummaryMetric(
                 label: 'إجمالي الوزن',

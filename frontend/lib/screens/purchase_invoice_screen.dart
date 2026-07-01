@@ -2899,8 +2899,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     final paidGoldMain = _goldPaidMainEquivalent();
     final netGoldDueMain = _round(dueGoldMain - paidGoldMain, 3);
 
-    final mainKarat = _mainKaratFromSettings();
-
     Map<String, dynamic>? supplierStatement;
     String? statementError;
     try {
@@ -2910,46 +2908,21 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
     }
 
     double? currentCashBalance;
-    double? currentGoldBalanceMain;
     double? projectedCashBalance;
-    double? projectedGoldBalanceMain;
 
     if (supplierStatement != null) {
       try {
         currentCashBalance = _toDouble(
           normalizeNumber('${supplierStatement['closing_balance_cash'] ?? 0}'),
         );
-        currentGoldBalanceMain = _toDouble(
-          normalizeNumber(
-            '${supplierStatement['closing_balance_gold_normalized'] ?? 0}',
-          ),
-        );
-
         if (_isSupplierReturnMode) {
           projectedCashBalance = _round(currentCashBalance + netCashDue, 2);
-          projectedGoldBalanceMain = _round(
-            currentGoldBalanceMain + netGoldDueMain,
-            3,
-          );
         } else {
           projectedCashBalance = _round(currentCashBalance - netCashDue, 2);
-          projectedGoldBalanceMain = _round(
-            currentGoldBalanceMain - netGoldDueMain,
-            3,
-          );
         }
       } catch (_) {
         // Keep balances null if parsing fails.
       }
-    }
-
-    String supplierName = '';
-    try {
-      final supplier = _suppliers.firstWhere((s) => s['id'] == supplierId);
-      supplierName = (supplier['name'] ?? supplier['supplier_name'] ?? '')
-          .toString();
-    } catch (_) {
-      supplierName = '';
     }
 
     final currency = Provider.of<SettingsProvider>(
@@ -2998,13 +2971,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
           statusMessage: _settlementModeLabel(_settlementMode),
           statusTone: InvoiceSummaryStatusTone.neutral,
           metrics: [
-            if (supplierName.isNotEmpty)
-              InvoiceSummaryMetric(
-                label: 'المورد',
-                value: supplierName,
-                icon: Icons.person_outline_rounded,
-                accentColor: AppColors.info,
-              ),
             InvoiceSummaryMetric(
               label: 'الإجمالي',
               value: '${_fmtMoney(grandTotal)} $currency',
@@ -3043,45 +3009,6 @@ class _PurchaseInvoiceScreenState extends State<PurchaseInvoiceScreen> {
                 icon: Icons.scale_outlined,
                 accentColor: AppColors.info,
                 fullWidth: true,
-              ),
-            InvoiceSummaryMetric(
-              label: 'نقدي مستحق',
-              value: '${_fmtMoney(netCashDue)} $currency',
-              icon: Icons.money,
-              accentColor: AppColors.success,
-            ),
-            InvoiceSummaryMetric(
-              label: 'ذهب مستحق (عيار $mainKarat)',
-              value: '${_fmtWeight(netGoldDueMain)} جم',
-              icon: Icons.monitor_weight_outlined,
-              accentColor: AppColors.karat24,
-            ),
-            if (currentGoldBalanceMain != null)
-              InvoiceSummaryMetric(
-                label: 'وزن الرصيد الحالي (عيار $mainKarat)',
-                value: '${_fmtWeight(currentGoldBalanceMain)} جم',
-                icon: Icons.monitor_weight_outlined,
-                accentColor: AppColors.info,
-                badgeLabel: 'الحالي',
-                badgeColor: AppColors.info,
-              ),
-            if (projectedGoldBalanceMain != null)
-              InvoiceSummaryMetric(
-                label: 'وزن الرصيد بعد الحفظ (عيار $mainKarat)',
-                value: '${_fmtWeight(projectedGoldBalanceMain)} جم',
-                icon: Icons.monitor_weight_outlined,
-                accentColor: AppColors.primaryGold,
-                badgeLabel: 'بعد الحفظ',
-                badgeColor: AppColors.primaryGold,
-              ),
-            if (currentCashBalance != null)
-              InvoiceSummaryMetric(
-                label: 'الرصيد الحالي (نقد)',
-                value: '${_fmtMoney(currentCashBalance)} $currency',
-                icon: Icons.account_balance_outlined,
-                accentColor: AppColors.info,
-                badgeLabel: 'الحالي',
-                badgeColor: AppColors.info,
               ),
             if (projectedCashBalance != null)
               InvoiceSummaryMetric(
