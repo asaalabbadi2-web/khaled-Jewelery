@@ -373,14 +373,28 @@ class AuthGate extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<AuthProvider>(
       builder: (context, auth, _) {
-        if (auth.isLoading) {
+        // تحقق من الحالة المصادقة أولاً (قبل isLoading)
+        // حتى لا يُدمَّر LoginScreen أثناء محاولة الدخول ويُعاد إنشاؤه جديداً.
+        // LoginScreen تعرض حالة التحميل على زرها بنفسها.
+
+        if (auth.isAuthenticated) {
+          if (auth.mustChangePassword) {
+            return const ChangePasswordScreen(force: true);
+          }
+          return HomeScreenEnhanced(
+            onToggleLocale: onToggleLocale,
+            isArabic: isArabic,
+          );
+        }
+
+        // التحميل الأولي للتطبيق (فحص token المحفوظ) — لا علاقة له بمحاولة الدخول
+        if (auth.isLoading && !auth.isAuthenticated) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
 
         if (auth.needsSetup) {
-          // Keep the URL in sync with the setup requirement (web-first).
           final currentRoute = ModalRoute.of(context)?.settings.name;
           if (currentRoute != '/setup') {
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -391,24 +405,17 @@ class AuthGate extends StatelessWidget {
           return const InitialSetupScreen();
         }
 
-        // In development, allow quick access to the app without login only when
-        // a developer explicitly enables the bypass via a compile-time flag.
-        // Use `--dart-define=BYPASS_AUTH_FOR_DEVELOPMENT=true` when running.
         const bool bypassFlag = bool.fromEnvironment(
           'BYPASS_AUTH_FOR_DEVELOPMENT',
           defaultValue: false,
         );
-
-        if (auth.isAuthenticated ||
-            (kDebugMode && bypassFlag && !auth.needsSetup)) {
-          if (auth.isAuthenticated && auth.mustChangePassword) {
-            return const ChangePasswordScreen(force: true);
-          }
+        if (kDebugMode && bypassFlag && !auth.needsSetup) {
           return HomeScreenEnhanced(
             onToggleLocale: onToggleLocale,
             isArabic: isArabic,
           );
         }
+
         return const LoginScreen();
       },
     );
