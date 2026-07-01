@@ -12,12 +12,14 @@ class AuthProvider extends ChangeNotifier {
 
   AppUserModel? _currentUser;
   bool _loading = false;
+  bool _initializing = true; // صحيح فقط أثناء init() — ليس أثناء login()
   bool _needsSetup = false;
   bool _mustChangePassword = false;
 
   AppUserModel? get currentUser => _currentUser;
   bool get isAuthenticated => _currentUser != null;
   bool get isLoading => _loading;
+  bool get isInitializing => _initializing;
   bool get needsSetup => _needsSetup;
   bool get mustChangePassword => _mustChangePassword;
 
@@ -100,6 +102,7 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> init() async {
     _loading = true;
+    _initializing = true;
 
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -128,6 +131,7 @@ class AuthProvider extends ChangeNotifier {
       }
     } finally {
       _loading = false;
+      _initializing = false;
       notifyListeners();
     }
   }

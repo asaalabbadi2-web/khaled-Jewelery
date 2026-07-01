@@ -377,6 +377,14 @@ class AuthGate extends StatelessWidget {
         // حتى لا يُدمَّر LoginScreen أثناء محاولة الدخول ويُعاد إنشاؤه جديداً.
         // LoginScreen تعرض حالة التحميل على زرها بنفسها.
 
+        // التحميل الأولي للتطبيق فقط (فحص token المحفوظ عند البدء)
+        // isInitializing = true فقط داخل init()، لا داخل login()
+        if (auth.isInitializing) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
         if (auth.isAuthenticated) {
           if (auth.mustChangePassword) {
             return const ChangePasswordScreen(force: true);
@@ -384,13 +392,6 @@ class AuthGate extends StatelessWidget {
           return HomeScreenEnhanced(
             onToggleLocale: onToggleLocale,
             isArabic: isArabic,
-          );
-        }
-
-        // التحميل الأولي للتطبيق (فحص token المحفوظ) — لا علاقة له بمحاولة الدخول
-        if (auth.isLoading && !auth.isAuthenticated) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
           );
         }
 
