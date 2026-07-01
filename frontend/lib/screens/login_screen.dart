@@ -164,8 +164,8 @@ class _LoginScreenState extends State<LoginScreen>
     } else {
       // اضبط الخطأ أولاً، ثم انقل التركيز، ثم هز، ثم أخبر المتصفح
       // (finishAutofillContext بعد الـ shake حتى لا يتدخل في setState)
+      _passwordController.clear();   // قبل setState حتى لا يُطلق onChanged مسح الخطأ
       setState(() => _loginError = 'اسم المستخدم أو كلمة المرور غير صحيحة');
-      _passwordController.clear();
       _passwordFocusNode.requestFocus();
       await _shakeCtrl.forward(from: 0);
       TextInput.finishAutofillContext(shouldSave: false);
