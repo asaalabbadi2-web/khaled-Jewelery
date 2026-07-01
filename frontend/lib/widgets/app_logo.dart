@@ -68,6 +68,8 @@ class AppLogo extends StatelessWidget {
       width: width,
       height: height,
       fit: fit,
+      filterQuality: FilterQuality.high,
+      isAntiAlias: true,
     );
   }
 }
