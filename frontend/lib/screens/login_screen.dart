@@ -160,7 +160,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (!mounted) return;
 
     if (success) {
-      TextInput.finishAutofillContext(shouldSave: true);
+      // ناجح — AuthProvider سيتولى الانتقال للشاشة الرئيسية
     } else {
       // لا نستدعي finishAutofillContext(false) هنا —
       // يُعيد المتصفح على الويب مسح حقول AutofillGroup كليهما عند استدعائه.
@@ -286,9 +286,7 @@ class _LoginScreenState extends State<LoginScreen>
             constraints: const BoxConstraints(maxWidth: 560),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 36, vertical: 36),
-              // AutofillGroup بدلاً من Form — لا ينشئ HTML <form> فلا reload
-              child: AutofillGroup(
-                child: Column(
+              child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -343,7 +341,6 @@ class _LoginScreenState extends State<LoginScreen>
                       focusNode: _usernameFocusNode,
                       textInputAction: TextInputAction.next,
                       keyboardType: TextInputType.text,
-                      autofillHints: const [AutofillHints.username],
                       onSubmitted: (_) => _passwordFocusNode.requestFocus(),
                       onChanged: (_) {
                         if (_usernameError != null) {
@@ -378,7 +375,6 @@ class _LoginScreenState extends State<LoginScreen>
                           }
                         },
                         keyboardType: TextInputType.visiblePassword,
-                        autofillHints: const [AutofillHints.password],
                         style: const TextStyle(
                             color: _textPrimary, fontSize: 15),
                         decoration: _fieldDecoration(
@@ -460,7 +456,6 @@ class _LoginScreenState extends State<LoginScreen>
                     ),
                   ],
                 ),
-              ),
             ),
           ),
         );
