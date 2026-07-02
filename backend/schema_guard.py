@@ -233,6 +233,7 @@ def ensure_settings_columns(engine: Engine) -> None:
 
                     # Gamification / sales race
                     ("weekly_sales_target_weight", "REAL", "2000.0"),
+                    ("monthly_sales_target_weight", "REAL", "8000.0"),
                     ("sales_race_settings", "TEXT", "NULL"),
 
                     # Posting preferences
