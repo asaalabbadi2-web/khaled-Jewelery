@@ -22442,7 +22442,20 @@ def update_sales_race_config():
         except Exception:
             pass
 
-    settings_row.sales_race_settings = json.dumps(current, ensure_ascii=False)
+    _new_settings_json = json.dumps(current, ensure_ascii=False)
+    try:
+        from sqlalchemy import text as _sa_text
+        db.session.execute(
+            _sa_text('UPDATE settings SET sales_race_settings = :v WHERE id = :id'),
+            {'v': _new_settings_json, 'id': settings_row.id},
+        )
+    except Exception:
+        settings_row.sales_race_settings = _new_settings_json
+        try:
+            from sqlalchemy.orm import flag_modified as _flag_modified
+            _flag_modified(settings_row, 'sales_race_settings')
+        except Exception:
+            pass
 
     try:
         db.session.commit()
