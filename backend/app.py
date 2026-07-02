@@ -131,6 +131,7 @@ from schema_guard import (
 	ensure_invoice_karat_diff_columns,
 	ensure_dashboard_performance_indexes,
 	ensure_account_memo_pair_constraints,
+	ensure_all_model_columns,
 )
 
 import os
@@ -392,6 +393,7 @@ def readinesscheck():
 def create_tables():
 	with app.app_context():
 		db.create_all()
+		ensure_all_model_columns(db.engine, db.metadata)
 		ensure_profit_weight_columns(db.engine)
 		ensure_invoice_item_scrap_columns(db.engine)
 		ensure_settings_columns(db.engine)

@@ -130,6 +130,114 @@ def _log_added(columns_added: list[str]) -> None:
         LOGGER.info("Auto-added missing columns: %s", ", ".join(columns_added))
 
 
+def _sqlalchemy_default_as_ddl(col) -> str | None:
+    """Extract a SQL-safe default string from a SQLAlchemy Column, or None."""
+    server_default = getattr(col, 'server_default', None)
+    if server_default is not None:
+        try:
+            return str(server_default.arg)
+        except Exception:
+            pass
+
+    col_default = getattr(col, 'default', None)
+    if col_default is None:
+        return 'NULL'
+
+    try:
+        val = col_default.arg
+        if isinstance(val, bool):
+            return '1' if val else '0'
+        if isinstance(val, (int, float)):
+            return str(val)
+        if isinstance(val, str):
+            escaped = val.replace("'", "''")
+            return f"'{escaped}'"
+    except Exception:
+        pass
+    return 'NULL'
+
+
+def _sqlalchemy_type_as_ddl(col) -> str:
+    """Map a SQLAlchemy column type to a DDL type string."""
+    import sqlalchemy as sa
+    t = col.type
+    if isinstance(t, sa.Boolean):
+        return 'BOOLEAN'
+    if isinstance(t, sa.Integer):
+        return 'INTEGER'
+    if isinstance(t, sa.Float):
+        return 'FLOAT'
+    if isinstance(t, sa.Numeric):
+        return 'NUMERIC'
+    if isinstance(t, sa.Text):
+        return 'TEXT'
+    if isinstance(t, (sa.String, sa.VARCHAR)):
+        length = getattr(t, 'length', None)
+        return f'VARCHAR({length})' if length else 'VARCHAR'
+    if isinstance(t, sa.DateTime):
+        return 'DATETIME'
+    if isinstance(t, sa.Date):
+        return 'DATE'
+    if isinstance(t, sa.JSON):
+        return 'TEXT'
+    return 'TEXT'
+
+
+def ensure_all_model_columns(engine: Engine, metadata) -> None:
+    """Auto-sync every SQLAlchemy model column to the live DB schema.
+
+    For each table defined in *metadata*, any column that exists in the model
+    but is absent from the live DB is added via ALTER TABLE. Only simple
+    additive changes are attempted (no PK, no FK, no unique constraints).
+    This removes the need to manually update ensure_*_columns() lists.
+    """
+    added: list[str] = []
+    with engine.connect() as connection:
+        dialect = _dialect_name(engine, connection)
+        inspector = inspect(connection)
+        live_tables = set(inspector.get_table_names())
+
+    for table in metadata.sorted_tables:
+        if table.name not in live_tables:
+            continue
+        with engine.connect() as conn:
+            inspector = inspect(conn)
+            existing = {c['name'] for c in inspector.get_columns(table.name)}
+
+        for col in table.columns:
+            if col.name in existing:
+                continue
+            # Skip primary keys and columns with FK constraints — too risky to auto-add
+            if col.primary_key or col.foreign_keys:
+                continue
+
+            ddl_type = _sqlalchemy_type_as_ddl(col)
+            default_val = _sqlalchemy_default_as_ddl(col)
+
+            norm_type, norm_default = _normalize_column_ddl_for_dialect(
+                dialect=dialect, ddl_type=ddl_type, default=default_val or 'NULL'
+            )
+
+            LOGGER.warning(
+                "Auto-migration: adding missing column %s.%s (%s DEFAULT %s)",
+                table.name, col.name, norm_type, norm_default,
+            )
+            ddl = text(
+                f"ALTER TABLE {table.name} ADD COLUMN {col.name}"
+                f" {norm_type} DEFAULT {norm_default}"
+            )
+            try:
+                with engine.begin() as ddl_conn:
+                    ddl_conn.execute(ddl)
+                added.append(f"{table.name}.{col.name}")
+            except SQLAlchemyError as exc:
+                LOGGER.error(
+                    "Auto-migration failed for %s.%s: %s", table.name, col.name, exc
+                )
+
+    _log_added(added)
+
+
 def ensure_profit_weight_columns(engine: Engine) -> None:
     """Backfill profit-weight columns if Alembic migration hasn't run yet."""
     columns_added: list[str] = []
