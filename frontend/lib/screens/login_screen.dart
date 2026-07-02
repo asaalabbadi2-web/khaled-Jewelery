@@ -160,7 +160,8 @@ class _LoginScreenState extends State<LoginScreen>
     if (!mounted) return;
 
     if (success) {
-      // ناجح — AuthProvider سيتولى الانتقال للشاشة الرئيسية
+      // أخبر المتصفح بحفظ اسم المستخدم في autocomplete
+      TextInput.finishAutofillContext(shouldSave: true);
     } else {
       // لا نستدعي finishAutofillContext(false) هنا —
       // يُعيد المتصفح على الويب مسح حقول AutofillGroup كليهما عند استدعائه.
@@ -341,6 +342,9 @@ class _LoginScreenState extends State<LoginScreen>
                       focusNode: _usernameFocusNode,
                       textInputAction: TextInputAction.next,
                       keyboardType: TextInputType.text,
+                      // autofillHints بدون AutofillGroup: يُفعّل autocomplete المتصفح
+                      // دون إنشاء <form> HTML يُسبّب page reload عند Enter
+                      autofillHints: const [AutofillHints.username],
                       onSubmitted: (_) => _passwordFocusNode.requestFocus(),
                       onChanged: (_) {
                         if (_usernameError != null) {
