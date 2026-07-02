@@ -178,6 +178,7 @@ class PointsMetric(RaceMetric):
             else:
                 sales_amount[aid] = sales_amount.get(aid, 0.0) + invoice_total
 
+            inv_contributed = 0.0
             for item in (inv.items or []):
                 karat = item.karat
                 if not karat:
@@ -187,6 +188,7 @@ class PointsMetric(RaceMetric):
                     continue
                 # Normalize to main-karat equivalent (same unit as profit_gold)
                 normalized = pw * float(karat) / main_karat
+                inv_contributed += normalized
                 bucket = (aid, item.category_id, float(karat))
                 buckets_total[bucket] = buckets_total.get(bucket, 0.0) + normalized
                 if is_purchase:
@@ -197,6 +199,23 @@ class PointsMetric(RaceMetric):
                     buckets_sales[bucket] = (
                         buckets_sales.get(bucket, 0.0) + normalized
                     )
+
+            # Backward compatibility layer (permanent, not temporary):
+            # Invoices created before Phase 2C — or imported from older systems —
+            # have InvoiceItem.profit_weight == 0 because that field was never
+            # populated at write time.  Fall back to invoice.profit_gold so that
+            # historical leaderboards remain unchanged.  Once Phase 2C is in
+            # production, new invoices will always hit the per-item path above;
+            # this branch will still protect legacy and imported records.
+            if inv_contributed == 0.0:
+                pg = max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
+                if pg > 0.0:
+                    fb = (aid, None, None)
+                    buckets_total[fb] = buckets_total.get(fb, 0.0) + pg
+                    if is_purchase:
+                        buckets_purchase[fb] = buckets_purchase.get(fb, 0.0) + pg
+                    else:
+                        buckets_sales[fb] = buckets_sales.get(fb, 0.0) + pg
 
         def _apply_rules(buckets: dict) -> dict[int, float]:
             actor_pts: dict[int, float] = {}
