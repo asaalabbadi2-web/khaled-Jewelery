@@ -20,8 +20,17 @@ class PointsMetric(RaceMetric):
     Attributes invoices to employees via employee_id with posted_by fallback.
     """
 
-    def __init__(self, rules: list | None = None) -> None:
+    def __init__(
+        self,
+        rules: list | None = None,
+        points_source: str = 'gold_weight',
+        cash_amount_per_point: float = 100.0,
+        points_per_invoice: float = 1.0,
+    ) -> None:
         self._rules = list(rules) if rules else []
+        self._points_source = points_source or 'gold_weight'
+        self._cash_amount_per_point = max(0.01, float(cash_amount_per_point or 100.0))
+        self._points_per_invoice = max(0.0, float(points_per_invoice or 1.0))
 
     @property
     def invoice_types(self) -> list[str]:
@@ -154,6 +163,9 @@ class PointsMetric(RaceMetric):
         actor_name_map:  dict[int, str]   = {}
         sales_amount:    dict[int, float] = {}
         purchase_amount: dict[int, float] = {}
+        pts_total:       dict[int, float] = {}
+        pts_sales:       dict[int, float] = {}
+        pts_purchase:    dict[int, float] = {}
 
         # (actor_id, category_id, karat) → normalized_profit_gold_equivalent
         buckets_total:    dict[tuple, float] = {}
@@ -178,60 +190,106 @@ class PointsMetric(RaceMetric):
             else:
                 sales_amount[aid] = sales_amount.get(aid, 0.0) + invoice_total
 
-            inv_contributed = 0.0
-            for item in (inv.items or []):
-                karat = item.karat
-                if not karat:
-                    continue
-                pw = max(0.0, float(item.profit_weight or 0.0))
-                if pw == 0.0:
-                    continue
-                # Normalize to main-karat equivalent (same unit as profit_gold)
-                normalized = pw * float(karat) / main_karat
-                inv_contributed += normalized
-                bucket = (aid, item.category_id, float(karat))
-                buckets_total[bucket] = buckets_total.get(bucket, 0.0) + normalized
-                if is_purchase:
-                    buckets_purchase[bucket] = (
-                        buckets_purchase.get(bucket, 0.0) + normalized
-                    )
-                else:
-                    buckets_sales[bucket] = (
-                        buckets_sales.get(bucket, 0.0) + normalized
-                    )
-
-            # Backward compatibility layer (permanent, not temporary):
-            # Invoices created before Phase 2C — or imported from older systems —
-            # have InvoiceItem.profit_weight == 0 because that field was never
-            # populated at write time.  Fall back to invoice.profit_gold so that
-            # historical leaderboards remain unchanged.  Once Phase 2C is in
-            # production, new invoices will always hit the per-item path above;
-            # this branch will still protect legacy and imported records.
-            if inv_contributed == 0.0:
-                pg = max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
-                if pg > 0.0:
-                    fb = (aid, None, None)
-                    buckets_total[fb] = buckets_total.get(fb, 0.0) + pg
+            if self._points_source == 'profit_cash':
+                pc = max(0.0, float(getattr(inv, 'profit_cash', 0.0) or 0.0))
+                if pc > 0.0:
+                    pts = pc / self._cash_amount_per_point
+                    pts_total[aid]    = pts_total.get(aid, 0.0) + pts
                     if is_purchase:
-                        buckets_purchase[fb] = buckets_purchase.get(fb, 0.0) + pg
+                        pts_purchase[aid] = pts_purchase.get(aid, 0.0) + pts
                     else:
-                        buckets_sales[fb] = buckets_sales.get(fb, 0.0) + pg
+                        pts_sales[aid]    = pts_sales.get(aid, 0.0) + pts
 
-        def _apply_rules(buckets: dict) -> dict[int, float]:
-            actor_pts: dict[int, float] = {}
-            for (aid, cat_id, karat), profit in buckets.items():
-                multiplier = PointCalculator.calculate(
-                    category_id=cat_id,
-                    karat=karat,
-                    rules=self._rules,
-                    default=points_per_gram,
+            elif self._points_source == 'sales_amount':
+                # نقاط بناءً على قيمة الفاتورة (الإيراد): كل X ريال = نقطة
+                sa = max(0.0, float(getattr(inv, 'total', 0.0) or 0.0))
+                if sa > 0.0:
+                    pts = sa / self._cash_amount_per_point
+                    pts_total[aid]    = pts_total.get(aid, 0.0) + pts
+                    if is_purchase:
+                        pts_purchase[aid] = pts_purchase.get(aid, 0.0) + pts
+                    else:
+                        pts_sales[aid]    = pts_sales.get(aid, 0.0) + pts
+
+            elif self._points_source == 'invoice_count':
+                # نقاط بناءً على عدد الفواتير: كل فاتورة = points_per_invoice
+                pts = self._points_per_invoice
+                pts_total[aid]    = pts_total.get(aid, 0.0) + pts
+                if is_purchase:
+                    pts_purchase[aid] = pts_purchase.get(aid, 0.0) + pts
+                else:
+                    pts_sales[aid]    = pts_sales.get(aid, 0.0) + pts
+
+            elif self._points_source == 'sold_weight':
+                # نقاط بناءً على الوزن المباع (وليس الربح الوزني)
+                w = sum(
+                    max(0.0, float(item.weight or 0.0))
+                    for item in (inv.items or [])
                 )
-                actor_pts[aid] = actor_pts.get(aid, 0.0) + profit * multiplier
-            return actor_pts
+                if w > 0.0:
+                    pts = w * points_per_gram
+                    pts_total[aid]    = pts_total.get(aid, 0.0) + pts
+                    if is_purchase:
+                        pts_purchase[aid] = pts_purchase.get(aid, 0.0) + pts
+                    else:
+                        pts_sales[aid]    = pts_sales.get(aid, 0.0) + pts
 
-        pts_total    = _apply_rules(buckets_total)
-        pts_sales    = _apply_rules(buckets_sales)
-        pts_purchase = _apply_rules(buckets_purchase)
+            else:
+                inv_contributed = 0.0
+                for item in (inv.items or []):
+                    karat = item.karat
+                    if not karat:
+                        continue
+                    pw = max(0.0, float(item.profit_weight or 0.0))
+                    if pw == 0.0:
+                        continue
+                    # Normalize to main-karat equivalent (same unit as profit_gold)
+                    normalized = pw * float(karat) / main_karat
+                    inv_contributed += normalized
+                    bucket = (aid, item.category_id, float(karat))
+                    buckets_total[bucket] = buckets_total.get(bucket, 0.0) + normalized
+                    if is_purchase:
+                        buckets_purchase[bucket] = (
+                            buckets_purchase.get(bucket, 0.0) + normalized
+                        )
+                    else:
+                        buckets_sales[bucket] = (
+                            buckets_sales.get(bucket, 0.0) + normalized
+                        )
+
+                # Backward compatibility layer (permanent, not temporary):
+                # Invoices created before Phase 2C — or imported from older systems —
+                # have InvoiceItem.profit_weight == 0 because that field was never
+                # populated at write time.  Fall back to invoice.profit_gold so that
+                # historical leaderboards remain unchanged.  Once Phase 2C is in
+                # production, new invoices will always hit the per-item path above;
+                # this branch will still protect legacy and imported records.
+                if inv_contributed == 0.0:
+                    pg = max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
+                    if pg > 0.0:
+                        fb = (aid, None, None)
+                        buckets_total[fb] = buckets_total.get(fb, 0.0) + pg
+                        if is_purchase:
+                            buckets_purchase[fb] = buckets_purchase.get(fb, 0.0) + pg
+                        else:
+                            buckets_sales[fb] = buckets_sales.get(fb, 0.0) + pg
+
+        if self._points_source == 'gold_weight':
+            def _apply_rules(buckets: dict) -> dict[int, float]:
+                actor_pts: dict[int, float] = {}
+                for (aid, cat_id, karat), profit in buckets.items():
+                    multiplier = PointCalculator.calculate(
+                        category_id=cat_id,
+                        karat=karat,
+                        rules=self._rules,
+                        default=points_per_gram,
+                    )
+                    actor_pts[aid] = actor_pts.get(aid, 0.0) + profit * multiplier
+                return actor_pts
+
+            pts_total    = _apply_rules(buckets_total)
+            pts_sales    = _apply_rules(buckets_sales)
+            pts_purchase = _apply_rules(buckets_purchase)
 
         return (
             counts, actor_name_map, sales_amount, purchase_amount,
@@ -298,10 +356,43 @@ class PointsMetric(RaceMetric):
         from models import Invoice
 
         invoices = aux if aux is not None else Invoice.query.filter(*base_filters).all()
-        team_weight_main = sum(
-            max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
-            for inv in invoices
-        )
-        team_weight_g = round(team_weight_main, 3)
-        team_points   = int(round(team_weight_main * points_per_gram))
+
+        if self._points_source == 'profit_cash':
+            total = sum(
+                max(0.0, float(getattr(inv, 'profit_cash', 0.0) or 0.0))
+                for inv in invoices
+            )
+            team_weight_g = round(total, 2)
+            team_points   = int(round(total / self._cash_amount_per_point))
+
+        elif self._points_source == 'sales_amount':
+            total = sum(
+                max(0.0, float(getattr(inv, 'total', 0.0) or 0.0))
+                for inv in invoices
+            )
+            team_weight_g = round(total, 2)
+            team_points   = int(round(total / self._cash_amount_per_point))
+
+        elif self._points_source == 'invoice_count':
+            count = len(invoices)
+            team_weight_g = float(count)
+            team_points   = int(round(count * self._points_per_invoice))
+
+        elif self._points_source == 'sold_weight':
+            total_w = sum(
+                max(0.0, float(item.weight or 0.0))
+                for inv in invoices
+                for item in (inv.items or [])
+            )
+            team_weight_g = round(total_w, 3)
+            team_points   = int(round(total_w * points_per_gram))
+
+        else:  # gold_weight
+            total = sum(
+                max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
+                for inv in invoices
+            )
+            team_weight_g = round(total, 3)
+            team_points   = int(round(total * points_per_gram))
+
         return team_weight_g, team_points

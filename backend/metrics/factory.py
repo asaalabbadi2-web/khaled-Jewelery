@@ -18,6 +18,9 @@ class MetricFactory:
         metric_name: str,
         points_per_gram: float = 10.0,
         rules: list | None = None,
+        points_source: str = 'gold_weight',
+        cash_amount_per_point: float = 100.0,
+        points_per_invoice: float = 1.0,
     ) -> RaceMetric:
         metric_cls = cls._registry.get(metric_name)
         if metric_cls is None:
@@ -26,7 +29,12 @@ class MetricFactory:
                 f'Valid values: {list(cls._registry)}'
             )
         if metric_name == 'points':
-            return metric_cls(rules=rules)
+            return metric_cls(
+                rules=rules,
+                points_source=points_source,
+                cash_amount_per_point=cash_amount_per_point,
+                points_per_invoice=points_per_invoice,
+            )
         return metric_cls()
 
     @classmethod

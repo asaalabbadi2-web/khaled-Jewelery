@@ -22515,7 +22515,17 @@ def get_home_leaderboard():
         except (ValueError, TypeError, KeyError):
             pass
 
-    metric_obj = MetricFactory.create(metric, points_per_gram, rules=_point_rules)
+    _points_source         = str(sales_race_config.get('points_source') or 'gold_weight')
+    _cash_amount_per_point = max(0.01, float(sales_race_config.get('cash_amount_per_point') or 100.0))
+    _points_per_invoice    = max(0.0,  float(sales_race_config.get('points_per_invoice') or 1.0))
+
+    metric_obj = MetricFactory.create(
+        metric, points_per_gram,
+        rules=_point_rules,
+        points_source=_points_source,
+        cash_amount_per_point=_cash_amount_per_point,
+        points_per_invoice=_points_per_invoice,
+    )
     leaderboard_invoice_types = metric_obj.invoice_types
 
     def _resolve_period_bounds(period_value: str, anchor_dt: datetime | None = None):

@@ -134,6 +134,92 @@ def _clear_point_rules() -> None:
     db.session.commit()
 
 
+def _set_points_source(source: str, cash_amount_per_point=None) -> None:
+    settings = Settings.query.first()
+    if settings is None:
+        settings = Settings()
+        db.session.add(settings)
+        db.session.flush()
+    raw = settings.sales_race_settings
+    cfg = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+    cfg['points_source'] = source
+    if cash_amount_per_point is not None:
+        cfg['cash_amount_per_point'] = cash_amount_per_point
+    settings.sales_race_settings = json.dumps(cfg, ensure_ascii=False)
+    db.session.commit()
+
+
+def _reset_points_source() -> None:
+    settings = Settings.query.first()
+    if settings is None:
+        return
+    raw = settings.sales_race_settings
+    cfg = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+    cfg.pop('points_source', None)
+    cfg.pop('cash_amount_per_point', None)
+    settings.sales_race_settings = json.dumps(cfg, ensure_ascii=False)
+    db.session.commit()
+
+
+def _invoice_cash(employee_id: int, *, profit_cash: float, invoice_type: str = 'بيع') -> Invoice:
+    inv = Invoice(
+        invoice_type_id=next(_invoice_type_id_counter),
+        invoice_type=invoice_type,
+        employee_id=employee_id,
+        date=datetime.now(),
+        total=0.0,
+        is_posted=True,
+        profit_gold=0.0,
+        profit_cash=round(profit_cash, 2),
+    )
+    db.session.add(inv)
+    db.session.commit()
+    return inv
+
+
+def _invoice_total(employee_id: int, *, total: float, invoice_type: str = 'بيع') -> Invoice:
+    """Invoice with a known total (for sales_amount tests)."""
+    inv = Invoice(
+        invoice_type_id=next(_invoice_type_id_counter),
+        invoice_type=invoice_type,
+        employee_id=employee_id,
+        date=datetime.now(),
+        total=round(total, 2),
+        is_posted=True,
+        profit_gold=0.0,
+    )
+    db.session.add(inv)
+    db.session.commit()
+    return inv
+
+
+def _invoice_with_weight(employee_id: int, *, weight_g: float, karat: float = 21.0,
+                         invoice_type: str = 'بيع') -> Invoice:
+    """Invoice with a physical item weight (for sold_weight tests)."""
+    inv = Invoice(
+        invoice_type_id=next(_invoice_type_id_counter),
+        invoice_type=invoice_type,
+        employee_id=employee_id,
+        date=datetime.now(),
+        total=0.0,
+        is_posted=True,
+        profit_gold=0.0,
+    )
+    db.session.add(inv)
+    db.session.flush()
+    db.session.add(InvoiceItem(
+        invoice_id=inv.id,
+        karat=float(karat),
+        weight=float(weight_g),
+        profit_weight=0.0,
+        name='test-item',
+        quantity=1,
+        price=0.0,
+    ))
+    db.session.commit()
+    return inv
+
+
 def _leaderboard(auth_headers: dict) -> dict:
     with app.test_client() as client:
         resp = client.get(
@@ -409,3 +495,272 @@ class TestRegression:
         ids = [r.get('id') for r in ranking]
         assert ids.index(id1) < ids.index(id2)
         assert ids.index(id2) < ids.index(id3)
+
+
+# ─── profit_cash source tests ────────────────────────────────────────────────
+
+class TestProfitCashSource:
+    """points_source='profit_cash': النقاط = profit_cash ÷ cash_amount_per_point."""
+
+    def teardown_method(self):
+        with app.app_context():
+            _reset_points_source()
+
+    def test_basic_cash_points(self, auth_headers):
+        """1000 ريال ربح ÷ 100 = 10 نقاط."""
+        with app.app_context():
+            emp = _employee('EMP-CASH-BASIC')
+            _invoice_cash(emp.id, profit_cash=1000.0)
+            emp_id = emp.id
+            _set_points_source('profit_cash', cash_amount_per_point=100.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 10.0
+
+    def test_cash_amount_per_point_respected(self, auth_headers):
+        """500 ريال ÷ 250 = 2 نقطة."""
+        with app.app_context():
+            emp = _employee('EMP-CASH-250')
+            _invoice_cash(emp.id, profit_cash=500.0)
+            emp_id = emp.id
+            _set_points_source('profit_cash', cash_amount_per_point=250.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 2.0
+
+    def test_two_invoices_accumulate(self, auth_headers):
+        """فاتورتان: 600 + 400 = 1000 ريال ÷ 100 = 10 نقاط."""
+        with app.app_context():
+            emp = _employee('EMP-CASH-TWO')
+            _invoice_cash(emp.id, profit_cash=600.0)
+            _invoice_cash(emp.id, profit_cash=400.0)
+            emp_id = emp.id
+            _set_points_source('profit_cash', cash_amount_per_point=100.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 10.0
+
+    def test_purchase_invoice_included(self, auth_headers):
+        """شراء من عميل يُحتسب في مسار profit_cash."""
+        with app.app_context():
+            emp = _employee('EMP-CASH-BUY')
+            _invoice_cash(emp.id, profit_cash=300.0, invoice_type='شراء من عميل')
+            emp_id = emp.id
+            _set_points_source('profit_cash', cash_amount_per_point=100.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 3.0
+
+    def test_ranking_order_by_cash_points(self, auth_headers):
+        """الترتيب صحيح: الأعلى ربحاً أولاً."""
+        with app.app_context():
+            e_high = _employee('EMP-CASH-HIGH')
+            e_low  = _employee('EMP-CASH-LOW')
+            _invoice_cash(e_high.id, profit_cash=2000.0)
+            _invoice_cash(e_low.id,  profit_cash=500.0)
+            id_high, id_low = e_high.id, e_low.id
+            _set_points_source('profit_cash', cash_amount_per_point=100.0)
+
+        payload = _leaderboard(auth_headers)
+        ranking = payload.get('ranking') or []
+        ids = [r.get('id') for r in ranking]
+        assert ids.index(id_high) < ids.index(id_low)
+
+    def test_gold_weight_mode_unaffected(self, auth_headers):
+        """التأكد أن gold_weight (الوضع الافتراضي) لا يتأثر بالتغيير."""
+        with app.app_context():
+            emp = _employee('EMP-GOLD-UNAFFECTED')
+            _invoice_with_items(emp.id, [{'karat': 21.0, 'profit_weight': 5.0}])
+            emp_id = emp.id
+            _reset_points_source()
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 50.0
+
+
+# ─── sales_amount source tests ───────────────────────────────────────────────
+
+class TestSalesAmountSource:
+    """points_source='sales_amount': النقاط = إجمالي الفاتورة ÷ cash_amount_per_point."""
+
+    def teardown_method(self):
+        with app.app_context():
+            _reset_points_source()
+
+    def test_basic_sales_amount(self, auth_headers):
+        """فاتورة 2000 ريال ÷ 100 = 20 نقطة."""
+        with app.app_context():
+            emp = _employee('EMP-SA-BASIC')
+            _invoice_total(emp.id, total=2000.0)
+            emp_id = emp.id
+            _set_points_source('sales_amount', cash_amount_per_point=100.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 20.0
+
+    def test_divisor_respected(self, auth_headers):
+        """3000 ريال ÷ 500 = 6 نقاط."""
+        with app.app_context():
+            emp = _employee('EMP-SA-DIV')
+            _invoice_total(emp.id, total=3000.0)
+            emp_id = emp.id
+            _set_points_source('sales_amount', cash_amount_per_point=500.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 6.0
+
+    def test_two_invoices_accumulate(self, auth_headers):
+        """1500 + 500 = 2000 ÷ 100 = 20 نقطة."""
+        with app.app_context():
+            emp = _employee('EMP-SA-TWO')
+            _invoice_total(emp.id, total=1500.0)
+            _invoice_total(emp.id, total=500.0)
+            emp_id = emp.id
+            _set_points_source('sales_amount', cash_amount_per_point=100.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 20.0
+
+    def test_ranking_order(self, auth_headers):
+        """الأعلى مبيعاً يأتي أولاً."""
+        with app.app_context():
+            e_big = _employee('EMP-SA-BIG')
+            e_sml = _employee('EMP-SA-SML')
+            _invoice_total(e_big.id, total=5000.0)
+            _invoice_total(e_sml.id, total=1000.0)
+            id_big, id_sml = e_big.id, e_sml.id
+            _set_points_source('sales_amount', cash_amount_per_point=100.0)
+
+        payload = _leaderboard(auth_headers)
+        ids = [r.get('id') for r in (payload.get('ranking') or [])]
+        assert ids.index(id_big) < ids.index(id_sml)
+
+
+# ─── invoice_count source tests ──────────────────────────────────────────────
+
+class TestInvoiceCountSource:
+    """points_source='invoice_count': النقاط = عدد الفواتير × points_per_invoice."""
+
+    def teardown_method(self):
+        with app.app_context():
+            _reset_points_source()
+
+    def _set_count_source(self, ppi: float = 1.0):
+        settings = Settings.query.first()
+        if settings is None:
+            settings = Settings()
+            db.session.add(settings)
+            db.session.flush()
+        raw = settings.sales_race_settings
+        cfg = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+        cfg['points_source']      = 'invoice_count'
+        cfg['points_per_invoice'] = ppi
+        settings.sales_race_settings = json.dumps(cfg, ensure_ascii=False)
+        db.session.commit()
+
+    def test_one_invoice_one_point(self, auth_headers):
+        with app.app_context():
+            emp = _employee('EMP-IC-ONE')
+            _invoice_total(emp.id, total=0.0)
+            emp_id = emp.id
+            self._set_count_source(ppi=1.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 1.0
+
+    def test_three_invoices_five_points_each(self, auth_headers):
+        """3 فواتير × 5 نقاط = 15 نقطة."""
+        with app.app_context():
+            emp = _employee('EMP-IC-THREE')
+            for _ in range(3):
+                _invoice_total(emp.id, total=100.0)
+            emp_id = emp.id
+            self._set_count_source(ppi=5.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 15.0
+
+    def test_purchase_counts(self, auth_headers):
+        """شراء من عميل يُحتسب في عدد الفواتير."""
+        with app.app_context():
+            emp = _employee('EMP-IC-BUY')
+            _invoice_total(emp.id, total=0.0, invoice_type='شراء من عميل')
+            _invoice_total(emp.id, total=0.0, invoice_type='شراء من عميل')
+            emp_id = emp.id
+            self._set_count_source(ppi=3.0)
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 6.0
+
+    def test_ranking_order(self, auth_headers):
+        """الأكثر فواتير يأتي أولاً."""
+        with app.app_context():
+            e_many = _employee('EMP-IC-MANY')
+            e_few  = _employee('EMP-IC-FEW')
+            for _ in range(5):
+                _invoice_total(e_many.id, total=0.0)
+            _invoice_total(e_few.id, total=0.0)
+            id_many, id_few = e_many.id, e_few.id
+            self._set_count_source(ppi=1.0)
+
+        payload = _leaderboard(auth_headers)
+        ids = [r.get('id') for r in (payload.get('ranking') or [])]
+        assert ids.index(id_many) < ids.index(id_few)
+
+
+# ─── sold_weight source tests ────────────────────────────────────────────────
+
+class TestSoldWeightSource:
+    """points_source='sold_weight': النقاط = الوزن المباع × points_per_gram."""
+
+    def teardown_method(self):
+        with app.app_context():
+            _reset_points_source()
+
+    def test_basic_sold_weight(self, auth_headers):
+        """10 جرام مباعة × 10 = 100 نقطة."""
+        with app.app_context():
+            emp = _employee('EMP-SW-BASIC')
+            _invoice_with_weight(emp.id, weight_g=10.0)
+            emp_id = emp.id
+            _set_points_source('sold_weight')
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 100.0
+
+    def test_multiple_items_accumulate(self, auth_headers):
+        """فاتورتان: 6 + 4 = 10 جرام × 10 = 100 نقطة."""
+        with app.app_context():
+            emp = _employee('EMP-SW-TWO')
+            _invoice_with_weight(emp.id, weight_g=6.0)
+            _invoice_with_weight(emp.id, weight_g=4.0)
+            emp_id = emp.id
+            _set_points_source('sold_weight')
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 100.0
+
+    def test_ignores_profit_weight(self, auth_headers):
+        """في sold_weight، profit_weight=0 لا يؤثر — يُستخدم weight فقط."""
+        with app.app_context():
+            emp = _employee('EMP-SW-NOPW')
+            _invoice_with_weight(emp.id, weight_g=5.0)
+            emp_id = emp.id
+            _set_points_source('sold_weight')
+
+        payload = _leaderboard(auth_headers)
+        assert _score_for(payload, emp_id) == 50.0
+
+    def test_ranking_order(self, auth_headers):
+        """الأثقل وزناً يأتي أولاً."""
+        with app.app_context():
+            e_heavy = _employee('EMP-SW-HEAVY')
+            e_light = _employee('EMP-SW-LIGHT')
+            _invoice_with_weight(e_heavy.id, weight_g=20.0)
+            _invoice_with_weight(e_light.id, weight_g=3.0)
+            id_heavy, id_light = e_heavy.id, e_light.id
+            _set_points_source('sold_weight')
+
+        payload = _leaderboard(auth_headers)
+        ids = [r.get('id') for r in (payload.get('ranking') or [])]
+        assert ids.index(id_heavy) < ids.index(id_light)
