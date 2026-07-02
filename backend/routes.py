@@ -22292,11 +22292,16 @@ def get_inventory_movement_report():
 def get_sales_race_config():
     """Return the current sales race configuration (admin only)."""
     settings_row = _get_settings_singleton(create_if_missing=True)
+    _default_pv = {p: {'amounts': 'all', 'points': 'all', 'share': 'all', 'team_summary': 'all'}
+                   for p in ('today', 'week', 'month')}
     config = {
         'enabled': True,
         'default_period': 'today',
         'enabled_periods': ['today', 'week', 'month'],
         'points_per_gram': 10.0,
+        'points_source': 'gold_weight',
+        'cash_amount_per_point': 100.0,
+        'points_per_invoice': 1.0,
         'allow_fallback_to_latest_period': True,
         'show_invoice_count': True,
         'show_champion': True,
@@ -22304,6 +22309,7 @@ def get_sales_race_config():
         'points_visibility': 'all',
         'share_visibility': 'all',
         'team_summary_visibility': 'all',
+        'period_visibility': _default_pv,
         'weekly_sales_target_weight': float(
             getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0
         ),
@@ -22317,9 +22323,10 @@ def get_sales_race_config():
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
                 for k in ('enabled', 'default_period', 'enabled_periods', 'points_per_gram',
+                          'points_source', 'cash_amount_per_point', 'points_per_invoice',
                           'allow_fallback_to_latest_period', 'show_invoice_count', 'show_champion',
                           'amounts_visibility', 'points_visibility', 'share_visibility',
-                          'team_summary_visibility'):
+                          'team_summary_visibility', 'period_visibility'):
                     if k in parsed:
                         config[k] = parsed[k]
         except Exception:
@@ -22334,11 +22341,16 @@ def update_sales_race_config():
     data = request.get_json(silent=True) or {}
     settings_row = _get_settings_singleton(create_if_missing=True)
 
+    _default_pv_put = {p: {'amounts': 'all', 'points': 'all', 'share': 'all', 'team_summary': 'all'}
+                       for p in ('today', 'week', 'month')}
     current = {
         'enabled': True,
         'default_period': 'today',
         'enabled_periods': ['today', 'week', 'month'],
         'points_per_gram': 10.0,
+        'points_source': 'gold_weight',
+        'cash_amount_per_point': 100.0,
+        'points_per_invoice': 1.0,
         'allow_fallback_to_latest_period': True,
         'show_invoice_count': True,
         'show_champion': True,
@@ -22346,13 +22358,14 @@ def update_sales_race_config():
         'points_visibility': 'all',
         'share_visibility': 'all',
         'team_summary_visibility': 'all',
+        'period_visibility': _default_pv_put,
     }
     raw = getattr(settings_row, 'sales_race_settings', None)
     if raw:
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
-                current.update({k: parsed[k] for k in current if k in parsed})
+                current.update(parsed)
         except Exception:
             pass
 
@@ -22374,6 +22387,20 @@ def update_sales_race_config():
             current['points_per_gram'] = max(0.0, float(data['points_per_gram']))
         except Exception:
             pass
+    _valid_sources = {'gold_weight', 'profit_cash', 'sales_amount', 'invoice_count', 'sold_weight'}
+    if 'points_source' in data:
+        s = str(data['points_source']).strip().lower()
+        current['points_source'] = s if s in _valid_sources else 'gold_weight'
+    if 'cash_amount_per_point' in data:
+        try:
+            current['cash_amount_per_point'] = max(0.01, float(data['cash_amount_per_point']))
+        except Exception:
+            pass
+    if 'points_per_invoice' in data:
+        try:
+            current['points_per_invoice'] = max(0.0, float(data['points_per_invoice']))
+        except Exception:
+            pass
     if 'allow_fallback_to_latest_period' in data:
         current['allow_fallback_to_latest_period'] = bool(data['allow_fallback_to_latest_period'])
     if 'show_invoice_count' in data:
@@ -22388,10 +22415,29 @@ def update_sales_race_config():
         current['share_visibility'] = _vis(data['share_visibility'])
     if 'team_summary_visibility' in data:
         current['team_summary_visibility'] = _vis(data['team_summary_visibility'])
+    if 'period_visibility' in data:
+        _pv_in = data['period_visibility']
+        if isinstance(_pv_in, dict):
+            _pv_current = current.get('period_visibility') or {}
+            _vis_keys = ('amounts', 'points', 'share', 'team_summary')
+            for _p in ('today', 'week', 'month'):
+                if _p in _pv_in and isinstance(_pv_in[_p], dict):
+                    _pv_current[_p] = {
+                        k: _vis(_pv_in[_p].get(k, 'all'))
+                        for k in _vis_keys
+                    }
+            current['period_visibility'] = _pv_current
     if 'weekly_sales_target_weight' in data:
         try:
             settings_row.weekly_sales_target_weight = max(
                 0.0, float(data['weekly_sales_target_weight'] or 0.0)
+            )
+        except Exception:
+            pass
+    if 'monthly_sales_target_weight' in data:
+        try:
+            settings_row.monthly_sales_target_weight = max(
+                0.0, float(data['monthly_sales_target_weight'] or 0.0)
             )
         except Exception:
             pass
@@ -22475,11 +22521,6 @@ def get_home_leaderboard():
     if not _enabled_periods:
         _enabled_periods = ['today']
 
-    can_view_amounts = _can_view_admin or sales_race_config.get('amounts_visibility', 'all') == 'all'
-    can_view_points  = _can_view_admin or sales_race_config.get('points_visibility',  'all') == 'all'
-    can_view_share   = _can_view_admin or sales_race_config.get('share_visibility',   'all') == 'all'
-    can_view_team_summary = _can_view_admin or sales_race_config.get('team_summary_visibility', 'all') == 'all'
-
     default_period = str(sales_race_config.get('default_period') or 'today').strip().lower()
     if default_period not in {'today', 'week', 'month'}:
         default_period = 'today'
@@ -22489,6 +22530,20 @@ def get_home_leaderboard():
     if period not in _enabled_periods:
         period = default_period
 
+    # Resolve visibility per-period first, fall back to flat global settings.
+    _period_vis = (sales_race_config.get('period_visibility') or {}).get(period, {})
+
+    def _resolve_vis(key: str) -> bool:
+        per_period = _period_vis.get(key)
+        if per_period:
+            return per_period == 'all'
+        return sales_race_config.get(f'{key}_visibility', 'all') == 'all'
+
+    can_view_amounts      = _can_view_admin or _resolve_vis('amounts')
+    can_view_points       = _can_view_admin or _resolve_vis('points')
+    can_view_share        = _can_view_admin or _resolve_vis('share')
+    can_view_team_summary = _can_view_admin or _resolve_vis('team_summary')
+
     try:
         points_per_gram = max(0.0, float(sales_race_config.get('points_per_gram') or 10.0))
     except Exception:
@@ -22497,9 +22552,6 @@ def get_home_leaderboard():
     from metrics import MetricFactory
     from points.models import PointRule
     if metric not in MetricFactory.valid_names():
-        metric = 'weight'
-    # If points are restricted and caller lacks permission, fall back to weight.
-    if metric == 'points' and not can_view_points:
         metric = 'weight'
 
     _point_rules: list[PointRule] = []
@@ -22670,6 +22722,7 @@ def get_home_leaderboard():
         if can_view_amounts:
             row_entry['sales_amount'] = round(_to_float(it.get('sales_amount', 0.0), 0.0), 2)
             row_entry['purchase_amount'] = round(_to_float(it.get('purchase_amount', 0.0), 0.0), 2)
+        if can_view_points:
             row_entry['points_sales'] = int(it.get('points_sales') or 0)
             row_entry['points_purchase'] = int(it.get('points_purchase') or 0)
         if can_view_share:

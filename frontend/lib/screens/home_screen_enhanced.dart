@@ -2505,6 +2505,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     final raceEnabled = config?['enabled'] != false;
     final showInvoiceCount = config?['show_invoice_count'] != false;
     final showChampion = config?['show_champion'] != false;
+    final showAmounts = config?['amounts_visible'] as bool? ?? true;
+    final showPoints = config?['points_visible'] as bool? ?? true;
     final isFallback = data?['is_fallback'] == true;
     final effectiveStartDate = DateTime.tryParse(
       (data?['effective_start_date'] ?? '').toString(),
@@ -2537,12 +2539,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
         goalTargetValue > 0)
       ? (goalCurrentValue / goalTargetValue).clamp(0.0, 1.0)
       : targetProgress.clamp(0.0, 1.0);
-    final isGoalAchieved =
-      (goalCurrentValue != null &&
-        goalTargetValue != null &&
-        goalTargetValue > 0 &&
-        goalCurrentValue >= goalTargetValue) ||
-      targetProgress >= 0.9999;
+    final isGoalAchieved = effectiveTargetProgress >= 0.9999;
     final Color goalColor = isGoalAchieved
         ? AppColors.success
       : (effectiveTargetProgress < 0.5 ? AppColors.warning : AppColors.info);
@@ -2807,8 +2804,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                             dotColor: AppColors.success,
                             valueColor: AppColors.success,
                             label: isAr ? 'مبيعات' : 'Sales',
-                            amount: salesAmount,
-                            points: metric == 'points' ? pointsSales : null,
+                            amount: showAmounts ? salesAmount : null,
+                            points: showPoints && metric == 'points' ? pointsSales : null,
                             pointsUnit: pointsUnitAr,
                             currencySymbolText: currencySymbolText,
                             isNewSar: isNewSar,
@@ -2818,8 +2815,8 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                             dotColor: const Color(0xFF5E35B1),
                             valueColor: const Color(0xFF5E35B1),
                             label: isAr ? 'مشتريات' : 'Purch',
-                            amount: purchaseAmount,
-                            points: metric == 'points' ? pointsPurchase : null,
+                            amount: showAmounts ? purchaseAmount : null,
+                            points: showPoints && metric == 'points' ? pointsPurchase : null,
                             pointsUnit: pointsUnitAr,
                             currencySymbolText: currencySymbolText,
                             isNewSar: isNewSar,
@@ -2863,6 +2860,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                     ],
                   ),
                 ),
+                if (showPoints || metric != 'points') ...[
                 const SizedBox(width: 10),
                 // Score box
                 Container(
@@ -2915,6 +2913,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                     ],
                   ),
                 ),
+                ],
               ],
             ),
           ),
@@ -3929,13 +3928,14 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     required Color dotColor,
     required Color valueColor,
     required String label,
-    required double amount,
     required String currencySymbolText,
     required bool isNewSar,
     required NumberFormat numberFormat,
+    double? amount,
     int? points,
     String? pointsUnit,
   }) {
+    if (amount == null && points == null) return const SizedBox.shrink();
     const pointsColor = AppColors.darkGold;
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -3973,25 +3973,28 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                     fontSize: 9.5,
                   ),
                 ),
-                const TextSpan(
-                  text: '  •  ',
-                  style: TextStyle(color: Color(0xFF9E9E9E)),
+                if (amount != null)
+                  const TextSpan(
+                    text: '  •  ',
+                    style: TextStyle(color: Color(0xFF9E9E9E)),
+                  ),
+              ],
+              if (amount != null) ...[
+                TextSpan(
+                  text: numberFormat.format(amount.round()),
+                  style: TextStyle(fontWeight: FontWeight.w800, color: valueColor),
+                ),
+                const TextSpan(text: ' '),
+                ...cu.sarAwareSpans(
+                  currencySymbolText,
+                  isNewSar: isNewSar,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: valueColor,
+                    fontSize: 9.5,
+                  ),
                 ),
               ],
-              TextSpan(
-                text: numberFormat.format(amount.round()),
-                style: TextStyle(fontWeight: FontWeight.w800, color: valueColor),
-              ),
-              const TextSpan(text: ' '),
-              ...cu.sarAwareSpans(
-                currencySymbolText,
-                isNewSar: isNewSar,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  color: valueColor,
-                  fontSize: 9.5,
-                ),
-              ),
             ],
           ),
         ),

@@ -47,17 +47,24 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   String _defaultPeriod = 'today';
   List<String> _enabledPeriods = ['today', 'week', 'month'];
   double _pointsPerGram = 10.0;
+  String _pointsSource = 'gold_weight';
+  double _cashAmountPerPoint = 100.0;
+  double _pointsPerInvoice = 1.0;
   bool _allowFallback = true;
   bool _showInvoiceCount = true;
   bool _showChampion = true;
-  String _amountsVisibility = 'all';
-  String _pointsVisibility = 'all';
-  String _shareVisibility = 'all';
-  String _teamSummaryVisibility = 'all';
+  Map<String, Map<String, String>> _periodVisibility = {
+    'today': {'amounts': 'all', 'points': 'all', 'share': 'all', 'team_summary': 'all'},
+    'week':  {'amounts': 'all', 'points': 'all', 'share': 'all', 'team_summary': 'all'},
+    'month': {'amounts': 'all', 'points': 'all', 'share': 'all', 'team_summary': 'all'},
+  };
+  String _selectedVisibilityPeriod = 'today';
   double _weeklyTarget = 2000.0;
   double _monthlyTarget = 8000.0;
 
   final TextEditingController _pointsCtrl = TextEditingController();
+  final TextEditingController _cashAmountCtrl = TextEditingController();
+  final TextEditingController _pointsPerInvoiceCtrl = TextEditingController();
   final TextEditingController _weeklyTargetCtrl = TextEditingController();
   final TextEditingController _monthlyTargetCtrl = TextEditingController();
 
@@ -71,6 +78,8 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   @override
   void dispose() {
     _pointsCtrl.dispose();
+    _cashAmountCtrl.dispose();
+    _pointsPerInvoiceCtrl.dispose();
     _weeklyTargetCtrl.dispose();
     _monthlyTargetCtrl.dispose();
     super.dispose();
@@ -133,19 +142,40 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
       _enabledPeriods = valid.isNotEmpty ? valid : ['today'];
     }
     _pointsPerGram = (cfg['points_per_gram'] as num?)?.toDouble() ?? 10.0;
+    final rawSource = (cfg['points_source'] as String?)?.trim() ?? 'gold_weight';
+    _pointsSource = const ['gold_weight', 'profit_cash', 'sales_amount', 'invoice_count', 'sold_weight']
+        .contains(rawSource) ? rawSource : 'gold_weight';
+    _cashAmountPerPoint = (cfg['cash_amount_per_point'] as num?)?.toDouble() ?? 100.0;
+    _pointsPerInvoice = (cfg['points_per_invoice'] as num?)?.toDouble() ?? 1.0;
     _allowFallback = cfg['allow_fallback_to_latest_period'] as bool? ?? true;
     _showInvoiceCount = cfg['show_invoice_count'] as bool? ?? true;
     _showChampion = cfg['show_champion'] as bool? ?? true;
-    _amountsVisibility = cfg['amounts_visibility'] as String? ?? 'all';
-    _pointsVisibility = cfg['points_visibility'] as String? ?? 'all';
-    _shareVisibility = cfg['share_visibility'] as String? ?? 'all';
-    _teamSummaryVisibility = cfg['team_summary_visibility'] as String? ?? 'all';
+    final rawPV = cfg['period_visibility'];
+    if (rawPV is Map) {
+      for (final p in ['today', 'week', 'month']) {
+        final pData = rawPV[p];
+        if (pData is Map) {
+          _periodVisibility[p] = {
+            'amounts':      pData['amounts']      as String? ?? 'all',
+            'points':       pData['points']       as String? ?? 'all',
+            'share':        pData['share']        as String? ?? 'all',
+            'team_summary': pData['team_summary'] as String? ?? 'all',
+          };
+        }
+      }
+    }
     _weeklyTarget =
         (cfg['weekly_sales_target_weight'] as num?)?.toDouble() ?? 2000.0;
     _monthlyTarget =
         (cfg['monthly_sales_target_weight'] as num?)?.toDouble() ?? 8000.0;
     _pointsCtrl.text = _pointsPerGram.toStringAsFixed(
       _pointsPerGram == _pointsPerGram.truncateToDouble() ? 0 : 1,
+    );
+    _cashAmountCtrl.text = _cashAmountPerPoint.toStringAsFixed(
+      _cashAmountPerPoint == _cashAmountPerPoint.truncateToDouble() ? 0 : 2,
+    );
+    _pointsPerInvoiceCtrl.text = _pointsPerInvoice.toStringAsFixed(
+      _pointsPerInvoice == _pointsPerInvoice.truncateToDouble() ? 0 : 1,
     );
     _weeklyTargetCtrl.text = _weeklyTarget.toStringAsFixed(
       _weeklyTarget == _weeklyTarget.truncateToDouble() ? 0 : 1,
@@ -157,31 +187,47 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
 
   Future<void> _saveConfig() async {
     if (!mounted) return;
-    // Validate numeric fields
+    final isAr = widget.isArabic;
+
+    // Validate points_per_gram (used by gold_weight and sold_weight)
     final parsedPoints = double.tryParse(_pointsCtrl.text.trim());
-    final parsedTarget = double.tryParse(_weeklyTargetCtrl.text.trim());
-    final parsedMonthlyTarget = double.tryParse(_monthlyTargetCtrl.text.trim());
     if (parsedPoints == null || parsedPoints < 0) {
+      _showSnack(isAr ? 'قيمة النقاط غير صالحة' : 'Invalid points value', isError: true);
+      return;
+    }
+
+    // Validate cash_amount_per_point (used by profit_cash and sales_amount)
+    final parsedCashAmount = double.tryParse(_cashAmountCtrl.text.trim());
+    if (parsedCashAmount == null || parsedCashAmount <= 0) {
       _showSnack(
-        widget.isArabic ? 'قيمة النقاط غير صالحة' : 'Invalid points value',
+        isAr ? 'قيمة الريال لكل نقطة غير صالحة' : 'Invalid amount per point',
         isError: true,
       );
       return;
     }
+
+    // Validate points_per_invoice (used by invoice_count)
+    final parsedPointsPerInvoice = double.tryParse(_pointsPerInvoiceCtrl.text.trim());
+    if (parsedPointsPerInvoice == null || parsedPointsPerInvoice < 0) {
+      _showSnack(
+        isAr ? 'قيمة النقاط لكل فاتورة غير صالحة' : 'Invalid points per invoice',
+        isError: true,
+      );
+      return;
+    }
+
+    final parsedTarget = double.tryParse(_weeklyTargetCtrl.text.trim());
+    final parsedMonthlyTarget = double.tryParse(_monthlyTargetCtrl.text.trim());
     if (parsedTarget == null || parsedTarget < 0) {
       _showSnack(
-        widget.isArabic
-            ? 'قيمة الهدف الأسبوعي غير صالحة'
-            : 'Invalid weekly target value',
+        isAr ? 'قيمة الهدف الأسبوعي غير صالحة' : 'Invalid weekly target value',
         isError: true,
       );
       return;
     }
     if (parsedMonthlyTarget == null || parsedMonthlyTarget < 0) {
       _showSnack(
-        widget.isArabic
-            ? 'قيمة الهدف الشهري غير صالحة'
-            : 'Invalid monthly target value',
+        isAr ? 'قيمة الهدف الشهري غير صالحة' : 'Invalid monthly target value',
         isError: true,
       );
       return;
@@ -193,13 +239,13 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
         'default_period': _defaultPeriod,
         'enabled_periods': _enabledPeriods,
         'points_per_gram': parsedPoints,
+        'points_source': _pointsSource,
+        'cash_amount_per_point': parsedCashAmount,
+        'points_per_invoice': parsedPointsPerInvoice,
         'allow_fallback_to_latest_period': _allowFallback,
         'show_invoice_count': _showInvoiceCount,
         'show_champion': _showChampion,
-        'amounts_visibility': _amountsVisibility,
-        'points_visibility': _pointsVisibility,
-        'share_visibility': _shareVisibility,
-        'team_summary_visibility': _teamSummaryVisibility,
+        'period_visibility': _periodVisibility,
         'weekly_sales_target_weight': parsedTarget,
         'monthly_sales_target_weight': parsedMonthlyTarget,
       });
@@ -1612,23 +1658,111 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
           ),
           const SizedBox(height: 20),
           _buildSectionHeader(
-            isAr ? 'نقاط المقياس' : 'Points Metric',
+            isAr ? 'مصدر النقاط' : 'Points Source',
             Icons.stars_rounded,
           ),
           const SizedBox(height: 8),
           _card(
-            child: TextField(
-              controller: _pointsCtrl,
-              keyboardType: const TextInputType.numberWithOptions(
-                decimal: true,
-              ),
-              decoration: InputDecoration(
-                labelText: isAr
-                    ? 'نقاط لكل جرام ربح'
-                    : 'Points per profit gram',
-                suffixText: isAr ? 'نقطة/جم' : 'pts/g',
-                border: const OutlineInputBorder(),
-              ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isAr
+                      ? 'كيف تُحسب نقاط كل موظف؟'
+                      : 'How are employee points calculated?',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: _pointsSource,
+                  decoration: InputDecoration(
+                    labelText: isAr ? 'مصدر الحساب' : 'Calculation source',
+                    border: const OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.calculate_rounded),
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  items: [
+                    DropdownMenuItem(
+                      value: 'gold_weight',
+                      child: Text(isAr ? 'الربح الوزني (جرام معادل)' : 'Gold profit weight'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'profit_cash',
+                      child: Text(isAr ? 'الربح النقدي' : 'Cash profit'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'sales_amount',
+                      child: Text(isAr ? 'حجم المبيعات (الإيراد)' : 'Sales amount'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'invoice_count',
+                      child: Text(isAr ? 'عدد الفواتير' : 'Invoice count'),
+                    ),
+                    DropdownMenuItem(
+                      value: 'sold_weight',
+                      child: Text(isAr ? 'الوزن المباع (جرام)' : 'Sold weight'),
+                    ),
+                  ],
+                  onChanged: (v) {
+                    if (v != null) setState(() => _pointsSource = v);
+                  },
+                ),
+                const SizedBox(height: 8),
+                // Description chip
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.lightGold.withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppColors.primaryGold.withValues(alpha: 0.2)),
+                  ),
+                  child: Text(
+                    _pointsSourceDescription(isAr),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.deepGold,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Conditional value field
+                if (_pointsSource == 'gold_weight' || _pointsSource == 'sold_weight')
+                  TextField(
+                    controller: _pointsCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: _pointsSource == 'sold_weight'
+                          ? (isAr ? 'نقاط لكل جرام مباع' : 'Points per sold gram')
+                          : (isAr ? 'نقاط لكل جرام ربح' : 'Points per profit gram'),
+                      suffixText: isAr ? 'نقطة/جم' : 'pts/g',
+                      border: const OutlineInputBorder(),
+                    ),
+                  )
+                else if (_pointsSource == 'profit_cash' || _pointsSource == 'sales_amount')
+                  TextField(
+                    controller: _cashAmountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: _pointsSource == 'sales_amount'
+                          ? (isAr ? 'ريال مبيعات لكل نقطة' : 'Sales riyals per point')
+                          : (isAr ? 'ريال ربح لكل نقطة' : 'Profit riyals per point'),
+                      suffixText: isAr ? 'ريال/نقطة' : 'SAR/pt',
+                      border: const OutlineInputBorder(),
+                    ),
+                  )
+                else if (_pointsSource == 'invoice_count')
+                  TextField(
+                    controller: _pointsPerInvoiceCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(
+                      labelText: isAr ? 'نقاط لكل فاتورة' : 'Points per invoice',
+                      suffixText: isAr ? 'نقطة/فاتورة' : 'pts/inv',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+              ],
             ),
           ),
           const SizedBox(height: 20),
@@ -1768,14 +1902,57 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                   ),
                 ),
                 const Divider(height: 1),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isAr
+                            ? 'اختر الفترة لضبط صلاحياتها'
+                            : 'Select period to configure',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          for (final entry in [
+                            ('today', isAr ? 'اليوم'    : 'Today'),
+                            ('week',  isAr ? 'الأسبوع'  : 'Week'),
+                            ('month', isAr ? 'الشهر'    : 'Month'),
+                          ])
+                            Padding(
+                              padding: const EdgeInsets.only(left: 8),
+                              child: ChoiceChip(
+                                label: Text(entry.$2),
+                                selected: _selectedVisibilityPeriod == entry.$1,
+                                selectedColor:
+                                    AppColors.primaryGold.withValues(alpha: 0.2),
+                                checkmarkColor: AppColors.deepGold,
+                                onSelected: (_) => setState(
+                                  () => _selectedVisibilityPeriod = entry.$1,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
                 _buildVisibilityTile(
                   isAr ? 'المبالغ النقدية' : 'Cash Amounts',
                   isAr
                       ? 'مبالغ المبيعات والمشتريات لكل موظف'
                       : 'Per-employee sales & purchase amounts',
                   Icons.attach_money_rounded,
-                  _amountsVisibility,
-                  (v) => setState(() => _amountsVisibility = v),
+                  _periodVisibility[_selectedVisibilityPeriod]!['amounts']!,
+                  (v) => setState(
+                    () => _periodVisibility[_selectedVisibilityPeriod]!['amounts'] = v,
+                  ),
                   isAr,
                 ),
                 const Divider(height: 1),
@@ -1785,8 +1962,10 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                       ? 'مقياس النقاط وإجماليها في ملخص الفريق'
                       : 'Points metric tab and totals',
                   Icons.stars_rounded,
-                  _pointsVisibility,
-                  (v) => setState(() => _pointsVisibility = v),
+                  _periodVisibility[_selectedVisibilityPeriod]!['points']!,
+                  (v) => setState(
+                    () => _periodVisibility[_selectedVisibilityPeriod]!['points'] = v,
+                  ),
                   isAr,
                 ),
                 const Divider(height: 1),
@@ -1796,8 +1975,10 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                       ? 'شريط نسبة مساهمة كل موظف من الإجمالي'
                       : 'Per-employee contribution bar',
                   Icons.bar_chart_rounded,
-                  _shareVisibility,
-                  (v) => setState(() => _shareVisibility = v),
+                  _periodVisibility[_selectedVisibilityPeriod]!['share']!,
+                  (v) => setState(
+                    () => _periodVisibility[_selectedVisibilityPeriod]!['share'] = v,
+                  ),
                   isAr,
                 ),
                 const Divider(height: 1),
@@ -1807,8 +1988,10 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                       ? 'بطاقة إجماليات المبيعات والنقاط للفترة'
                       : 'Total sales & points summary card',
                   Icons.summarize_rounded,
-                  _teamSummaryVisibility,
-                  (v) => setState(() => _teamSummaryVisibility = v),
+                  _periodVisibility[_selectedVisibilityPeriod]!['team_summary']!,
+                  (v) => setState(
+                    () => _periodVisibility[_selectedVisibilityPeriod]!['team_summary'] = v,
+                  ),
                   isAr,
                 ),
               ],
@@ -1994,6 +2177,31 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
         ],
       ),
     );
+  }
+
+  String _pointsSourceDescription(bool isAr) {
+    switch (_pointsSource) {
+      case 'profit_cash':
+        return isAr
+            ? 'النقاط = الربح النقدي للفاتورة ÷ قيمة الريال لكل نقطة'
+            : 'Points = invoice profit_cash ÷ riyals per point';
+      case 'sales_amount':
+        return isAr
+            ? 'النقاط = إجمالي الفاتورة ÷ قيمة الريال لكل نقطة'
+            : 'Points = invoice total ÷ riyals per point';
+      case 'invoice_count':
+        return isAr
+            ? 'النقاط = عدد الفواتير × نقاط لكل فاتورة'
+            : 'Points = invoice count × points per invoice';
+      case 'sold_weight':
+        return isAr
+            ? 'النقاط = الوزن المباع (جرام) × نقاط لكل جرام'
+            : 'Points = sold weight (g) × points per gram';
+      default:
+        return isAr
+            ? 'النقاط = الربح الوزني المعادل بالعيار الأساسي × نقاط لكل جرام'
+            : 'Points = main-karat-equivalent profit weight × points per gram';
+    }
   }
 
   String _fmt(DateTime dt) => DateFormat('dd/MM/yyyy', 'en').format(dt);
