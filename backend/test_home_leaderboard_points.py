@@ -4,6 +4,9 @@ from app import app
 from models import db, Employee, Invoice, InvoiceItem
 
 
+_MAIN_KARAT = 21.0  # matches _configured_main_karat_f() fallback in tests
+
+
 def _create_posted_sale(
     employee_id: int,
     *,
@@ -22,8 +25,11 @@ def _create_posted_sale(
         profit_gold=float(earned_main_karat_g),
     )
     db.session.add(inv)
-    db.session.flush()  # ensure inv.id
+    db.session.flush()
 
+    # profit_weight = earned_main_karat_g × main_karat / item_karat
+    # so that: profit_weight × karat / main_karat == earned_main_karat_g  (Zero Diff)
+    profit_weight = float(earned_main_karat_g) * _MAIN_KARAT / float(karat)
     db.session.add(
         InvoiceItem(
             invoice_id=inv.id,
@@ -34,6 +40,7 @@ def _create_posted_sale(
             price=0.0,
             karat=float(karat),
             weight=float(weight_g),
+            profit_weight=profit_weight,
             wage=0.0,
             net=0.0,
             tax=0.0,
@@ -48,10 +55,11 @@ def _create_posted_purchase(
     *,
     invoice_type_id: int,
     earned_main_karat_g: float,
+    karat: float = 21.0,
 ) -> Invoice:
     inv = Invoice(
         invoice_type_id=invoice_type_id,
-        invoice_type='شراء',
+        invoice_type='شراء من عميل',
         employee_id=employee_id,
         date=datetime.now(),
         total=0.0,
@@ -59,6 +67,22 @@ def _create_posted_purchase(
         profit_gold=float(earned_main_karat_g),
     )
     db.session.add(inv)
+    db.session.flush()
+
+    profit_weight = float(earned_main_karat_g) * _MAIN_KARAT / float(karat)
+    db.session.add(
+        InvoiceItem(
+            invoice_id=inv.id,
+            item_id=None,
+            category_id=None,
+            name='manual',
+            quantity=1,
+            price=0.0,
+            karat=float(karat),
+            profit_weight=profit_weight,
+        )
+    )
+
     return inv
 
 

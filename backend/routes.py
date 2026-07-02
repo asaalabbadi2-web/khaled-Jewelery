@@ -22295,10 +22295,15 @@ def get_sales_race_config():
     config = {
         'enabled': True,
         'default_period': 'today',
+        'enabled_periods': ['today', 'week', 'month'],
         'points_per_gram': 10.0,
         'allow_fallback_to_latest_period': True,
         'show_invoice_count': True,
         'show_champion': True,
+        'amounts_visibility': 'all',
+        'points_visibility': 'all',
+        'share_visibility': 'all',
+        'team_summary_visibility': 'all',
         'weekly_sales_target_weight': float(
             getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0
         ),
@@ -22311,8 +22316,10 @@ def get_sales_race_config():
         try:
             parsed = json.loads(raw)
             if isinstance(parsed, dict):
-                for k in ('enabled', 'default_period', 'points_per_gram',
-                          'allow_fallback_to_latest_period', 'show_invoice_count', 'show_champion'):
+                for k in ('enabled', 'default_period', 'enabled_periods', 'points_per_gram',
+                          'allow_fallback_to_latest_period', 'show_invoice_count', 'show_champion',
+                          'amounts_visibility', 'points_visibility', 'share_visibility',
+                          'team_summary_visibility'):
                     if k in parsed:
                         config[k] = parsed[k]
         except Exception:
@@ -22330,10 +22337,15 @@ def update_sales_race_config():
     current = {
         'enabled': True,
         'default_period': 'today',
+        'enabled_periods': ['today', 'week', 'month'],
         'points_per_gram': 10.0,
         'allow_fallback_to_latest_period': True,
         'show_invoice_count': True,
         'show_champion': True,
+        'amounts_visibility': 'all',
+        'points_visibility': 'all',
+        'share_visibility': 'all',
+        'team_summary_visibility': 'all',
     }
     raw = getattr(settings_row, 'sales_race_settings', None)
     if raw:
@@ -22344,11 +22356,19 @@ def update_sales_race_config():
         except Exception:
             pass
 
+    def _vis(v):
+        return 'admin_only' if str(v).strip().lower() == 'admin_only' else 'all'
+
     if 'enabled' in data:
         current['enabled'] = bool(data['enabled'])
     if 'default_period' in data:
         p = str(data['default_period']).strip().lower()
-        current['default_period'] = p if p in {'today', 'week'} else 'today'
+        current['default_period'] = p if p in {'today', 'week', 'month'} else 'today'
+    if 'enabled_periods' in data:
+        raw_ep = data['enabled_periods']
+        if isinstance(raw_ep, list):
+            valid = [p for p in raw_ep if p in {'today', 'week', 'month'}]
+            current['enabled_periods'] = valid if valid else ['today']
     if 'points_per_gram' in data:
         try:
             current['points_per_gram'] = max(0.0, float(data['points_per_gram']))
@@ -22360,6 +22380,14 @@ def update_sales_race_config():
         current['show_invoice_count'] = bool(data['show_invoice_count'])
     if 'show_champion' in data:
         current['show_champion'] = bool(data['show_champion'])
+    if 'amounts_visibility' in data:
+        current['amounts_visibility'] = _vis(data['amounts_visibility'])
+    if 'points_visibility' in data:
+        current['points_visibility'] = _vis(data['points_visibility'])
+    if 'share_visibility' in data:
+        current['share_visibility'] = _vis(data['share_visibility'])
+    if 'team_summary_visibility' in data:
+        current['team_summary_visibility'] = _vis(data['team_summary_visibility'])
     if 'weekly_sales_target_weight' in data:
         try:
             settings_row.weekly_sales_target_weight = max(
@@ -22405,13 +22433,15 @@ def get_home_leaderboard():
     sales_race_config = {
         'enabled': True,
         'default_period': 'today',
+        'enabled_periods': ['today', 'week', 'month'],
         'points_per_gram': 10.0,
         'allow_fallback_to_latest_period': True,
         'show_invoice_count': True,
-        'show_sales_amount_per_employee': False,
         'show_champion': True,
-        'show_total_cash_to_all_users': True,
-        'show_total_profit_to_all_users': False,
+        'amounts_visibility': 'all',
+        'points_visibility': 'all',
+        'share_visibility': 'all',
+        'team_summary_visibility': 'all',
     }
     # Use _get_settings_singleton to ensure the canonical settings row is read
     # (not an arbitrary first() row which may differ in multi-row databases).
@@ -22428,10 +22458,35 @@ def get_home_leaderboard():
         except Exception:
             pass
 
+    # ── Compute caller identity early (needed for visibility checks) ──────────
+    _lb_user = getattr(g, 'current_user', None)
+    _can_view_admin = bool(getattr(_lb_user, 'is_admin', False))
+    if not _can_view_admin and _lb_user is not None:
+        try:
+            _can_view_admin = bool(_lb_user.has_permission('reports.financial'))
+        except Exception:
+            _can_view_admin = False
+
+    # ── Visibility flags ──────────────────────────────────────────────────────
+    _enabled_periods = sales_race_config.get('enabled_periods') or ['today', 'week', 'month']
+    if not isinstance(_enabled_periods, list):
+        _enabled_periods = ['today', 'week', 'month']
+    _enabled_periods = [p for p in _enabled_periods if p in {'today', 'week', 'month'}]
+    if not _enabled_periods:
+        _enabled_periods = ['today']
+
+    can_view_amounts = _can_view_admin or sales_race_config.get('amounts_visibility', 'all') == 'all'
+    can_view_points  = _can_view_admin or sales_race_config.get('points_visibility',  'all') == 'all'
+    can_view_share   = _can_view_admin or sales_race_config.get('share_visibility',   'all') == 'all'
+    can_view_team_summary = _can_view_admin or sales_race_config.get('team_summary_visibility', 'all') == 'all'
+
     default_period = str(sales_race_config.get('default_period') or 'today').strip().lower()
     if default_period not in {'today', 'week', 'month'}:
         default_period = 'today'
-    if period not in {'today', 'week', 'month'}:
+    # If the default_period is not in enabled_periods, use the first enabled one.
+    if default_period not in _enabled_periods:
+        default_period = _enabled_periods[0]
+    if period not in _enabled_periods:
         period = default_period
 
     try:
@@ -22439,10 +22494,29 @@ def get_home_leaderboard():
     except Exception:
         points_per_gram = 10.0
 
-    if metric not in {'weight', 'count', 'points'}:
+    from metrics import MetricFactory
+    from points.models import PointRule
+    if metric not in MetricFactory.valid_names():
+        metric = 'weight'
+    # If points are restricted and caller lacks permission, fall back to weight.
+    if metric == 'points' and not can_view_points:
         metric = 'weight'
 
-    leaderboard_invoice_types = ['بيع', 'شراء من عميل'] if metric == 'points' else ['بيع']
+    _point_rules: list[PointRule] = []
+    for _r in (sales_race_config.get('point_rules') or []):
+        if not isinstance(_r, dict):
+            continue
+        try:
+            _point_rules.append(PointRule(
+                category_id=_r.get('category_id'),
+                karat=float(_r['karat']) if _r.get('karat') is not None else None,
+                multiplier=float(_r.get('multiplier', points_per_gram)),
+            ))
+        except (ValueError, TypeError, KeyError):
+            pass
+
+    metric_obj = MetricFactory.create(metric, points_per_gram, rules=_point_rules)
+    leaderboard_invoice_types = metric_obj.invoice_types
 
     def _resolve_period_bounds(period_value: str, anchor_dt: datetime | None = None):
         ref = anchor_dt or datetime.now()
@@ -22499,191 +22573,16 @@ def get_home_leaderboard():
             effective_source_date = latest_activity_dt.date().isoformat()
             is_fallback = True
 
-    # Sales only, posted only.
-    # NOTE: For `metric=points`, we can infer employee attribution from `posted_by`
-    # when `employee_id` is missing, so we don't filter it out at the DB level.
+    # NOTE: For `metric=points`, employee attribution uses posted_by fallback,
+    # so employee_id is not required at the DB level.
     base_filters = [
         Invoice.is_posted.is_(True),
         Invoice.date >= start_dt,
         Invoice.date < end_dt,
+        Invoice.invoice_type.in_(metric_obj.invoice_types),
     ]
-    if metric == 'points':
-        base_filters.append(Invoice.invoice_type.in_(leaderboard_invoice_types))
-    else:
-        base_filters.append(Invoice.invoice_type == 'بيع')
-
-    if metric != 'points':
-        # For weight/count leaderboards we rely on SQL group_by employee_id.
+    if metric_obj.require_employee_id:
         base_filters.append(Invoice.employee_id.isnot(None))
-
-    rows = []
-    employee_points_map = {}
-    employee_points_sales_map = {}
-    employee_points_purchase_map = {}
-    employee_profit_gold_map = {}
-    employee_profit_gold_sales_map = {}
-    employee_profit_gold_purchase_map = {}
-    employee_sales_map = {}
-    employee_purchase_map = {}
-    points_invoices = None
-    if metric == 'points':
-        invoices = Invoice.query.filter(*base_filters).all()
-        points_invoices = invoices
-
-        def _normalize_key(value: str) -> str:
-            return (value or '').strip().lower()
-
-        def _infer_employee_id(inv: Invoice) -> int | None:
-            try:
-                if getattr(inv, 'employee_id', None) not in (None, '', 0, '0', False):
-                    return int(inv.employee_id)
-            except Exception:
-                pass
-
-            posted_by = _normalize_key(str(getattr(inv, 'posted_by', '') or ''))
-            if not posted_by:
-                return None
-
-            # 1) Match AppUser.username
-            try:
-                app_user = AppUser.query.filter(
-                    func.lower(func.trim(AppUser.username)) == posted_by
-                ).first()
-                if app_user and getattr(app_user, 'employee_id', None):
-                    return int(app_user.employee_id)
-            except Exception:
-                pass
-
-            # 2) Match AppUser.full_name
-            try:
-                app_user = AppUser.query.filter(
-                    func.lower(func.trim(func.coalesce(AppUser.full_name, ''))) == posted_by
-                ).first()
-                if app_user and getattr(app_user, 'employee_id', None):
-                    return int(app_user.employee_id)
-            except Exception:
-                pass
-
-            # 3) Match Employee.name directly
-            try:
-                emp = Employee.query.filter(
-                    func.lower(func.trim(func.coalesce(Employee.name, ''))) == posted_by
-                ).first()
-                if emp:
-                    return int(emp.id)
-            except Exception:
-                pass
-
-            return None
-
-        def _infer_actor(inv: Invoice) -> tuple[int, str] | None:
-            emp_id = _infer_employee_id(inv)
-            if emp_id:
-                try:
-                    emp = Employee.query.get(emp_id)
-                    if emp and (emp.name or '').strip():
-                        return int(emp_id), (emp.name or '').strip()
-                except Exception:
-                    pass
-                return int(emp_id), f'Employee {int(emp_id)}'
-
-            posted_by_raw = str(getattr(inv, 'posted_by', '') or '').strip()
-            if not posted_by_raw:
-                return None
-
-            # Deterministic negative id based on string hash (keeps JSON stable).
-            try:
-                import zlib
-
-                actor_id = -int(zlib.adler32(posted_by_raw.encode('utf-8')) or 1)
-            except Exception:
-                actor_id = -1
-            return actor_id, posted_by_raw
-
-        counts_by_employee = {}
-        actor_name_map = {}
-        for inv in invoices:
-            actor = _infer_actor(inv)
-            if not actor:
-                continue
-            actor_id, actor_name = actor
-            actor_name_map[int(actor_id)] = actor_name
-
-            counts_by_employee[int(actor_id)] = counts_by_employee.get(int(actor_id), 0) + 1
-            invoice_total = float(getattr(inv, 'total', 0.0) or 0.0)
-            earned_main = max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
-            is_purchase = str(getattr(inv, 'invoice_type', '') or '').strip() == 'شراء من عميل'
-            if is_purchase:
-                employee_purchase_map[int(actor_id)] = employee_purchase_map.get(int(actor_id), 0.0) + invoice_total
-                employee_profit_gold_purchase_map[int(actor_id)] = (
-                    employee_profit_gold_purchase_map.get(int(actor_id), 0.0) + earned_main
-                )
-            else:
-                employee_sales_map[int(actor_id)] = employee_sales_map.get(int(actor_id), 0.0) + invoice_total
-                employee_profit_gold_sales_map[int(actor_id)] = (
-                    employee_profit_gold_sales_map.get(int(actor_id), 0.0) + earned_main
-                )
-
-            employee_profit_gold_map[int(actor_id)] = (
-                employee_profit_gold_map.get(int(actor_id), 0.0) + earned_main
-            )
-
-        for actor_id, earned_main_total in employee_profit_gold_map.items():
-            employee_points_map[int(actor_id)] = max(
-                0,
-                int(round(float(earned_main_total) * points_per_gram)),
-            )
-        employee_points_sales_map = {
-            actor_id: max(0, int(round(float(v) * points_per_gram)))
-            for actor_id, v in employee_profit_gold_sales_map.items()
-        }
-        employee_points_purchase_map = {
-            actor_id: max(0, int(round(float(v) * points_per_gram)))
-            for actor_id, v in employee_profit_gold_purchase_map.items()
-        }
-
-        # Create a rows-like list so downstream logic stays consistent.
-        class _Row:
-            def __init__(self, employee_id, count, weight_sum):
-                self.employee_id = employee_id
-                self.count = count
-                self.weight_sum = weight_sum
-
-        rows = [_Row(actor_id, counts_by_employee.get(actor_id, 0), 0.0) for actor_id in counts_by_employee.keys()]
-    else:
-        rows = (
-            db.session.query(
-                Invoice.employee_id.label('employee_id'),
-                func.count(Invoice.id).label('count'),
-                func.coalesce(func.sum(Invoice.total_weight), 0.0).label('weight_sum'),
-                func.coalesce(func.sum(Invoice.total), 0.0).label('cash_sum'),
-                func.coalesce(func.sum(Invoice.profit_cash), 0.0).label('profit_sum'),
-            )
-            .filter(*base_filters)
-            .group_by(Invoice.employee_id)
-            .all()
-        )
-
-    employee_ids = [int(r.employee_id) for r in rows if getattr(r, 'employee_id', None) is not None]
-    name_map = {}
-    photo_map = {}
-    if employee_ids:
-        try:
-            emps = Employee.query.filter(Employee.id.in_(employee_ids)).all()
-            name_map  = {int(e.id): (e.name or '').strip() for e in emps}
-            photo_map = {int(e.id): getattr(e, 'photo', None) for e in emps}
-        except Exception:
-            name_map  = {}
-            photo_map = {}
-
-    # For points metric, we may have negative actor ids (fallback to posted_by).
-    if metric == 'points':
-        try:
-            for actor_id, actor_name in (locals().get('actor_name_map') or {}).items():
-                if actor_name and actor_id not in name_map:
-                    name_map[int(actor_id)] = str(actor_name).strip()
-        except Exception:
-            pass
 
     def _to_float(value, default=0.0):
         if value in (None, '', False):
@@ -22693,47 +22592,11 @@ def get_home_leaderboard():
         except Exception:
             return default
 
-    ranking_raw = []
-    for r in rows:
-        emp_id = int(r.employee_id)
-        count_value = int(getattr(r, 'count', 0) or 0)
-        weight_value = _to_float(getattr(r, 'weight_sum', 0.0), 0.0)
-        ranking_raw.append({
-            'id': emp_id,
-            'name': name_map.get(emp_id) or f'Employee {emp_id}',
-            'photo': photo_map.get(emp_id),
-            'count': count_value,
-            'weight': round(weight_value, 3),
-            'points': int(employee_points_map.get(emp_id, 0) or 0),
-            'sales_amount': round(
-                _to_float(
-                    employee_sales_map.get(emp_id, getattr(r, 'cash_sum', 0.0)),
-                    0.0,
-                ),
-                2,
-            ),
-            'purchase_amount': round(
-                _to_float(employee_purchase_map.get(emp_id, 0.0), 0.0),
-                2,
-            ),
-            'points_sales': int(employee_points_sales_map.get(emp_id, 0) or 0),
-            'points_purchase': int(employee_points_purchase_map.get(emp_id, 0) or 0),
-        })
+    ranking_raw, _metric_aux = metric_obj.collect(base_filters, points_per_gram)
+    metric_key = metric_obj.key
 
-    metric_key = 'weight_g'
-    if metric == 'count':
-        metric_key = 'count'
-    elif metric == 'points':
-        metric_key = 'points'
-
-    # Compute score + sort
     for it in ranking_raw:
-        if metric_key == 'count':
-            it['score'] = float(it['count'])
-        elif metric_key == 'points':
-            it['score'] = float(int(it.get('points') or 0))
-        else:
-            it['score'] = float(it['weight'])
+        it['score'] = metric_obj.extract_score(it)
 
     ranking_raw.sort(key=lambda x: (x.get('score', 0.0), x.get('count', 0)), reverse=True)
 
@@ -22785,20 +22648,23 @@ def get_home_leaderboard():
                     except Exception:
                         pass
 
-        ranking.append({
+        row_entry = {
             'id': it['id'],
             'name': it['name'],
             'photo': it.get('photo'),
             'count': int(it.get('count') or 0),
-            'score': round(score_value, 3 if metric_key == 'weight_g' else 0),
-            'sales_amount': round(_to_float(it.get('sales_amount', 0.0), 0.0), 2),
-            'purchase_amount': round(_to_float(it.get('purchase_amount', 0.0), 0.0), 2),
-            'points_sales': int(it.get('points_sales') or 0),
-            'points_purchase': int(it.get('points_purchase') or 0),
-            'share': round(float(share), 4),
+            'score': round(score_value, metric_obj.score_precision),
             'goal_target': goal_target,
-            'goal_progress': goal_progress,  # 0.0–1.0 أو null إن لم يُضبط هدف
-        })
+            'goal_progress': goal_progress,
+        }
+        if can_view_amounts:
+            row_entry['sales_amount'] = round(_to_float(it.get('sales_amount', 0.0), 0.0), 2)
+            row_entry['purchase_amount'] = round(_to_float(it.get('purchase_amount', 0.0), 0.0), 2)
+            row_entry['points_sales'] = int(it.get('points_sales') or 0)
+            row_entry['points_purchase'] = int(it.get('points_purchase') or 0)
+        if can_view_share:
+            row_entry['share'] = round(float(share), 4)
+        ranking.append(row_entry)
 
     champion = None
     if ranking and bool(sales_race_config.get('show_champion', True)):
@@ -22819,23 +22685,9 @@ def get_home_leaderboard():
     remaining_points = None
 
     if period in ('week', 'month'):
-        if metric == 'points':
-            invoices = points_invoices
-            if invoices is None:
-                invoices = Invoice.query.filter(*base_filters).all()
-
-            team_weight_main = 0.0
-            for inv in invoices:
-                team_weight_main += max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
-            team_weight_g = round(team_weight_main, 3)
-            team_points = int(round(team_weight_main * points_per_gram))
-        else:
-            team_weight_value = (
-                db.session.query(func.coalesce(func.sum(Invoice.total_weight), 0.0))
-                .filter(*base_filters)
-                .scalar()
-            )
-            team_weight_g = round(_to_float(team_weight_value, 0.0), 3)
+        team_weight_g, team_points = metric_obj.compute_team_weight(
+            base_filters, points_per_gram, _metric_aux
+        )
 
         if settings_row is None:
             try:
@@ -22878,13 +22730,14 @@ def get_home_leaderboard():
         'config': {
             'enabled': bool(sales_race_config.get('enabled', True)),
             'default_period': default_period,
+            'enabled_periods': _enabled_periods,
             'points_per_gram': points_per_gram,
             'allow_fallback_to_latest_period': bool(sales_race_config.get('allow_fallback_to_latest_period', True)),
             'show_invoice_count': bool(sales_race_config.get('show_invoice_count', True)),
-            'show_sales_amount_per_employee': True,
             'show_champion': bool(sales_race_config.get('show_champion', True)),
-            'show_total_cash_to_all_users': True,
-            'show_total_profit_to_all_users': False,
+            'amounts_visible': can_view_amounts,
+            'points_visible': can_view_points,
+            'share_visible': can_view_share,
         },
         'champion': champion,
         'ranking': ranking,
@@ -22901,18 +22754,10 @@ def get_home_leaderboard():
         'remaining_points': remaining_points,
     }
 
-    # Admin summary (only for admins / financial report viewers)
-    user = getattr(g, 'current_user', None)
-    can_view_admin = bool(getattr(user, 'is_admin', False))
-    if not can_view_admin and user is not None:
-        try:
-            can_view_admin = bool(user.has_permission('reports.financial'))
-        except Exception:
-            can_view_admin = False
-
-    # مبلغ المبيعات والمشتريات مرئي للجميع — الربح فقط للإداريين وأصحاب صلاحية reports.financial
-    can_view_total_cash = True
-    can_view_total_profit = can_view_admin
+    # Admin summary visibility is controlled by team_summary_visibility setting.
+    # Profit is always admin-only regardless of settings.
+    can_view_total_cash = can_view_team_summary
+    can_view_total_profit = _can_view_admin
 
     if can_view_total_cash or can_view_total_profit:
         # Aggregate across posted sales and purchases for the same period.

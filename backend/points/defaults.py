@@ -1,0 +1,1 @@
+DEFAULT_MULTIPLIER: float = 10.0

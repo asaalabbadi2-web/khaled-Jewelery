@@ -45,10 +45,15 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   // Config form state
   bool _enabled = true;
   String _defaultPeriod = 'today';
+  List<String> _enabledPeriods = ['today', 'week', 'month'];
   double _pointsPerGram = 10.0;
   bool _allowFallback = true;
   bool _showInvoiceCount = true;
   bool _showChampion = true;
+  String _amountsVisibility = 'all';
+  String _pointsVisibility = 'all';
+  String _shareVisibility = 'all';
+  String _teamSummaryVisibility = 'all';
   double _weeklyTarget = 2000.0;
   double _monthlyTarget = 8000.0;
 
@@ -117,16 +122,24 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
 
   void _applyConfig(Map<String, dynamic> cfg) {
     _enabled = cfg['enabled'] as bool? ?? true;
-    _defaultPeriod =
-        (cfg['default_period'] as String?)?.trim().toLowerCase() == 'week'
-        ? 'week'
-        : (cfg['default_period'] as String?)?.trim().toLowerCase() == 'month'
-            ? 'month'
-            : 'today';
+    final dp = (cfg['default_period'] as String?)?.trim().toLowerCase();
+    _defaultPeriod = dp == 'week' ? 'week' : dp == 'month' ? 'month' : 'today';
+    final rawPeriods = cfg['enabled_periods'];
+    if (rawPeriods is List) {
+      final valid = rawPeriods
+          .whereType<String>()
+          .where((p) => ['today', 'week', 'month'].contains(p))
+          .toList();
+      _enabledPeriods = valid.isNotEmpty ? valid : ['today'];
+    }
     _pointsPerGram = (cfg['points_per_gram'] as num?)?.toDouble() ?? 10.0;
     _allowFallback = cfg['allow_fallback_to_latest_period'] as bool? ?? true;
     _showInvoiceCount = cfg['show_invoice_count'] as bool? ?? true;
     _showChampion = cfg['show_champion'] as bool? ?? true;
+    _amountsVisibility = cfg['amounts_visibility'] as String? ?? 'all';
+    _pointsVisibility = cfg['points_visibility'] as String? ?? 'all';
+    _shareVisibility = cfg['share_visibility'] as String? ?? 'all';
+    _teamSummaryVisibility = cfg['team_summary_visibility'] as String? ?? 'all';
     _weeklyTarget =
         (cfg['weekly_sales_target_weight'] as num?)?.toDouble() ?? 2000.0;
     _monthlyTarget =
@@ -178,10 +191,15 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
       final saved = await widget.api.updateSalesRaceConfig({
         'enabled': _enabled,
         'default_period': _defaultPeriod,
+        'enabled_periods': _enabledPeriods,
         'points_per_gram': parsedPoints,
         'allow_fallback_to_latest_period': _allowFallback,
         'show_invoice_count': _showInvoiceCount,
         'show_champion': _showChampion,
+        'amounts_visibility': _amountsVisibility,
+        'points_visibility': _pointsVisibility,
+        'share_visibility': _shareVisibility,
+        'team_summary_visibility': _teamSummaryVisibility,
         'weekly_sales_target_weight': parsedTarget,
         'monthly_sales_target_weight': parsedMonthlyTarget,
       });
@@ -312,56 +330,67 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
   }
 
   Widget _buildPeriodAndMetricSelectors(bool isAr) {
+    // Read live config from last response; fall back to settings state.
+    final liveConfig = _data?['config'] as Map?;
+    final enabledPeriods = liveConfig != null
+        ? ((liveConfig['enabled_periods'] as List?)
+                ?.whereType<String>()
+                .toSet() ??
+            _enabledPeriods.toSet())
+        : _enabledPeriods.toSet();
+    final pointsVisible = liveConfig?['points_visible'] as bool? ?? true;
+
+    // Ensure selected period/metric are still valid after config change.
+    if (!enabledPeriods.contains(_period) && enabledPeriods.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _period = enabledPeriods.first);
+      });
+    }
+    if (_metric == 'points' && !pointsVisible) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) setState(() => _metric = 'weight');
+      });
+    }
+
+    final periodSegments = <ButtonSegment<String>>[
+      if (enabledPeriods.contains('today'))
+        ButtonSegment(value: 'today', label: Text(isAr ? 'اليوم' : 'Today')),
+      if (enabledPeriods.contains('week'))
+        ButtonSegment(value: 'week', label: Text(isAr ? 'الأسبوع' : 'Week')),
+      if (enabledPeriods.contains('month'))
+        ButtonSegment(value: 'month', label: Text(isAr ? 'الشهر' : 'Month')),
+    ];
+
     return Wrap(
       spacing: 12,
       runSpacing: 10,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        // Period
+        // Period — only show enabled periods
+        if (periodSegments.length >= 2)
+          SegmentedButton<String>(
+            segments: periodSegments,
+            selected: {enabledPeriods.contains(_period) ? _period : enabledPeriods.first},
+            onSelectionChanged: _loading
+                ? null
+                : (s) {
+                    final next = s.isNotEmpty ? s.first : _period;
+                    if (next == _period) return;
+                    setState(() => _period = next);
+                    _loadLeaderboard();
+                  },
+            showSelectedIcon: false,
+            style: _segmentedControlStyle(),
+          ),
+        // Metric — hide points tab if restricted
         SegmentedButton<String>(
           segments: [
-            ButtonSegment(
-              value: 'today',
-              label: Text(isAr ? 'اليوم' : 'Today'),
-            ),
-            ButtonSegment(
-              value: 'week',
-              label: Text(isAr ? 'الأسبوع' : 'Week'),
-            ),
-            ButtonSegment(
-              value: 'month',
-              label: Text(isAr ? 'الشهر' : 'Month'),
-            ),
+            ButtonSegment(value: 'weight', label: Text(isAr ? 'الوزن' : 'Weight')),
+            ButtonSegment(value: 'count', label: Text(isAr ? 'الفواتير' : 'Count')),
+            if (pointsVisible)
+              ButtonSegment(value: 'points', label: Text(isAr ? 'النقاط' : 'Points')),
           ],
-          selected: {_period},
-          onSelectionChanged: _loading
-              ? null
-              : (s) {
-                  final next = s.isNotEmpty ? s.first : _period;
-                  if (next == _period) return;
-                  setState(() => _period = next);
-                  _loadLeaderboard();
-                },
-          showSelectedIcon: false,
-          style: _segmentedControlStyle(),
-        ),
-        // Metric
-        SegmentedButton<String>(
-          segments: [
-            ButtonSegment(
-              value: 'weight',
-              label: Text(isAr ? 'الوزن' : 'Weight'),
-            ),
-            ButtonSegment(
-              value: 'count',
-              label: Text(isAr ? 'الفواتير' : 'Count'),
-            ),
-            ButtonSegment(
-              value: 'points',
-              label: Text(isAr ? 'النقاط' : 'Points'),
-            ),
-          ],
-          selected: {_metric},
+          selected: {(_metric == 'points' && !pointsVisible) ? 'weight' : _metric},
           onSelectionChanged: _loading
               ? null
               : (s) {
@@ -832,6 +861,8 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     final championName = (champion?['name'] ?? '').toString().trim();
     final currency = context.read<SettingsProvider>().currencySymbolText;
     final showInvoiceCount = config?['show_invoice_count'] != false;
+    final showAmounts = config?['amounts_visible'] as bool? ?? true;
+    final showShare = config?['share_visible'] as bool? ?? true;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;
@@ -1160,6 +1191,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                               fontWeight: FontWeight.w600,
                             ),
                           ),
+                          if (showAmounts) ...[
                           const SizedBox(height: 3),
                           Text(
                             isAr
@@ -1174,6 +1206,8 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                               fontWeight: FontWeight.w700,
                             ),
                           ),
+                          ],
+                          if (showShare) ...[
                           const SizedBox(height: 6),
                           ClipRRect(
                             borderRadius: BorderRadius.circular(999),
@@ -1230,6 +1264,7 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                               ),
                             ),
                           ),
+                          ],
                         ],
                       ),
                     ),
@@ -1646,6 +1681,139 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
               ],
             ),
           ),
+          const SizedBox(height: 20),
+          _buildSectionHeader(
+            isAr ? 'صلاحيات رؤية البيانات' : 'Data Visibility',
+            Icons.lock_person_rounded,
+          ),
+          const SizedBox(height: 8),
+          _card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Enabled periods
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        isAr ? 'الفترات الظاهرة في اللوحة' : 'Visible Period Tabs',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        isAr
+                            ? 'يجب أن تكون فترة واحدة على الأقل مفعّلة'
+                            : 'At least one period must remain enabled',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.55),
+                            ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        children: [
+                          FilterChip(
+                            label: Text(isAr ? 'اليوم' : 'Today'),
+                            selected: _enabledPeriods.contains('today'),
+                            selectedColor: AppColors.primaryGold.withValues(alpha: 0.2),
+                            checkmarkColor: AppColors.deepGold,
+                            onSelected: (v) => setState(() {
+                              if (v) {
+                                _enabledPeriods = [..._enabledPeriods, 'today'];
+                              } else if (_enabledPeriods.length > 1) {
+                                _enabledPeriods = _enabledPeriods
+                                    .where((p) => p != 'today')
+                                    .toList();
+                              }
+                            }),
+                          ),
+                          FilterChip(
+                            label: Text(isAr ? 'الأسبوع' : 'Week'),
+                            selected: _enabledPeriods.contains('week'),
+                            selectedColor: AppColors.primaryGold.withValues(alpha: 0.2),
+                            checkmarkColor: AppColors.deepGold,
+                            onSelected: (v) => setState(() {
+                              if (v) {
+                                _enabledPeriods = [..._enabledPeriods, 'week'];
+                              } else if (_enabledPeriods.length > 1) {
+                                _enabledPeriods = _enabledPeriods
+                                    .where((p) => p != 'week')
+                                    .toList();
+                              }
+                            }),
+                          ),
+                          FilterChip(
+                            label: Text(isAr ? 'الشهر' : 'Month'),
+                            selected: _enabledPeriods.contains('month'),
+                            selectedColor: AppColors.primaryGold.withValues(alpha: 0.2),
+                            checkmarkColor: AppColors.deepGold,
+                            onSelected: (v) => setState(() {
+                              if (v) {
+                                _enabledPeriods = [..._enabledPeriods, 'month'];
+                              } else if (_enabledPeriods.length > 1) {
+                                _enabledPeriods = _enabledPeriods
+                                    .where((p) => p != 'month')
+                                    .toList();
+                              }
+                            }),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                _buildVisibilityTile(
+                  isAr ? 'المبالغ النقدية' : 'Cash Amounts',
+                  isAr
+                      ? 'مبالغ المبيعات والمشتريات لكل موظف'
+                      : 'Per-employee sales & purchase amounts',
+                  Icons.attach_money_rounded,
+                  _amountsVisibility,
+                  (v) => setState(() => _amountsVisibility = v),
+                  isAr,
+                ),
+                const Divider(height: 1),
+                _buildVisibilityTile(
+                  isAr ? 'النقاط' : 'Points',
+                  isAr
+                      ? 'مقياس النقاط وإجماليها في ملخص الفريق'
+                      : 'Points metric tab and totals',
+                  Icons.stars_rounded,
+                  _pointsVisibility,
+                  (v) => setState(() => _pointsVisibility = v),
+                  isAr,
+                ),
+                const Divider(height: 1),
+                _buildVisibilityTile(
+                  isAr ? 'نسبة المشاركة' : 'Share Percentage',
+                  isAr
+                      ? 'شريط نسبة مساهمة كل موظف من الإجمالي'
+                      : 'Per-employee contribution bar',
+                  Icons.bar_chart_rounded,
+                  _shareVisibility,
+                  (v) => setState(() => _shareVisibility = v),
+                  isAr,
+                ),
+                const Divider(height: 1),
+                _buildVisibilityTile(
+                  isAr ? 'ملخص الفريق' : 'Team Summary',
+                  isAr
+                      ? 'بطاقة إجماليات المبيعات والنقاط للفترة'
+                      : 'Total sales & points summary card',
+                  Icons.summarize_rounded,
+                  _teamSummaryVisibility,
+                  (v) => setState(() => _teamSummaryVisibility = v),
+                  isAr,
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 32),
           SizedBox(
             width: double.infinity,
@@ -1740,6 +1908,46 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
         AppColors.primaryGold.withValues(alpha: 0.08),
       ),
       elevation: WidgetStateProperty.all(0),
+    );
+  }
+
+  Widget _buildVisibilityTile(
+    String title,
+    String subtitle,
+    IconData icon,
+    String value,
+    ValueChanged<String> onChanged,
+    bool isAr,
+  ) {
+    return ListTile(
+      leading: Icon(icon, color: AppColors.primaryGold, size: 22),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+      subtitle: Text(subtitle),
+      trailing: DropdownButtonHideUnderline(
+        child: DropdownButton<String>(
+          value: value,
+          borderRadius: BorderRadius.circular(12),
+          items: [
+            DropdownMenuItem(
+              value: 'all',
+              child: Text(
+                isAr ? 'للجميع' : 'Everyone',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+            DropdownMenuItem(
+              value: 'admin_only',
+              child: Text(
+                isAr ? 'المسؤول فقط' : 'Admin only',
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          ],
+          onChanged: (v) {
+            if (v != null) onChanged(v);
+          },
+        ),
+      ),
     );
   }
 
