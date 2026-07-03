@@ -22501,7 +22501,8 @@ def get_home_leaderboard():
 
     if settings_row and getattr(settings_row, 'sales_race_settings', None):
         try:
-            parsed_sales_race = json.loads(settings_row.sales_race_settings)
+            _raw_src = settings_row.sales_race_settings
+            parsed_sales_race = _raw_src if isinstance(_raw_src, dict) else json.loads(_raw_src)
             if isinstance(parsed_sales_race, dict):
                 sales_race_config.update(parsed_sales_race)
         except Exception:
