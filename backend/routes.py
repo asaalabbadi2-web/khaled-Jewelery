@@ -22480,24 +22480,27 @@ def debug_sales_race_db():
     try:
         from sqlalchemy import text as _t
         with db.engine.connect() as _conn:
-            rows = _conn.execute(_t(
+            result = _conn.execute(_t(
                 'SELECT id, sales_race_settings, weekly_sales_target_weight,'
                 ' monthly_sales_target_weight FROM settings ORDER BY id'
-            )).fetchall()
+            ))
+            col_names = list(result.keys())
+            raw_rows = result.fetchall()
+        rows_out = []
+        for r in raw_rows:
+            rd = dict(zip(col_names, tuple(r)))
+            sr = rd.get('sales_race_settings')
+            rows_out.append({
+                'id': rd.get('id'),
+                'sales_race_settings_null': sr is None,
+                'sales_race_settings_snippet': (sr or '')[:150],
+                'weekly_target': rd.get('weekly_sales_target_weight'),
+                'monthly_target': rd.get('monthly_sales_target_weight'),
+            })
         return jsonify({
-            'engine': str(db.engine.url).replace(
-                db.engine.url.password or '', '***'
-            ) if db.engine.url.password else str(db.engine.url),
-            'rows': [
-                {
-                    'id': r[0],
-                    'sales_race_settings_null': r[1] is None,
-                    'sales_race_settings_snippet': (r[1] or '')[:120],
-                    'weekly_target': r[2],
-                    'monthly_target': r[3],
-                }
-                for r in rows
-            ],
+            'engine_dialect': db.engine.dialect.name,
+            'row_count': len(rows_out),
+            'rows': rows_out,
         })
     except Exception as exc:
         return jsonify({'error': str(exc)}), 500
