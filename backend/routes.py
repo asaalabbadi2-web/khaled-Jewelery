@@ -22479,24 +22479,21 @@ def debug_sales_race_db():
     """Diagnostic: raw SQL read of settings table — for production troubleshooting."""
     try:
         from sqlalchemy import text as _t
+        rows_out = []
         with db.engine.connect() as _conn:
             result = _conn.execute(_t(
                 'SELECT id, sales_race_settings, weekly_sales_target_weight,'
                 ' monthly_sales_target_weight FROM settings ORDER BY id'
             ))
-            col_names = list(result.keys())
-            raw_rows = result.fetchall()
-        rows_out = []
-        for r in raw_rows:
-            rd = dict(zip(col_names, tuple(r)))
-            sr = rd.get('sales_race_settings')
-            rows_out.append({
-                'id': rd.get('id'),
-                'sales_race_settings_null': sr is None,
-                'sales_race_settings_snippet': (sr or '')[:150],
-                'weekly_target': rd.get('weekly_sales_target_weight'),
-                'monthly_target': rd.get('monthly_sales_target_weight'),
-            })
+            for r in result.mappings():
+                sr = r.get('sales_race_settings')
+                rows_out.append({
+                    'id': r.get('id'),
+                    'sales_race_settings_null': sr is None,
+                    'sales_race_settings_snippet': (sr or '')[:150],
+                    'weekly_target': r.get('weekly_sales_target_weight'),
+                    'monthly_target': r.get('monthly_sales_target_weight'),
+                })
         return jsonify({
             'engine_dialect': db.engine.dialect.name,
             'row_count': len(rows_out),
