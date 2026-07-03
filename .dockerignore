@@ -1,17 +1,45 @@
-# Exclude everything by default, then whitelist what we need
-**
+# Git
+.git/
+.gitignore
 
-# Allow backend source
-!backend/
-!backend/**
+# Flutter build artifacts (largest offender — 3-8 GB locally)
+frontend/build
+frontend/.dart_tool
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
 
-# But still exclude backend's own junk
-backend/__pycache__/
-backend/**/__pycache__/
-backend/*.pyc
-backend/**/*.pyc
+# Python artifacts
+__pycache__/
+**/__pycache__/
+*.pyc
+**/*.pyc
 backend/venv/
 backend/.venv/
 backend/reports/
-backend/*.db
-backend/*.db.backup*
+
+# IDE
+.vscode/
+.idea/
+
+# Database / backup files
+*.db
+*.db.backup*
+*.db.damaged*
+*.sql
+*.dump
+*.tar.gz
+*.zip
+*.bak
+backups/
+data/
+
+# Large media / office files
+*.mov
+*.mp4
+*.avi
+*.xls
+*.xlsx
+
+# OS
+.DS_Store
+Thumbs.db
