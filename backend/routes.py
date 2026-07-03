@@ -22442,26 +22442,15 @@ def update_sales_race_config():
         except Exception:
             pass
 
-    _new_settings_json = json.dumps(current, ensure_ascii=False)
+    from sqlalchemy.orm.attributes import flag_modified as _flag_modified
+    settings_row.sales_race_settings = json.dumps(current, ensure_ascii=False)
+    _flag_modified(settings_row, 'sales_race_settings')
 
-    # Commit direct-column changes (weekly/monthly target weights) via ORM.
     try:
         db.session.commit()
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': 'commit_failed', 'message': str(e)}), 500
-
-    # Write the JSON blob via a dedicated engine connection so SQLAlchemy's
-    # session/unit-of-work cache cannot interfere (works on both SQLite and PostgreSQL).
-    try:
-        from sqlalchemy import text as _sa_text
-        with db.engine.begin() as _conn:
-            _conn.execute(
-                _sa_text('UPDATE settings SET sales_race_settings = :v WHERE id = :id'),
-                {'v': _new_settings_json, 'id': settings_row.id},
-            )
-    except Exception as _exc:
-        return jsonify({'error': 'json_write_failed', 'message': str(_exc)}), 500
 
     result = dict(current)
     result['weekly_sales_target_weight'] = float(
@@ -22471,32 +22460,6 @@ def update_sales_race_config():
         getattr(settings_row, 'monthly_sales_target_weight', 8000.0) or 8000.0
     )
     return jsonify(result)
-
-
-@api.route('/sales-race/config/db-debug', methods=['GET'])
-@require_permission('system.settings')
-def debug_sales_race_db():
-    """Diagnostic: raw SQL read of settings table — for production troubleshooting."""
-    try:
-        from models import Settings as _S
-        _all = _S.query.order_by(_S.id).all()
-        rows_out = []
-        for s in _all:
-            sr = getattr(s, 'sales_race_settings', None)
-            rows_out.append({
-                'id': s.id,
-                'sales_race_settings_null': sr is None,
-                'sales_race_settings_snippet': (sr or '')[:200],
-                'weekly_target': getattr(s, 'weekly_sales_target_weight', None),
-                'monthly_target': getattr(s, 'monthly_sales_target_weight', None),
-            })
-        return jsonify({
-            'engine_dialect': db.engine.dialect.name,
-            'row_count': len(rows_out),
-            'rows': rows_out,
-        })
-    except Exception as exc:
-        return jsonify({'error': str(exc)}), 500
 
 
 @api.route('/home/leaderboard', methods=['GET'])
