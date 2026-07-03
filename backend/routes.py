@@ -22320,7 +22320,7 @@ def get_sales_race_config():
     raw = getattr(settings_row, 'sales_race_settings', None)
     if raw:
         try:
-            parsed = json.loads(raw)
+            parsed = raw if isinstance(raw, dict) else json.loads(raw)
             if isinstance(parsed, dict):
                 for k in ('enabled', 'default_period', 'enabled_periods', 'points_per_gram',
                           'points_source', 'cash_amount_per_point', 'points_per_invoice',
@@ -22363,7 +22363,7 @@ def update_sales_race_config():
     raw = getattr(settings_row, 'sales_race_settings', None)
     if raw:
         try:
-            parsed = json.loads(raw)
+            parsed = raw if isinstance(raw, dict) else json.loads(raw)
             if isinstance(parsed, dict):
                 current.update(parsed)
         except Exception:
@@ -22448,8 +22448,7 @@ def update_sales_race_config():
     _row_id = settings_row.id
 
     from sqlalchemy.orm.attributes import flag_modified as _flag_modified
-    _expected_json = json.dumps(current, ensure_ascii=False)
-    settings_row.sales_race_settings = _expected_json
+    settings_row.sales_race_settings = current
     _flag_modified(settings_row, 'sales_race_settings')
 
     try:
