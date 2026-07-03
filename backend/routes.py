@@ -22442,6 +22442,11 @@ def update_sales_race_config():
         except Exception:
             pass
 
+    # Read values we need in the response BEFORE commit (attributes expire after commit).
+    _weekly = float(getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0)
+    _monthly = float(getattr(settings_row, 'monthly_sales_target_weight', 8000.0) or 8000.0)
+    _row_id = settings_row.id
+
     from sqlalchemy.orm.attributes import flag_modified as _flag_modified
     _expected_json = json.dumps(current, ensure_ascii=False)
     settings_row.sales_race_settings = _expected_json
@@ -22453,12 +22458,11 @@ def update_sales_race_config():
         db.session.rollback()
         return jsonify({'error': 'commit_failed', 'message': str(e)}), 500
 
-    # Verify the write actually landed — read back via a fresh independent session
-    # so the ORM cache cannot mask a failed write (critical for PostgreSQL multi-worker).
+    # Verify the write landed — fresh independent session bypasses ORM cache.
     try:
         from sqlalchemy.orm import Session as _VerifySession
         with _VerifySession(db.engine) as _vs:
-            _saved = _vs.query(Settings).filter_by(id=settings_row.id).first()
+            _saved = _vs.query(Settings).filter_by(id=_row_id).first()
             _actual = _saved.sales_race_settings if _saved else None
     except Exception:
         _actual = _expected_json  # skip verification on error
@@ -22472,12 +22476,8 @@ def update_sales_race_config():
         }), 500
 
     result = dict(current)
-    result['weekly_sales_target_weight'] = float(
-        getattr(settings_row, 'weekly_sales_target_weight', 2000.0) or 2000.0
-    )
-    result['monthly_sales_target_weight'] = float(
-        getattr(settings_row, 'monthly_sales_target_weight', 8000.0) or 8000.0
-    )
+    result['weekly_sales_target_weight'] = _weekly
+    result['monthly_sales_target_weight'] = _monthly
     return jsonify(result)
 
 
