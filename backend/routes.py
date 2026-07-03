@@ -22443,25 +22443,25 @@ def update_sales_race_config():
             pass
 
     _new_settings_json = json.dumps(current, ensure_ascii=False)
-    try:
-        from sqlalchemy import text as _sa_text
-        db.session.execute(
-            _sa_text('UPDATE settings SET sales_race_settings = :v WHERE id = :id'),
-            {'v': _new_settings_json, 'id': settings_row.id},
-        )
-    except Exception:
-        settings_row.sales_race_settings = _new_settings_json
-        try:
-            from sqlalchemy.orm import flag_modified as _flag_modified
-            _flag_modified(settings_row, 'sales_race_settings')
-        except Exception:
-            pass
 
+    # Commit direct-column changes (weekly/monthly target weights) via ORM.
     try:
         db.session.commit()
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': 'commit_failed', 'message': str(e)}), 500
+
+    # Write the JSON blob via a dedicated engine connection so SQLAlchemy's
+    # session/unit-of-work cache cannot interfere (works on both SQLite and PostgreSQL).
+    try:
+        from sqlalchemy import text as _sa_text
+        with db.engine.begin() as _conn:
+            _conn.execute(
+                _sa_text('UPDATE settings SET sales_race_settings = :v WHERE id = :id'),
+                {'v': _new_settings_json, 'id': settings_row.id},
+            )
+    except Exception as _exc:
+        return jsonify({'error': 'json_write_failed', 'message': str(_exc)}), 500
 
     result = dict(current)
     result['weekly_sales_target_weight'] = float(
