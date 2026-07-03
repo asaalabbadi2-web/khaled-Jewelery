@@ -22338,6 +22338,14 @@ def get_sales_race_config():
 @require_permission('system.settings')
 def update_sales_race_config():
     """Save sales race configuration (admin only)."""
+    try:
+        return _update_sales_race_config_impl()
+    except Exception as _top_exc:
+        import traceback as _tb
+        return jsonify({'error': 'unhandled', 'trace': _tb.format_exc()[-1000:]}), 500
+
+
+def _update_sales_race_config_impl():
     data = request.get_json(silent=True) or {}
     settings_row = _get_settings_singleton(create_if_missing=True)
 
