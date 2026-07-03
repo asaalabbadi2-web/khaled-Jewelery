@@ -22443,7 +22443,8 @@ def update_sales_race_config():
             pass
 
     from sqlalchemy.orm.attributes import flag_modified as _flag_modified
-    settings_row.sales_race_settings = json.dumps(current, ensure_ascii=False)
+    _expected_json = json.dumps(current, ensure_ascii=False)
+    settings_row.sales_race_settings = _expected_json
     _flag_modified(settings_row, 'sales_race_settings')
 
     try:
@@ -22451,6 +22452,24 @@ def update_sales_race_config():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': 'commit_failed', 'message': str(e)}), 500
+
+    # Verify the write actually landed — read back via a fresh independent session
+    # so the ORM cache cannot mask a failed write (critical for PostgreSQL multi-worker).
+    try:
+        from sqlalchemy.orm import Session as _VerifySession
+        with _VerifySession(db.engine) as _vs:
+            _saved = _vs.query(Settings).filter_by(id=settings_row.id).first()
+            _actual = _saved.sales_race_settings if _saved else None
+    except Exception:
+        _actual = _expected_json  # skip verification on error
+
+    if _actual != _expected_json:
+        return jsonify({
+            'error': 'verify_failed',
+            'detail': 'commit succeeded but DB returned unexpected value',
+            'expected_snippet': _expected_json[:120],
+            'actual_snippet': (_actual or '')[:120],
+        }), 500
 
     result = dict(current)
     result['weekly_sales_target_weight'] = float(
