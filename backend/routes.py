@@ -22448,7 +22448,7 @@ def update_sales_race_config():
     _row_id = settings_row.id
 
     from sqlalchemy.orm.attributes import flag_modified as _flag_modified
-    settings_row.sales_race_settings = current
+    settings_row.sales_race_settings = json.dumps(current, ensure_ascii=False)
     _flag_modified(settings_row, 'sales_race_settings')
 
     try:
