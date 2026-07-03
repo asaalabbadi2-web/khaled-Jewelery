@@ -22338,14 +22338,6 @@ def get_sales_race_config():
 @require_permission('system.settings')
 def update_sales_race_config():
     """Save sales race configuration (admin only)."""
-    try:
-        return _update_sales_race_config_impl()
-    except Exception as _top_exc:
-        import traceback as _tb
-        return jsonify({'error': 'unhandled', 'trace': _tb.format_exc()[-1000:]}), 500
-
-
-def _update_sales_race_config_impl():
     data = request.get_json(silent=True) or {}
     settings_row = _get_settings_singleton(create_if_missing=True)
 
@@ -22465,23 +22457,6 @@ def _update_sales_race_config_impl():
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': 'commit_failed', 'message': str(e)}), 500
-
-    # Verify the write landed — fresh independent session bypasses ORM cache.
-    try:
-        from sqlalchemy.orm import Session as _VerifySession
-        with _VerifySession(db.engine) as _vs:
-            _saved = _vs.query(Settings).filter_by(id=_row_id).first()
-            _actual = _saved.sales_race_settings if _saved else None
-    except Exception:
-        _actual = _expected_json  # skip verification on error
-
-    if _actual != _expected_json:
-        return jsonify({
-            'error': 'verify_failed',
-            'detail': 'commit succeeded but DB returned unexpected value',
-            'expected_snippet': _expected_json[:120],
-            'actual_snippet': (_actual or '')[:120],
-        }), 500
 
     result = dict(current)
     result['weekly_sales_target_weight'] = _weekly
