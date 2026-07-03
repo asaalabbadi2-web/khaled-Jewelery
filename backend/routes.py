@@ -22473,6 +22473,36 @@ def update_sales_race_config():
     return jsonify(result)
 
 
+@api.route('/sales-race/config/db-debug', methods=['GET'])
+@require_permission('system.settings')
+def debug_sales_race_db():
+    """Diagnostic: raw SQL read of settings table — for production troubleshooting."""
+    try:
+        from sqlalchemy import text as _t
+        with db.engine.connect() as _conn:
+            rows = _conn.execute(_t(
+                'SELECT id, sales_race_settings, weekly_sales_target_weight,'
+                ' monthly_sales_target_weight FROM settings ORDER BY id'
+            )).fetchall()
+        return jsonify({
+            'engine': str(db.engine.url).replace(
+                db.engine.url.password or '', '***'
+            ) if db.engine.url.password else str(db.engine.url),
+            'rows': [
+                {
+                    'id': r[0],
+                    'sales_race_settings_null': r[1] is None,
+                    'sales_race_settings_snippet': (r[1] or '')[:120],
+                    'weekly_target': r[2],
+                    'monthly_target': r[3],
+                }
+                for r in rows
+            ],
+        })
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
 @api.route('/home/leaderboard', methods=['GET'])
 def get_home_leaderboard():
     """Gamification leaderboard (safe for employees).
