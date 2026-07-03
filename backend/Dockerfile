@@ -21,7 +21,8 @@ RUN apt-get update \
 COPY backend/requirements.txt /app/backend/requirements.txt
 RUN pip install --no-cache-dir -r /app/backend/requirements.txt
 
-# Copy backend source
+# Copy backend source — ARG here forces cache-bust when BUILD_DATE changes
+ARG BUILD_DATE=unknown
 COPY backend /app/backend
 
 EXPOSE 8001

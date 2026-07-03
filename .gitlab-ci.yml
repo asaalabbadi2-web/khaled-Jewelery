@@ -27,6 +27,7 @@ build-backend:
   script:
     - |
       docker build \
+        --build-arg BUILD_DATE="$(date -u +%Y%m%dT%H%M%SZ)" \
         -t "$CI_REGISTRY_IMAGE/backend:latest" \
         -t "$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA" \
         -f backend/Dockerfile .
