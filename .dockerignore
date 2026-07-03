@@ -1,37 +1,17 @@
-# Git
-.git
-.gitignore
+# Exclude everything by default, then whitelist what we need
+**
 
-# Python
-__pycache__/
-*.pyc
+# Allow backend source
+!backend/
+!backend/**
+
+# But still exclude backend's own junk
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/**/*.pyc
 backend/venv/
 backend/.venv/
-
-# Flutter
-frontend/.dart_tool/
-frontend/build/
-
-# IDE
-.vscode/
-
-# Backups & DB files
-backups/
-data/
-*.db
-*.db.backup*
-*.db.damaged*
-*.sql
-*.dump
-*.tar.gz
-*.zip
-*.bak
-
-# Docs / reports
-*.md
-export_chart.py
-apply_formatters*.py
-generate_permission*.py
-
-# OS
-.DS_Store
+backend/reports/
+backend/*.db
+backend/*.db.backup*
