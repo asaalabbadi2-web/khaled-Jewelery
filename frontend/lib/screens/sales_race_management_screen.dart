@@ -1741,16 +1741,38 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                     ),
                   )
                 else if (_pointsSource == 'profit_cash' || _pointsSource == 'sales_amount')
-                  TextField(
-                    controller: _cashAmountCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(
-                      labelText: _pointsSource == 'sales_amount'
-                          ? (isAr ? 'ريال مبيعات لكل نقطة' : 'Sales riyals per point')
-                          : (isAr ? 'ريال ربح لكل نقطة' : 'Profit riyals per point'),
-                      suffixText: isAr ? 'ريال/نقطة' : 'SAR/pt',
-                      border: const OutlineInputBorder(),
-                    ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        controller: _cashAmountCtrl,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                        decoration: InputDecoration(
+                          labelText: _pointsSource == 'sales_amount'
+                              ? (isAr ? 'ريال مبيعات لكل نقطة' : 'Sales riyals per point')
+                              : (isAr ? 'ريال ربح لكل نقطة (فواتير البيع)' : 'Profit riyals per point (sales)'),
+                          suffixText: isAr ? 'ريال/نقطة' : 'SAR/pt',
+                          border: const OutlineInputBorder(),
+                        ),
+                      ),
+                      if (_pointsSource == 'profit_cash') ...[
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: _pointsCtrl,
+                          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                          decoration: InputDecoration(
+                            labelText: isAr
+                                ? 'نقاط لكل جرام ربح (شراء من عميل)'
+                                : 'Points per profit gram (customer purchases)',
+                            suffixText: isAr ? 'نقطة/جم' : 'pts/g',
+                            border: const OutlineInputBorder(),
+                            helperText: isAr
+                                ? 'فواتير الشراء ربحها بالذهب لا بالريال'
+                                : 'Purchase invoices earn gold profit, not cash',
+                          ),
+                        ),
+                      ],
+                    ],
                   )
                 else if (_pointsSource == 'invoice_count')
                   TextField(
