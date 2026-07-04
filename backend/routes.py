@@ -13217,8 +13217,38 @@ def add_invoice():
                     'below_cost':       'سعر البيع أقل من التكلفة',
                 }
                 if approval_reasons:
-                    new_invoice.pending_approval_reason = ' | '.join(
-                        _reason_labels_ar.get(r, r) for r in approval_reasons
+                    _parts = []
+                    if 'above_live_price' in approval_reasons:
+                        _items = (purchase_above_live_price_details or {}).get('items') or []
+                        if _items:
+                            _f = _items[0]
+                            _parts.append(
+                                f"⚠️ شراء أعلى من السعر المباشر: {_f.get('name','صنف')} "
+                                f"بسعر/جرام {_f.get('paid_per_gram',0):.2f} "
+                                f"مقابل مباشر {_f.get('live_per_gram',0):.2f}"
+                            )
+                        else:
+                            _parts.append('⚠️ شراء أعلى من السعر المباشر')
+                    if 'below_cost' in approval_reasons:
+                        _bc = below_cost_details or {}
+                        _sale = _bc.get('effective_sale_cash_ex_vat', 0) or 0
+                        _cost = _bc.get('cost_cash', 0) or 0
+                        _diff = _bc.get('profit_cash_estimate', 0) or 0
+                        _parts.append(
+                            f"⚠️ بيع تحت التكلفة: صافي {float(_sale):.2f} "
+                            f"مقابل تكلفة {float(_cost):.2f} "
+                            f"(فرق {float(_diff):.2f})"
+                        )
+                    if 'large_discount' in approval_reasons:
+                        _dp = discount_pct or 0
+                        _th = large_discount_pct_threshold or 0
+                        _parts.append(
+                            f"⚠️ خصم كبير: {float(_dp):.2f}% "
+                            f"(الحد {float(_th):.2f}%)"
+                        )
+                    new_invoice.pending_approval_reason = (
+                        '\n'.join(_parts) if _parts
+                        else ' | '.join(approval_reasons)
                     )
                 db.session.add(new_invoice)
                 db.session.flush()
