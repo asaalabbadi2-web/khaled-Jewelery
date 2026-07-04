@@ -1873,51 +1873,44 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
                       Wrap(
                         spacing: 8,
                         children: [
-                          FilterChip(
-                            label: Text(isAr ? 'اليوم' : 'Today'),
-                            selected: _enabledPeriods.contains('today'),
-                            selectedColor: AppColors.primaryGold.withValues(alpha: 0.2),
-                            checkmarkColor: AppColors.deepGold,
-                            onSelected: (v) => setState(() {
-                              if (v) {
-                                _enabledPeriods = [..._enabledPeriods, 'today'];
-                              } else if (_enabledPeriods.length > 1) {
-                                _enabledPeriods = _enabledPeriods
-                                    .where((p) => p != 'today')
-                                    .toList();
-                              }
-                            }),
-                          ),
-                          FilterChip(
-                            label: Text(isAr ? 'الأسبوع' : 'Week'),
-                            selected: _enabledPeriods.contains('week'),
-                            selectedColor: AppColors.primaryGold.withValues(alpha: 0.2),
-                            checkmarkColor: AppColors.deepGold,
-                            onSelected: (v) => setState(() {
-                              if (v) {
-                                _enabledPeriods = [..._enabledPeriods, 'week'];
-                              } else if (_enabledPeriods.length > 1) {
-                                _enabledPeriods = _enabledPeriods
-                                    .where((p) => p != 'week')
-                                    .toList();
-                              }
-                            }),
-                          ),
-                          FilterChip(
-                            label: Text(isAr ? 'الشهر' : 'Month'),
-                            selected: _enabledPeriods.contains('month'),
-                            selectedColor: AppColors.primaryGold.withValues(alpha: 0.2),
-                            checkmarkColor: AppColors.deepGold,
-                            onSelected: (v) => setState(() {
-                              if (v) {
-                                _enabledPeriods = [..._enabledPeriods, 'month'];
-                              } else if (_enabledPeriods.length > 1) {
-                                _enabledPeriods = _enabledPeriods
-                                    .where((p) => p != 'month')
-                                    .toList();
-                              }
-                            }),
-                          ),
+                          for (final entry in [
+                            ('today', isAr ? 'اليوم' : 'Today'),
+                            ('week',  isAr ? 'الأسبوع' : 'Week'),
+                            ('month', isAr ? 'الشهر' : 'Month'),
+                          ])
+                            FilterChip(
+                              label: Text(
+                                entry.$2,
+                                style: TextStyle(
+                                  color: _enabledPeriods.contains(entry.$1)
+                                      ? Colors.white
+                                      : Theme.of(context).colorScheme.onSurface,
+                                  fontWeight: _enabledPeriods.contains(entry.$1)
+                                      ? FontWeight.w700
+                                      : FontWeight.normal,
+                                ),
+                              ),
+                              selected: _enabledPeriods.contains(entry.$1),
+                              selectedColor: AppColors.primaryGold,
+                              backgroundColor: Colors.transparent,
+                              checkmarkColor: Colors.white,
+                              showCheckmark: true,
+                              side: BorderSide(
+                                color: _enabledPeriods.contains(entry.$1)
+                                    ? AppColors.primaryGold
+                                    : Theme.of(context).colorScheme.outline.withValues(alpha: 0.45),
+                                width: 1.2,
+                              ),
+                              onSelected: (v) => setState(() {
+                                if (v) {
+                                  _enabledPeriods = [..._enabledPeriods, entry.$1];
+                                } else if (_enabledPeriods.length > 1) {
+                                  _enabledPeriods = _enabledPeriods
+                                      .where((p) => p != entry.$1)
+                                      .toList();
+                                }
+                              }),
+                            ),
                         ],
                       ),
                     ],
