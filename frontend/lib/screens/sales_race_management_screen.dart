@@ -2087,7 +2087,12 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     return ButtonStyle(
-      side: WidgetStateProperty.all(BorderSide.none),
+      side: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) {
+          return BorderSide.none;
+        }
+        return BorderSide(color: colorScheme.outline.withValues(alpha: 0.35), width: 1);
+      }),
       shape: WidgetStateProperty.all(
         RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
       ),
@@ -2099,15 +2104,15 @@ class _SalesRaceManagementScreenState extends State<SalesRaceManagementScreen> {
       ),
       foregroundColor: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return AppColors.deepGold;
+          return Colors.white;
         }
         return colorScheme.onSurface.withValues(alpha: 0.72);
       }),
       backgroundColor: WidgetStateProperty.resolveWith((states) {
         if (states.contains(WidgetState.selected)) {
-          return AppColors.primaryGold.withValues(alpha: 0.9);
+          return AppColors.primaryGold;
         }
-        return Colors.white.withValues(alpha: 0.82);
+        return colorScheme.surfaceContainerHighest.withValues(alpha: 0.45);
       }),
       overlayColor: WidgetStateProperty.all(
         AppColors.primaryGold.withValues(alpha: 0.08),

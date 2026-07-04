@@ -2120,7 +2120,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       value: 'profile',
                       child: Row(
                         children: [
-                          const Icon(Icons.person_outline, size: 18),
+                          Icon(Icons.person_outline, size: 18, color: Theme.of(context).colorScheme.onSurface),
                           const SizedBox(width: 8),
                           Text(isAr ? 'ملف المستخدم' : 'User Profile'),
                         ],
@@ -2130,7 +2130,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       value: 'password',
                       child: Row(
                         children: [
-                          const Icon(Icons.lock_outline, size: 18),
+                          Icon(Icons.lock_outline, size: 18, color: Theme.of(context).colorScheme.onSurface),
                           const SizedBox(width: 8),
                           Text(isAr ? 'تغيير كلمة المرور' : 'Change Password'),
                         ],
@@ -2140,7 +2140,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       value: 'sessions',
                       child: Row(
                         children: [
-                          const Icon(Icons.security, size: 18),
+                          Icon(Icons.security, size: 18, color: Theme.of(context).colorScheme.onSurface),
                           const SizedBox(width: 8),
                           Text(isAr ? 'إدارة الجلسات' : 'Sessions'),
                         ],
@@ -2151,7 +2151,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                         value: 'users',
                         child: Row(
                           children: [
-                            const Icon(Icons.group, size: 18),
+                            Icon(Icons.group, size: 18, color: Theme.of(context).colorScheme.onSurface),
                             const SizedBox(width: 8),
                             Text(isAr ? 'إدارة المستخدمين' : 'Users'),
                           ],
@@ -2162,7 +2162,7 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
                       value: 'logout',
                       child: Row(
                         children: [
-                          const Icon(Icons.logout, size: 18),
+                          Icon(Icons.logout, size: 18, color: Theme.of(context).colorScheme.error),
                           const SizedBox(width: 8),
                           Text(isAr ? 'تسجيل الخروج' : 'Sign out'),
                         ],
