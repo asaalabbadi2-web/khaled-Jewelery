@@ -7579,20 +7579,25 @@ def pending_post_invoices():
                 creator = inv.employee.name
 
             inv_type = inv.invoice_type or ''
-            if inv_type in ('شراء', 'purchase'):
-                approval_reason = 'فاتورة شراء كسر من مكتب التسكير — تحتاج اعتماد المدير قبل الترحيل'
-            elif inv_type in ('بيع', 'sale'):
-                approval_reason = 'فاتورة بيع — تحتاج اعتماد المدير قبل الترحيل'
-            elif inv_type in ('مرتجع بيع', 'sales_return'):
-                approval_reason = 'مرتجع بيع — يتطلب اعتماد المدير قبل الترحيل'
-            elif inv_type in ('شراء من عميل', 'scrap_purchase'):
-                approval_reason = 'شراء كسر من عميل — بانتظار اعتماد الترحيل'
-            elif inv_type in ('مرتجع شراء', 'purchase_return'):
-                approval_reason = 'مرتجع شراء كسر — يتطلب اعتماد المدير قبل الترحيل'
-            elif inv_type == 'scrap_sale':
-                approval_reason = 'بيع كسر — بانتظار الاعتماد'
+            _type_labels = {
+                'شراء':           'فاتورة شراء كسر من مكتب التسكير',
+                'purchase':       'فاتورة شراء كسر من مكتب التسكير',
+                'بيع':            'فاتورة بيع',
+                'sale':           'فاتورة بيع',
+                'مرتجع بيع':     'مرتجع بيع',
+                'sales_return':   'مرتجع بيع',
+                'شراء من عميل':  'شراء كسر من عميل',
+                'scrap_purchase': 'شراء كسر من عميل',
+                'مرتجع شراء':    'مرتجع شراء كسر',
+                'purchase_return':'مرتجع شراء كسر',
+                'scrap_sale':     'بيع كسر',
+            }
+            type_label = _type_labels.get(inv_type, 'فاتورة')
+            stored_reason = getattr(inv, 'pending_approval_reason', None) or ''
+            if stored_reason:
+                approval_reason = f'{type_label} — {stored_reason}'
             else:
-                approval_reason = 'الفاتورة بانتظار الاعتماد والترحيل'
+                approval_reason = f'{type_label} — بانتظار اعتماد الترحيل'
 
             result.append({
                 'id': inv.id,
@@ -7682,20 +7687,25 @@ def pending_actions():
                 creator = inv.employee.name
 
             inv_type = inv.invoice_type or ''
-            if inv_type in ('شراء', 'purchase'):
-                approval_reason = 'فاتورة شراء كسر من مكتب التسكير — تحتاج اعتماد المدير قبل الترحيل'
-            elif inv_type in ('بيع', 'sale'):
-                approval_reason = 'فاتورة بيع — تحتاج اعتماد المدير قبل الترحيل'
-            elif inv_type in ('مرتجع بيع', 'sales_return'):
-                approval_reason = 'مرتجع بيع — يتطلب اعتماد المدير قبل الترحيل'
-            elif inv_type in ('شراء من عميل', 'scrap_purchase'):
-                approval_reason = 'شراء كسر من عميل — بانتظار اعتماد الترحيل'
-            elif inv_type in ('مرتجع شراء', 'purchase_return'):
-                approval_reason = 'مرتجع شراء كسر — يتطلب اعتماد المدير قبل الترحيل'
-            elif inv_type == 'scrap_sale':
-                approval_reason = 'بيع كسر — بانتظار الاعتماد'
+            _type_labels = {
+                'شراء':           'فاتورة شراء كسر من مكتب التسكير',
+                'purchase':       'فاتورة شراء كسر من مكتب التسكير',
+                'بيع':            'فاتورة بيع',
+                'sale':           'فاتورة بيع',
+                'مرتجع بيع':     'مرتجع بيع',
+                'sales_return':   'مرتجع بيع',
+                'شراء من عميل':  'شراء كسر من عميل',
+                'scrap_purchase': 'شراء كسر من عميل',
+                'مرتجع شراء':    'مرتجع شراء كسر',
+                'purchase_return':'مرتجع شراء كسر',
+                'scrap_sale':     'بيع كسر',
+            }
+            type_label = _type_labels.get(inv_type, 'فاتورة')
+            stored_reason = getattr(inv, 'pending_approval_reason', None) or ''
+            if stored_reason:
+                approval_reason = f'{type_label} — {stored_reason}'
             else:
-                approval_reason = 'الفاتورة بانتظار الاعتماد والترحيل'
+                approval_reason = f'{type_label} — بانتظار اعتماد الترحيل'
 
             pending_invoices.append({
                 'id': inv.id,
@@ -13201,6 +13211,15 @@ def add_invoice():
             # while ledger/safebox effects remain gated by posting/approval.
             try:
                 new_invoice.is_posted = False
+                _reason_labels_ar = {
+                    'above_live_price': 'السعر المدفوع يتجاوز السعر الحي للذهب',
+                    'large_discount':   'خصم كبير يتجاوز الحد المسموح',
+                    'below_cost':       'سعر البيع أقل من التكلفة',
+                }
+                if approval_reasons:
+                    new_invoice.pending_approval_reason = ' | '.join(
+                        _reason_labels_ar.get(r, r) for r in approval_reasons
+                    )
                 db.session.add(new_invoice)
                 db.session.flush()
             except Exception:

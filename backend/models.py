@@ -1087,6 +1087,9 @@ class Invoice(db.Model):
     karat_diff_earn_total = db.Column(db.Float, default=0.0)   # عمولة تكسبها الشركة (مدين للمورد)
     karat_diff_pay_total = db.Column(db.Float, default=0.0)    # رسوم تدفعها الشركة (دائن للمورد)
 
+    # سبب توقف الفاتورة للاعتماد (يُحفظ عند الإنشاء، يُعرض في قائمة المعلقات)
+    pending_approval_reason = db.Column(db.Text, nullable=True)
+
     # 🆕 قالب الطباعة الخاص بهذه الفاتورة (Preset key from Template Studio)
     # مثال: a4_portrait, a5_portrait, thermal_80x200
     print_template_preset_key = db.Column(db.String(64), nullable=True)
