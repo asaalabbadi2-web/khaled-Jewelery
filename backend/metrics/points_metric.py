@@ -191,14 +191,16 @@ class PointsMetric(RaceMetric):
                 sales_amount[aid] = sales_amount.get(aid, 0.0) + invoice_total
 
             if self._points_source == 'profit_cash':
-                pc = max(0.0, float(getattr(inv, 'profit_cash', 0.0) or 0.0))
                 pts = 0.0
-                if pc > 0.0:
-                    pts = pc / self._cash_amount_per_point
-                elif is_purchase:
-                    # شراء من عميل يُخزَّن ربحها في profit_gold لا profit_cash
+                if is_purchase:
+                    # Business rule: customer purchases realize value as gold profit,
+                    # not cash profit — use profit_gold * points_per_gram regardless
+                    # of profit_cash value.
                     pg = max(0.0, float(getattr(inv, 'profit_gold', 0.0) or 0.0))
                     pts = pg * points_per_gram
+                else:
+                    pc = max(0.0, float(getattr(inv, 'profit_cash', 0.0) or 0.0))
+                    pts = pc / self._cash_amount_per_point
                 if pts > 0.0:
                     pts_total[aid]    = pts_total.get(aid, 0.0) + pts
                     if is_purchase:
