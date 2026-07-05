@@ -73,6 +73,8 @@ import '../features/invoice/widgets/barcode_scanner_screen.dart';
 import '../widgets/pending_approvals_dialog.dart';
 import '../widgets/goal_achievement_celebration.dart';
 import '../widgets/goal_progress_ring.dart';
+import 'inventory_balance_screen.dart';
+import 'inventory_audit_screen.dart';
 
 class HomeScreenEnhanced extends StatefulWidget {
   final VoidCallback? onToggleLocale;
@@ -1553,7 +1555,40 @@ class _HomeScreenEnhancedState extends State<HomeScreenEnhanced>
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    // 9. الأدوات التشغيلية
+    // 9. الجرد الفعلي
+    // ════════════════════════════════════════════════════════════════════════
+    if (auth.hasPermission('inventory.view')) {
+      addDivider();
+      addSection(isAr ? 'الجرد الفعلي' : 'Inventory', Colors.teal.shade700);
+      addDestination(
+        icon: Icons.scale_outlined,
+        title: isAr ? 'أرصدة الجرد' : 'Inventory Balance',
+        color: Colors.teal.shade700,
+        onSelected: () async {
+          await Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const InventoryBalanceScreen()),
+          );
+        },
+      );
+      if (auth.hasPermission('inventory.approve')) {
+        addDestination(
+          icon: Icons.fact_check_outlined,
+          title: isAr ? 'مركز التدقيق' : 'Audit Center',
+          color: Colors.teal.shade700,
+          onSelected: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                  builder: (_) => const InventoryAuditScreen()),
+            );
+          },
+        );
+      }
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // 10. الأدوات التشغيلية
     // ════════════════════════════════════════════════════════════════════════
     addDivider();
     addSection(isAr ? 'الأدوات' : 'Tools', Colors.teal.shade400);

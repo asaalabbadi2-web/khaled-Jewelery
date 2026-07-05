@@ -9619,6 +9619,13 @@ def approve_invoice(invoice_id: int):
         except Exception as exc:
             print(f"⚠️ Category weight tracking skipped on approve: {exc}")
 
+        # 📒 Inventory ledger posting on approval
+        try:
+            from services.inventory_posting_service import InventoryPostingService
+            InventoryPostingService.post(invoice)
+        except Exception as exc:
+            print(f"⚠️ Inventory ledger posting skipped on approve: {exc}")
+
         # 5. Mark any SystemAlerts for this invoice as reviewed
         try:
             from models import SystemAlert
@@ -17254,6 +17261,13 @@ def add_invoice():
         except Exception as exc:
             # Do not block posting for tracking failures.
             print(f"⚠️ Category weight tracking skipped: {exc}")
+
+        # 📒 Inventory ledger posting (Event Log — append-only)
+        try:
+            from services.inventory_posting_service import InventoryPostingService
+            InventoryPostingService.post(new_invoice)
+        except Exception as exc:
+            print(f"⚠️ Inventory ledger posting skipped: {exc}")
 
         # Audit: large discount (sales)
         try:

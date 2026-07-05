@@ -439,6 +439,25 @@ class ApiService {
     }
   }
 
+  // ── Public HTTP helpers (for feature-specific service classes) ────────────
+  // These delegate to the private authed methods while building the full URL
+  // from the same _baseUrl, so callers only need to pass a path like '/inventory/balance'.
+
+  Future<http.Response> authedGet(
+    String path, {
+    Map<String, String>? queryParams,
+  }) {
+    final uri = Uri.parse('$_baseUrl$path')
+        .replace(queryParameters: queryParams?.isNotEmpty == true ? queryParams : null);
+    return _authedGet(uri);
+  }
+
+  Future<http.Response> authedPost(String path, {Object? body}) =>
+      _authedPost(Uri.parse('$_baseUrl$path'), body: body);
+
+  Future<http.Response> authedPut(String path, {Object? body}) =>
+      _authedPut(Uri.parse('$_baseUrl$path'), body: body);
+
   // Customer Methods
   Future<List<dynamic>> getCustomers() async {
     final response = await _authedGet(Uri.parse('$_baseUrl/customers'));

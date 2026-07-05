@@ -4691,7 +4691,341 @@ class SystemAlert(db.Model):
         }
 
 
+class InventoryLedger(db.Model):
+    """Append-only event log for gold inventory weight movements.
+
+    One row per (source_line, movement_type). Never updated — only inserted.
+    Balance = SUM(weight_delta) filtered by bucket (branch + category + karat).
+
+    weight_delta is signed: positive = stock IN, negative = stock OUT.
+    Unit: actual karat weight in grams (same unit as InvoiceItem.weight).
+    """
+    __tablename__ = 'inventory_ledger'
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # ── Source document ──────────────────────────────────────────────────────
+    # 'invoice' | 'opening_entry' | 'adjustment' | 'transfer'
+    source_type = db.Column(db.String(40), nullable=False, index=True)
+    source_id   = db.Column(db.Integer, nullable=False, index=True)
+    # InvoiceItem.id for invoice lines; None for header-level source types
+    source_line_id = db.Column(db.Integer, nullable=True)
+    # 'sale' | 'purchase_from_customer' | 'supplier_purchase' |
+    # 'sale_return' | 'purchase_return' | 'opening' | 'adjustment'
+    movement_type = db.Column(db.String(30), nullable=False, index=True)
+
+    # ── Bucket: branch + category + karat ───────────────────────────────────
+    branch_id   = db.Column(db.Integer, db.ForeignKey('branch.id'),   nullable=True, index=True)
+    category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True, index=True)
+    karat       = db.Column(db.Float, nullable=False)
+
+    # ── Weight delta (grams, signed) ─────────────────────────────────────────
+    weight_delta = db.Column(db.Float, nullable=False)
+
+    # ── Metadata ─────────────────────────────────────────────────────────────
+    posted_at = db.Column(db.DateTime, nullable=False, default=datetime.now, index=True)
+    posted_by = db.Column(db.String(100), nullable=True)
+    notes     = db.Column(db.Text, nullable=True)
+
+    __table_args__ = (
+        # Idempotency guard: prevents double-posting the same source line
+        db.UniqueConstraint(
+            'source_type', 'source_id', 'source_line_id', 'movement_type',
+            name='uq_inventory_ledger_idempotency',
+        ),
+        # Composite index for bucket-balance queries
+        db.Index('ix_inventory_ledger_bucket', 'branch_id', 'category_id', 'karat'),
+    )
+
+    def to_dict(self):
+        return {
+            'id':            self.id,
+            'source_type':   self.source_type,
+            'source_id':     self.source_id,
+            'source_line_id': self.source_line_id,
+            'movement_type': self.movement_type,
+            'branch_id':     self.branch_id,
+            'category_id':   self.category_id,
+            'karat':         self.karat,
+            'weight_delta':  self.weight_delta,
+            'posted_at':     self.posted_at.isoformat() if self.posted_at else None,
+            'posted_by':     self.posted_by,
+            'notes':         self.notes,
+        }
 
 
+class InventoryBalance(db.Model):
+    """Cached Projection of InventoryLedger — one row per bucket (branch + category + karat).
+
+    Updated atomically inside the same DB transaction as the Ledger write.
+    `balance` always equals SUM(InventoryLedger.weight_delta) for this bucket
+    up to and including `snapshot_max_ledger_id`.
+
+    The Ledger is the source of truth; InventoryBalance is a read optimisation.
+    To rebuild from scratch: DELETE FROM inventory_balance, then replay the Ledger.
+    """
+    __tablename__ = 'inventory_balance'
+
+    id = db.Column(db.Integer, primary_key=True)
+
+    # ── Bucket ───────────────────────────────────────────────────────────────
+    branch_id   = db.Column(db.Integer, db.ForeignKey('branch.id'),   nullable=True)
+    category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True)
+    karat       = db.Column(db.Float, nullable=False)
+
+    # ── Cached balance (grams, signed) ───────────────────────────────────────
+    balance                 = db.Column(db.Float, nullable=False, default=0.0)
+    snapshot_max_ledger_id  = db.Column(db.Integer, nullable=True)
+
+    updated_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+
+    __table_args__ = (
+        # One row per bucket — enforces the Projection invariant
+        db.UniqueConstraint(
+            'branch_id', 'category_id', 'karat',
+            name='uq_inventory_balance_bucket',
+        ),
+        db.Index('ix_inventory_balance_bucket', 'branch_id', 'category_id', 'karat'),
+    )
+
+    def to_dict(self):
+        return {
+            'id':                       self.id,
+            'branch_id':                self.branch_id,
+            'category_id':              self.category_id,
+            'karat':                    self.karat,
+            'balance':                  self.balance,
+            'snapshot_max_ledger_id':   self.snapshot_max_ledger_id,
+            'updated_at':               self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class InventoryCountSession(db.Model):
+    """A physical inventory count session scoped to a branch.
+
+    Lifecycle:  open → counting → closed → approved
+                         ↑                      ↓
+                    (physical count)       (GL adjustment generated in Phase 4)
+
+    snapshot_ledger_id is set once at open time to MAX(InventoryLedger.id).
+    This pins the "expected" balance — any Ledger entry with id > snapshot
+    belongs to the period after this count began and is excluded from
+    expected calculations.
+    """
+    __tablename__ = 'inventory_count_session'
+
+    id          = db.Column(db.Integer, primary_key=True)
+    branch_id   = db.Column(db.Integer, db.ForeignKey('branch.id'), nullable=True, index=True)
+
+    # 'open' | 'counting' | 'closed' | 'approved'
+    status      = db.Column(db.String(20), nullable=False, default='open', index=True)
+
+    # MAX(InventoryLedger.id) captured at open time — the reference point
+    snapshot_ledger_id = db.Column(db.Integer, nullable=True)
+
+    # Blind count: expected_weight hidden from counters until session closes.
+    # True by default — prevents anchoring bias and eliminates manipulation risk.
+    # Manager may set False for quick spot-checks where expected is needed.
+    blind_count = db.Column(db.Boolean, nullable=False, default=True)
+
+    opened_by   = db.Column(db.String(100), nullable=True)
+    opened_at   = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    closed_at   = db.Column(db.DateTime, nullable=True)
+    approved_by = db.Column(db.String(100), nullable=True)
+    approved_at = db.Column(db.DateTime, nullable=True)
+    notes       = db.Column(db.Text, nullable=True)
+
+    lines = db.relationship(
+        'InventoryCountLine',
+        backref='session',
+        lazy='dynamic',
+        cascade='all, delete-orphan',
+    )
+
+    def to_dict(self):
+        return {
+            'id':                  self.id,
+            'branch_id':           self.branch_id,
+            'status':              self.status,
+            'snapshot_ledger_id':  self.snapshot_ledger_id,
+            'opened_by':           self.opened_by,
+            'opened_at':           self.opened_at.isoformat() if self.opened_at else None,
+            'closed_at':           self.closed_at.isoformat() if self.closed_at else None,
+            'approved_by':         self.approved_by,
+            'approved_at':         self.approved_at.isoformat() if self.approved_at else None,
+            'notes':               self.notes,
+        }
+
+
+class InventoryCountLine(db.Model):
+    """One count line = one physical count for a bucket (category + karat).
+
+    expected_weight   — balance at snapshot_ledger_id (frozen at session open)
+    expected_ledger_id — snapshot_max_ledger_id from InventoryBalance at open time
+                         Answers "why was expected 523.42g?" even after balance changes.
+    counted_weight    — physical count by the warehouse team
+    variance          — counted_weight - expected_weight (positive = surplus, negative = shortage)
+    """
+    __tablename__ = 'inventory_count_line'
+
+    id         = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(
+        db.Integer, db.ForeignKey('inventory_count_session.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+
+    # Bucket
+    branch_id   = db.Column(db.Integer, db.ForeignKey('branch.id'),   nullable=True)
+    category_id = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True)
+    karat       = db.Column(db.Float, nullable=False)
+
+    # Reference point
+    expected_weight    = db.Column(db.Float, nullable=False, default=0.0)
+    expected_ledger_id = db.Column(db.Integer, nullable=True)  # InventoryBalance.snapshot_max_ledger_id at open
+
+    # Physical count
+    counted_weight = db.Column(db.Float, nullable=True)
+    variance       = db.Column(db.Float, nullable=True)  # computed: counted - expected
+
+    counted_by = db.Column(db.String(100), nullable=True)
+    counted_at = db.Column(db.DateTime, nullable=True)
+    notes      = db.Column(db.Text, nullable=True)
+
+    __table_args__ = (
+        # One line per bucket per session
+        db.UniqueConstraint(
+            'session_id', 'category_id', 'karat',
+            name='uq_inventory_count_line_bucket',
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            'id':                  self.id,
+            'session_id':          self.session_id,
+            'branch_id':           self.branch_id,
+            'category_id':         self.category_id,
+            'karat':               self.karat,
+            'expected_weight':     self.expected_weight,
+            'expected_ledger_id':  self.expected_ledger_id,
+            'counted_weight':      self.counted_weight,
+            'variance':            self.variance,
+            'counted_by':          self.counted_by,
+            'counted_at':          self.counted_at.isoformat() if self.counted_at else None,
+            'notes':               self.notes,
+        }
+
+
+class InventoryAdjustment(db.Model):
+    """Difference Document — records the variance between expected and counted weight.
+
+    Always flows through InventoryPostingService.post(adjustment), never writes
+    directly to InventoryLedger or InventoryBalance.
+
+    adjustment_type:
+        'count_variance' — generated from an approved InventoryCountSession
+        'manual'         — standalone adjustment (write-off, write-on, correction)
+
+    Lifecycle: draft → posted | void
+    """
+    __tablename__ = 'inventory_adjustment'
+
+    id              = db.Column(db.Integer, primary_key=True)
+    session_id      = db.Column(
+        db.Integer, db.ForeignKey('inventory_count_session.id', ondelete='SET NULL'),
+        nullable=True, index=True,
+    )
+    branch_id       = db.Column(db.Integer, db.ForeignKey('branch.id'), nullable=True, index=True)
+
+    # 'count_variance' | 'manual'
+    adjustment_type = db.Column(db.String(30), nullable=False, default='manual')
+    # 'draft' | 'posted' | 'void'
+    status          = db.Column(db.String(20), nullable=False, default='draft', index=True)
+
+    reason          = db.Column(db.String(200), nullable=True)
+
+    created_by      = db.Column(db.String(100), nullable=True)
+    created_at      = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    posted_by       = db.Column(db.String(100), nullable=True)
+    posted_at       = db.Column(db.DateTime, nullable=True)
+
+    # Phase 5: FK to JournalEntry once GL integration is built
+    gl_entry_id     = db.Column(db.Integer, nullable=True)
+
+    notes           = db.Column(db.Text, nullable=True)
+
+    lines = db.relationship(
+        'InventoryAdjustmentLine',
+        backref='adjustment',
+        lazy='dynamic',
+        cascade='all, delete-orphan',
+    )
+
+    def to_dict(self):
+        return {
+            'id':               self.id,
+            'session_id':       self.session_id,
+            'branch_id':        self.branch_id,
+            'adjustment_type':  self.adjustment_type,
+            'status':           self.status,
+            'reason':           self.reason,
+            'created_by':       self.created_by,
+            'created_at':       self.created_at.isoformat() if self.created_at else None,
+            'posted_by':        self.posted_by,
+            'posted_at':        self.posted_at.isoformat() if self.posted_at else None,
+            'gl_entry_id':      self.gl_entry_id,
+            'notes':            self.notes,
+        }
+
+
+class InventoryAdjustmentLine(db.Model):
+    """One adjustment line per bucket — carries the signed variance_weight.
+
+    variance_weight = counted_weight - expected_weight (signed).
+    Positive = surplus (write-on).  Negative = shortage (write-off).
+
+    expected_weight and counted_weight are stored for traceability;
+    only variance_weight is used by InventoryPostingService as weight_delta.
+    """
+    __tablename__ = 'inventory_adjustment_line'
+
+    id              = db.Column(db.Integer, primary_key=True)
+    adjustment_id   = db.Column(
+        db.Integer, db.ForeignKey('inventory_adjustment.id', ondelete='CASCADE'),
+        nullable=False, index=True,
+    )
+
+    # Bucket
+    branch_id       = db.Column(db.Integer, db.ForeignKey('branch.id'),   nullable=True)
+    category_id     = db.Column(db.Integer, db.ForeignKey('category.id'), nullable=True)
+    karat           = db.Column(db.Float, nullable=False)
+
+    # Traceability
+    expected_weight = db.Column(db.Float, nullable=False, default=0.0)
+    counted_weight  = db.Column(db.Float, nullable=False, default=0.0)
+    # Signed delta — what InventoryPostingService applies to the Ledger
+    variance_weight = db.Column(db.Float, nullable=False)
+
+    notes           = db.Column(db.Text, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'adjustment_id', 'category_id', 'karat',
+            name='uq_inventory_adjustment_line_bucket',
+        ),
+    )
+
+    def to_dict(self):
+        return {
+            'id':               self.id,
+            'adjustment_id':    self.adjustment_id,
+            'branch_id':        self.branch_id,
+            'category_id':      self.category_id,
+            'karat':            self.karat,
+            'expected_weight':  self.expected_weight,
+            'counted_weight':   self.counted_weight,
+            'variance_weight':  self.variance_weight,
+            'notes':            self.notes,
+        }
 
 

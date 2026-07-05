@@ -1,0 +1,798 @@
+import 'package:flutter/material.dart';
+import '../api_service.dart';
+import '../models/inventory_models.dart';
+import '../services/inventory_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/bucket_balance_card.dart' show formatWeight;
+
+class InventoryAuditScreen extends StatefulWidget {
+  const InventoryAuditScreen({super.key});
+
+  @override
+  State<InventoryAuditScreen> createState() => _InventoryAuditScreenState();
+}
+
+class _InventoryAuditScreenState extends State<InventoryAuditScreen>
+    with SingleTickerProviderStateMixin {
+  final _svc = InventoryService(ApiService());
+
+  ReconciliationReport? _recon;
+  HealthReport? _health;
+  bool _loading = true;
+  String? _error;
+  bool _showMismatchOnly = false;
+
+  late final TabController _tabs = TabController(length: 2, vsync: this);
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final results = await Future.wait([
+        _svc.getReconciliation(),
+        _svc.getHealth(),
+      ]);
+      setState(() {
+        _recon = results[0] as ReconciliationReport;
+        _health = results[1] as HealthReport;
+        _loading = false;
+      });
+    } on InventoryApiException catch (e) {
+      setState(() { _error = e.message; _loading = false; });
+    } catch (e) {
+      setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+        appBar: AppBar(
+          title: const Text('مركز التدقيق'),
+          backgroundColor: AppColors.primaryGold,
+          foregroundColor: Colors.white,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.refresh),
+              onPressed: _load,
+              tooltip: 'تحديث',
+            ),
+          ],
+          bottom: TabBar(
+            controller: _tabs,
+            labelColor: Colors.white,
+            unselectedLabelColor: Colors.white60,
+            indicatorColor: Colors.white,
+            tabs: const [
+              Tab(text: 'المطابقة', icon: Icon(Icons.table_rows_outlined, size: 18)),
+              Tab(text: 'الصحة', icon: Icon(Icons.health_and_safety_outlined, size: 18)),
+            ],
+          ),
+        ),
+        body: _loading
+            ? const Center(child: CircularProgressIndicator(color: AppColors.primaryGold))
+            : _error != null
+                ? _ErrorView(message: _error!, onRetry: _load)
+                : TabBarView(
+                    controller: _tabs,
+                    children: [
+                      _ReconciliationTab(
+                        report: _recon!,
+                        showMismatchOnly: _showMismatchOnly,
+                        onToggleFilter: (v) =>
+                            setState(() => _showMismatchOnly = v),
+                        onRefresh: _load,
+                      ),
+                      _HealthTab(report: _health!),
+                    ],
+                  ),
+      ),
+    );
+  }
+}
+
+// ── Tab 1: Reconciliation ─────────────────────────────────────────────────────
+
+class _ReconciliationTab extends StatelessWidget {
+  const _ReconciliationTab({
+    required this.report,
+    required this.showMismatchOnly,
+    required this.onToggleFilter,
+    required this.onRefresh,
+  });
+  final ReconciliationReport report;
+  final bool showMismatchOnly;
+  final ValueChanged<bool> onToggleFilter;
+  final Future<void> Function() onRefresh;
+
+  @override
+  Widget build(BuildContext context) {
+    final rows = showMismatchOnly
+        ? report.rows.where((r) => r.hasMismatch || r.hasCountDrift).toList()
+        : report.rows;
+
+    return RefreshIndicator(
+      onRefresh: onRefresh,
+      color: AppColors.primaryGold,
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: _ReconSummaryCard(report: report)),
+          SliverToBoxAdapter(
+            child: _FilterRow(
+              showMismatchOnly: showMismatchOnly,
+              mismatchCount: report.mismatchCount + report.countDriftBuckets,
+              onToggle: onToggleFilter,
+              generatedAt: report.generatedAt,
+            ),
+          ),
+          if (rows.isEmpty)
+            const SliverFillRemaining(
+              child: Center(child: Text('لا توجد اختلافات مسجّلة')),
+            )
+          else
+            SliverToBoxAdapter(
+              child: _ReconciliationTable(rows: rows),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ReconSummaryCard extends StatelessWidget {
+  const _ReconSummaryCard({required this.report});
+  final ReconciliationReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final isClean = report.isClean;
+    final color = isClean ? AppColors.success : AppColors.warning;
+
+    return Container(
+      margin: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isClean ? Icons.check_circle_rounded : Icons.warning_amber_rounded,
+            color: color,
+            size: 36,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  isClean ? 'الأرصدة متطابقة' : 'توجد فروقات تحتاج مراجعة',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 12,
+                  children: [
+                    _StatChip(
+                      label: 'الحاويات',
+                      value: '${report.totalBuckets}',
+                      color: AppColors.primaryGold,
+                    ),
+                    if (report.mismatchCount > 0)
+                      _StatChip(
+                        label: 'دفتر≠رصيد',
+                        value: '${report.mismatchCount}',
+                        color: AppColors.error,
+                      ),
+                    if (report.countDriftBuckets > 0)
+                      _StatChip(
+                        label: 'انحراف جرد',
+                        value: '${report.countDriftBuckets}',
+                        color: AppColors.warning,
+                      ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatChip extends StatelessWidget {
+  const _StatChip({required this.label, required this.value, required this.color});
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(label, style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+        const SizedBox(width: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _FilterRow extends StatelessWidget {
+  const _FilterRow({
+    required this.showMismatchOnly,
+    required this.mismatchCount,
+    required this.onToggle,
+    required this.generatedAt,
+  });
+  final bool showMismatchOnly;
+  final int mismatchCount;
+  final ValueChanged<bool> onToggle;
+  final DateTime generatedAt;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: Row(
+        children: [
+          if (mismatchCount > 0)
+            GestureDetector(
+              onTap: () => onToggle(!showMismatchOnly),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: showMismatchOnly
+                      ? AppColors.warning
+                      : Colors.transparent,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: showMismatchOnly
+                        ? AppColors.warning
+                        : Colors.grey.shade300,
+                  ),
+                ),
+                child: Text(
+                  'الفروقات فقط ($mismatchCount)',
+                  style: TextStyle(
+                    color: showMismatchOnly ? Colors.white : Colors.grey[700],
+                    fontSize: 12,
+                    fontWeight: showMismatchOnly
+                        ? FontWeight.bold
+                        : FontWeight.normal,
+                  ),
+                ),
+              ),
+            ),
+          const Spacer(),
+          Text(
+            'تاريخ التقرير: ${_fmt(generatedAt)}',
+            style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _fmt(DateTime dt) {
+    return '${dt.year}/${dt.month.toString().padLeft(2, '0')}/${dt.day.toString().padLeft(2, '0')} '
+        '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+}
+
+class _ReconciliationTable extends StatelessWidget {
+  const _ReconciliationTable({required this.rows});
+  final List<ReconciliationRow> rows;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+      child: Column(
+        children: [
+          // Header
+          _TableHeader(),
+          const Divider(height: 1),
+          // Rows
+          ...rows.map((r) => _TableRow(row: r)),
+        ],
+      ),
+    );
+  }
+}
+
+class _TableHeader extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(10)),
+      ),
+      child: const Row(
+        children: [
+          Expanded(flex: 3, child: _HeaderCell('الحاوية')),
+          Expanded(flex: 2, child: _HeaderCell('الدفتر')),
+          Expanded(flex: 2, child: _HeaderCell('الرصيد')),
+          Expanded(flex: 2, child: _HeaderCell('آخر جرد')),
+          SizedBox(width: 28),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeaderCell extends StatelessWidget {
+  const _HeaderCell(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      style: TextStyle(
+        fontSize: 11,
+        fontWeight: FontWeight.bold,
+        color: Colors.grey[600],
+      ),
+    );
+  }
+}
+
+class _TableRow extends StatelessWidget {
+  const _TableRow({required this.row});
+  final ReconciliationRow row;
+
+  @override
+  Widget build(BuildContext context) {
+    final karatColor = AppColors.karatColorFor(row.karat);
+    final hasMismatch = row.hasMismatch;
+    final hasDrift = row.hasCountDrift;
+    final hasAnyIssue = hasMismatch || hasDrift;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: hasAnyIssue ? AppColors.warning.withOpacity(0.04) : null,
+        border: Border(
+          bottom: BorderSide(color: Colors.grey.shade200),
+          right: hasMismatch
+              ? const BorderSide(color: AppColors.error, width: 3)
+              : hasDrift
+                  ? const BorderSide(color: AppColors.warning, width: 3)
+                  : BorderSide.none,
+        ),
+      ),
+      child: Row(
+        children: [
+          // Bucket: karat badge
+          Expanded(
+            flex: 3,
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: karatColor.withOpacity(0.12),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    'ع${row.karat.toStringAsFixed(0)}',
+                    style: TextStyle(
+                      color: karatColor,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                if (row.categoryId != null) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    '#${row.categoryId}',
+                    style: TextStyle(fontSize: 10, color: Colors.grey[500]),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          // Ledger sum
+          Expanded(
+            flex: 2,
+            child: Text(
+              formatWeight(row.ledgerSum),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+          // Balance with status dot
+          Expanded(
+            flex: 2,
+            child: Row(
+              children: [
+                Text(
+                  formatWeight(row.balance),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: hasMismatch ? AppColors.error : null,
+                    fontWeight: hasMismatch ? FontWeight.bold : null,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                _StatusDot(ok: !hasMismatch, na: false),
+              ],
+            ),
+          ),
+          // Last count weight with status dot
+          Expanded(
+            flex: 2,
+            child: row.lastCountWeight != null
+                ? Row(
+                    children: [
+                      Text(
+                        formatWeight(row.lastCountWeight!),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: hasDrift ? AppColors.warning : null,
+                          fontWeight: hasDrift ? FontWeight.bold : null,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      _StatusDot(
+                        ok: row.ledgerVsCountOk == true,
+                        na: row.ledgerVsCountOk == null,
+                      ),
+                    ],
+                  )
+                : Text(
+                    '—',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[400]),
+                  ),
+          ),
+          // Variance badge (shown only if drift)
+          SizedBox(
+            width: 28,
+            child: hasDrift && row.lastCountVariance != null
+                ? _VarianceBadge(variance: row.lastCountVariance!)
+                : null,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusDot extends StatelessWidget {
+  const _StatusDot({required this.ok, required this.na});
+  final bool ok;
+  final bool na;
+
+  @override
+  Widget build(BuildContext context) {
+    if (na) return const SizedBox(width: 8, height: 8);
+    return Container(
+      width: 8,
+      height: 8,
+      decoration: BoxDecoration(
+        color: ok ? AppColors.success : AppColors.error,
+        shape: BoxShape.circle,
+      ),
+    );
+  }
+}
+
+class _VarianceBadge extends StatelessWidget {
+  const _VarianceBadge({required this.variance});
+  final double variance;
+
+  @override
+  Widget build(BuildContext context) {
+    final isPos = variance >= 0;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      decoration: BoxDecoration(
+        color: isPos
+            ? AppColors.success.withOpacity(0.15)
+            : AppColors.error.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        '${isPos ? '+' : ''}${formatWeight(variance)}',
+        style: TextStyle(
+          fontSize: 9,
+          color: isPos ? AppColors.success : AppColors.error,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+}
+
+// ── Tab 2: Health ─────────────────────────────────────────────────────────────
+
+class _HealthTab extends StatelessWidget {
+  const _HealthTab({required this.report});
+  final HealthReport report;
+
+  @override
+  Widget build(BuildContext context) {
+    final issueMetrics = report.metrics.where((m) => !m.ok).toList();
+    final okMetrics = report.metrics.where((m) => m.ok).toList();
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        // Overall status banner
+        _HealthBanner(
+          hasIssues: report.hasIssues,
+          generatedAt: report.generatedAt,
+          metricCount: report.metrics.length,
+        ),
+        const SizedBox(height: 16),
+
+        // Issues first
+        if (issueMetrics.isNotEmpty) ...[
+          _SectionLabel(
+            label: 'تحتاج مراجعة',
+            count: issueMetrics.length,
+            color: AppColors.error,
+          ),
+          const SizedBox(height: 8),
+          ...issueMetrics.map((m) => _MetricCard(metric: m)),
+          const SizedBox(height: 16),
+        ],
+
+        // Healthy metrics
+        if (okMetrics.isNotEmpty) ...[
+          _SectionLabel(
+            label: 'سليمة',
+            count: okMetrics.length,
+            color: AppColors.success,
+          ),
+          const SizedBox(height: 8),
+          ...okMetrics.map((m) => _MetricCard(metric: m)),
+        ],
+      ],
+    );
+  }
+}
+
+class _HealthBanner extends StatelessWidget {
+  const _HealthBanner({
+    required this.hasIssues,
+    required this.generatedAt,
+    required this.metricCount,
+  });
+  final bool hasIssues;
+  final DateTime generatedAt;
+  final int metricCount;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = hasIssues ? AppColors.error : AppColors.success;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: color.withOpacity(0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            hasIssues
+                ? Icons.health_and_safety_outlined
+                : Icons.health_and_safety_rounded,
+            color: color,
+            size: 40,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  hasIssues ? 'توجد مشكلات تحتاج تدخل' : 'المحرك في حالة جيدة',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 15,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$metricCount مؤشر — ${generatedAt.hour.toString().padLeft(2, '0')}:${generatedAt.minute.toString().padLeft(2, '0')}',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({
+    required this.label,
+    required this.count,
+    required this.color,
+  });
+  final String label;
+  final int count;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          width: 4,
+          height: 16,
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+            color: color,
+            fontSize: 13,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Text(
+            '$count',
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MetricCard extends StatelessWidget {
+  const _MetricCard({required this.metric});
+  final HealthMetric metric;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = metric.ok ? AppColors.success : AppColors.error;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.25)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 4,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            margin: const EdgeInsets.only(top: 2),
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  metric.label,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+                if (metric.detail.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    metric.detail,
+                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          Icon(
+            metric.ok ? Icons.check_circle_rounded : Icons.cancel_rounded,
+            color: color,
+            size: 18,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Shared ────────────────────────────────────────────────────────────────────
+
+class _ErrorView extends StatelessWidget {
+  const _ErrorView({required this.message, required this.onRetry});
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_off, size: 48, color: AppColors.warning),
+            const SizedBox(height: 12),
+            Text(message, textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh),
+              label: const Text('إعادة المحاولة'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryGold,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}

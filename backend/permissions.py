@@ -73,6 +73,10 @@ INVENTORY_PERMISSIONS = {
     'items.adjust': 'تعديل المخزون',
     'gold_price.view': 'عرض أسعار الذهب',
     'gold_price.update': 'تحديث أسعار الذهب',
+    # جرد الذهب الفعلي (Inventory Engine)
+    'inventory.view':    'عرض أرصدة الجرد والتقارير',
+    'inventory.count':   'فتح وتسجيل جلسات الجرد الفعلي',
+    'inventory.approve': 'اعتماد الجرد وتوليد قيود التسوية',
 }
 
 # 6. القيود والحسابات
@@ -154,6 +158,7 @@ ROLE_PERMISSIONS = {
         # المخزون
         'items.view', 'items.create', 'items.edit', 'items.delete', 'items.adjust',
         'gold_price.view', 'gold_price.update',
+        'inventory.view', 'inventory.count', 'inventory.approve',
         
         # المحاسبة (عرض فقط للحسابات، تحكم كامل بالقيود)
         'accounts.view',
@@ -178,10 +183,11 @@ ROLE_PERMISSIONS = {
         'customers.view', 'customers.create',
         'suppliers.view', 'suppliers.create',
         
-        # المخزون (عرض فقط)
+        # المخزون (عرض وجرد)
         'items.view',
         'gold_price.view',
-        
+        'inventory.view', 'inventory.count',
+
         # المحاسبة (تحكم كامل)
         'accounts.view', 'accounts.create', 'accounts.edit',
         'safe_boxes.view',
@@ -208,6 +214,7 @@ ROLE_PERMISSIONS = {
         # المخزون (عرض فقط)
         'items.view',
         'gold_price.view',
+        'inventory.view',
 
         # الخزائن (للاختيار داخل الفواتير)
         'safe_boxes.view',

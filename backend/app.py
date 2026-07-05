@@ -90,6 +90,9 @@ if _log_startup_imports:
 from setup_routes import setup_bp  # 🆕 Setup wizard routes
 if _log_startup_imports:
 	print("DEBUG: Imported setup_bp blueprint")
+from inventory_routes import inventory_bp  # Inventory Engine API
+if _log_startup_imports:
+	print("DEBUG: Imported inventory_bp blueprint")
 bonus_bp = None
 try:
 	from bonus_routes import bonus_bp  # 🆕 استيراد bonus routes
@@ -357,6 +360,7 @@ if bonus_bp:
 app.register_blueprint(offices_bp)  # 🆕 تسجيل offices routes (has its own prefix /api/offices)
 app.register_blueprint(branches_bp)  # 🆕 تسجيل branches routes (has its own prefix /api/branches)
 app.register_blueprint(public_api, url_prefix='/api')  # 🆕 Public (unauthenticated) API
+app.register_blueprint(inventory_bp)               # Inventory Engine (/api/inventory/*)
 app.register_blueprint(api, url_prefix='/api')  # ✅ API الرئيسي (أخيراً)
 # recurring_journal_routes تستخدم نفس api blueprint، لذا لا حاجة لتسجيلها
 
