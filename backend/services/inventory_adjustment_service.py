@@ -35,6 +35,7 @@ class InventoryAdjustmentService:
         cls,
         session: 'InventoryCountSession',
         reason: str = '',
+        notes: str = '',
         created_by: str = '',
     ) -> 'InventoryAdjustment | None':
         """Build an InventoryAdjustment from the session's non-zero variances.
@@ -61,7 +62,8 @@ class InventoryAdjustmentService:
             branch_id=session.branch_id,
             adjustment_type='count_variance',
             status='draft',
-            reason=reason or 'تسوية جرد',
+            reason=reason or 'OTHER',
+            notes=notes or None,
             created_by=created_by or session.approved_by or 'system',
             created_at=datetime.now(),
         )

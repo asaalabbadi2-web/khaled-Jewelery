@@ -58,6 +58,7 @@ class InventoryService {
   Future<CountSession> openSession({
     required int branchId,
     bool blindCount = true,
+    String sessionType = 'periodic',
     String? notes,
   }) async {
     final resp = await _api.authedPost(
@@ -65,6 +66,7 @@ class InventoryService {
       body: jsonEncode({
         'branch_id': branchId,
         'blind_count': blindCount,
+        'session_type': sessionType,
         if (notes != null && notes.isNotEmpty) 'notes': notes,
       }),
     );
@@ -99,18 +101,48 @@ class InventoryService {
         jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
-  Future<CountSession> closeSession(int sessionId) async {
-    final resp = await _api.authedPost('/inventory/count/$sessionId/close');
+  Future<({CountSession session, int uncountedLines})> closeSession(
+    int sessionId, {
+    bool force = false,
+    bool zeroUncounted = false,
+  }) async {
+    final Map<String, dynamic> body = {};
+    if (force) body['force'] = true;
+    if (zeroUncounted) body['zero_uncounted'] = true;
+    final resp = await _api.authedPost(
+      '/inventory/count/$sessionId/close',
+      body: body.isNotEmpty ? jsonEncode(body) : null,
+    );
     _check(resp, 'تعذّر إغلاق الجلسة');
+    final j = jsonDecode(resp.body) as Map<String, dynamic>;
+    final warning = j['warning'] as String?;
+    final uncounted = warning != null
+        ? int.tryParse(RegExp(r'\d+').stringMatch(warning) ?? '0') ?? 0
+        : 0;
+    return (
+      session: CountSession.fromJson(j),
+      uncountedLines: uncounted,
+    );
+  }
+
+  Future<CountSession> cancelSession(int sessionId) async {
+    final resp = await _api.authedPost('/inventory/count/$sessionId/cancel');
+    _check(resp, 'تعذّر إلغاء الجلسة');
     return CountSession.fromJson(
         jsonDecode(resp.body) as Map<String, dynamic>);
   }
 
   Future<({CountSession session, InventoryAdjustment? adjustment})>
-      approveSession(int sessionId, {String reason = 'تسوية جرد دوري'}) async {
+      approveSession(
+    int sessionId, {
+    String reasonCode = 'OTHER',
+    String note = '',
+  }) async {
+    final body = <String, dynamic>{'reason_code': reasonCode};
+    if (note.isNotEmpty) body['note'] = note;
     final resp = await _api.authedPost(
       '/inventory/count/$sessionId/approve',
-      body: jsonEncode({'reason': reason}),
+      body: jsonEncode(body),
     );
     _check(resp, 'تعذّر اعتماد الجلسة');
     final j = jsonDecode(resp.body) as Map<String, dynamic>;
@@ -166,6 +198,15 @@ class InventoryService {
     _check(resp, 'تعذّر تحميل تقرير الصحة');
     return HealthReport.fromJson(
         jsonDecode(resp.body) as Map<String, dynamic>);
+  }
+
+  Future<List<AdjustmentReason>> getAdjustmentReasons() async {
+    final resp = await _api.authedGet('/inventory/adjustment-reasons');
+    _check(resp, 'تعذّر تحميل أسباب التسوية');
+    final list = jsonDecode(resp.body) as List;
+    return list
+        .map((e) => AdjustmentReason.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────

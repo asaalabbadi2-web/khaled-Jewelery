@@ -88,7 +88,8 @@ class KaratTotal {
 class CountSession {
   final int id;
   final int? branchId;
-  final String status; // open | counting | closed | approved
+  final String status; // open | counting | closed | approved | cancelled
+  final String sessionType; // periodic | opening
   final bool blindCount;
   final int? snapshotLedgerId;
   final String? openedBy;
@@ -103,6 +104,7 @@ class CountSession {
     required this.id,
     required this.branchId,
     required this.status,
+    this.sessionType = 'periodic',
     required this.blindCount,
     this.snapshotLedgerId,
     this.openedBy,
@@ -115,13 +117,15 @@ class CountSession {
   });
 
   bool get isActive => status == 'open' || status == 'counting';
-  bool get canClose => status == 'counting';
+  bool get canClose => status == 'counting' || status == 'open';
   bool get canApprove => status == 'closed';
+  bool get isOpening => sessionType == 'opening';
 
   factory CountSession.fromJson(Map<String, dynamic> j) => CountSession(
         id: j['id'] as int,
         branchId: j['branch_id'] as int?,
         status: j['status'] as String,
+        sessionType: j['session_type'] as String? ?? 'periodic',
         blindCount: j['blind_count'] as bool? ?? true,
         snapshotLedgerId: j['snapshot_ledger_id'] as int?,
         openedBy: j['opened_by'] as String?,
@@ -147,6 +151,7 @@ class CountLine {
   final int sessionId;
   final int? branchId;
   final int? categoryId;
+  final String? categoryName;
   final double karat;
   // null when blind_count=true and session is still open/counting
   final double? expectedWeight;
@@ -164,6 +169,7 @@ class CountLine {
     required this.sessionId,
     required this.branchId,
     required this.categoryId,
+    this.categoryName,
     required this.karat,
     this.expectedWeight,
     this.countedWeight,
@@ -189,6 +195,7 @@ class CountLine {
         sessionId: sessionId,
         branchId: branchId,
         categoryId: categoryId,
+        categoryName: categoryName,
         karat: karat,
         expectedWeight: expectedWeight ?? this.expectedWeight,
         countedWeight: countedWeight ?? this.countedWeight,
@@ -204,6 +211,7 @@ class CountLine {
         sessionId: j['session_id'] as int,
         branchId: j['branch_id'] as int?,
         categoryId: j['category_id'] as int?,
+        categoryName: j['category_name'] as String?,
         karat: (j['karat'] as num).toDouble(),
         expectedWeight: j['expected_weight'] != null
             ? (j['expected_weight'] as num).toDouble()
@@ -224,6 +232,29 @@ class CountLine {
 
 enum CountLineStatus { idle, saving, saved, failed }
 
+class AdjustmentReason {
+  final String code;
+  final String label;
+  final bool requiresNote;
+  const AdjustmentReason({
+    required this.code,
+    required this.label,
+    this.requiresNote = false,
+  });
+  factory AdjustmentReason.fromJson(Map<String, dynamic> j) => AdjustmentReason(
+        code: j['code'] as String,
+        label: j['label'] as String,
+        requiresNote: (j['requires_note'] as bool?) ?? false,
+      );
+
+  static const List<AdjustmentReason> fallback = [
+    AdjustmentReason(code: 'COUNT_ERROR', label: 'خطأ عدّ'),
+    AdjustmentReason(code: 'LOSS',        label: 'فاقد',        requiresNote: true),
+    AdjustmentReason(code: 'NEW_ITEM',    label: 'قطعة جديدة'),
+    AdjustmentReason(code: 'OTHER',       label: 'سبب آخر',     requiresNote: true),
+  ];
+}
+
 // ── Adjustment ────────────────────────────────────────────────────────────────
 
 class InventoryAdjustment {
@@ -231,7 +262,8 @@ class InventoryAdjustment {
   final int? branchId;
   final String adjustmentType;
   final String status;
-  final String? reason;
+  final String? reasonCode;
+  final String? note;
   final String? createdBy;
   final DateTime? createdAt;
   final String? postedBy;
@@ -243,7 +275,8 @@ class InventoryAdjustment {
     required this.branchId,
     required this.adjustmentType,
     required this.status,
-    this.reason,
+    this.reasonCode,
+    this.note,
     this.createdBy,
     this.createdAt,
     this.postedBy,
@@ -257,7 +290,8 @@ class InventoryAdjustment {
         branchId: j['branch_id'] as int?,
         adjustmentType: j['adjustment_type'] as String? ?? 'manual',
         status: j['status'] as String? ?? 'draft',
-        reason: j['reason'] as String?,
+        reasonCode: (j['reason_code'] ?? j['reason']) as String?,
+        note: j['note'] as String?,
         createdBy: j['created_by'] as String?,
         createdAt: j['created_at'] != null
             ? DateTime.tryParse(j['created_at'] as String)

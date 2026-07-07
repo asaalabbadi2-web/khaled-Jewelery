@@ -18,6 +18,7 @@ class _InventoryBalanceScreenState extends State<InventoryBalanceScreen> {
 
   InventoryBalanceSummary? _summary;
   List<InventoryBucket> _buckets = [];
+  CountSession? _activeSession; // freeze banner
   bool _loading = true;
   String? _error;
 
@@ -37,6 +38,7 @@ class _InventoryBalanceScreenState extends State<InventoryBalanceScreen> {
       final results = await Future.wait([
         _svc.getBalanceSummary(),
         _svc.getBalance(branchId: _filterBranchId, karat: _filterKarat),
+        _loadActiveSession(),
       ]);
       setState(() {
         _summary = results[0] as InventoryBalanceSummary;
@@ -47,6 +49,21 @@ class _InventoryBalanceScreenState extends State<InventoryBalanceScreen> {
       setState(() { _error = e.message; _loading = false; });
     } catch (e) {
       setState(() { _error = e.toString(); _loading = false; });
+    }
+  }
+
+  Future<void> _loadActiveSession() async {
+    try {
+      // Check for open sessions first, then counting
+      List<CountSession> sessions = await _svc.listSessions(status: 'open');
+      if (sessions.isEmpty) {
+        sessions = await _svc.listSessions(status: 'counting');
+      }
+      if (mounted) {
+        setState(() => _activeSession = sessions.isNotEmpty ? sessions.first : null);
+      }
+    } catch (_) {
+      // Non-fatal — banner simply won't show
     }
   }
 
@@ -77,6 +94,14 @@ class _InventoryBalanceScreenState extends State<InventoryBalanceScreen> {
                     color: AppColors.primaryGold,
                     child: CustomScrollView(
                       slivers: [
+                        // ── Freeze Banner ─────────────────────────────────
+                        if (_activeSession != null)
+                          SliverToBoxAdapter(
+                            child: _FreezeBanner(
+                              session: _activeSession!,
+                              onResume: _resumeSession,
+                            ),
+                          ),
                         SliverToBoxAdapter(child: _SummaryHeader(summary: _summary!)),
                         SliverToBoxAdapter(child: _KaratFilterBar(
                           karats: _summary!.byKarat.map((k) => k.karat).toList(),
@@ -114,13 +139,16 @@ class _InventoryBalanceScreenState extends State<InventoryBalanceScreen> {
                       ],
                     ),
                   ),
-        floatingActionButton: FloatingActionButton.extended(
-          onPressed: _openCountSession,
-          backgroundColor: AppColors.primaryGold,
-          foregroundColor: Colors.white,
-          icon: const Icon(Icons.fact_check_outlined),
-          label: const Text('بدء جرد'),
-        ),
+        // Hide "بدء جرد" FAB when a session is already active — banner handles it
+        floatingActionButton: _activeSession == null
+            ? FloatingActionButton.extended(
+                onPressed: _openCountSession,
+                backgroundColor: AppColors.primaryGold,
+                foregroundColor: Colors.white,
+                icon: const Icon(Icons.fact_check_outlined),
+                label: const Text('بدء جرد'),
+              )
+            : null,
       ),
     );
   }
@@ -130,6 +158,156 @@ class _InventoryBalanceScreenState extends State<InventoryBalanceScreen> {
       context,
       MaterialPageRoute(builder: (_) => const InventoryCountScreen()),
     ).then((_) => _load());
+  }
+
+  void _resumeSession() {
+    final s = _activeSession;
+    if (s == null) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => InventoryCountScreen(sessionId: s.id),
+      ),
+    ).then((_) => _load());
+  }
+}
+
+// ── Freeze Banner ─────────────────────────────────────────────────────────────
+
+class _FreezeBanner extends StatelessWidget {
+  const _FreezeBanner({required this.session, required this.onResume});
+  final CountSession session;
+  final VoidCallback onResume;
+
+  @override
+  Widget build(BuildContext context) {
+    final counted = session.lines.where((l) => l.isCounted).length;
+    final total = session.lines.length;
+    final progress = total == 0 ? 0.0 : counted / total;
+    final elapsed = _elapsed(session.openedAt);
+
+    // Branch name from lines if available, else ID
+    final branchLabel = session.branchId != null ? 'فرع #${session.branchId}' : 'الفرع';
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.amber.shade300, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.amber.withOpacity(0.15),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header strip
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.amber.shade300,
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(13)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.timer_outlined, size: 16, color: Colors.black87),
+                const SizedBox(width: 6),
+                const Text(
+                  'جلسة جرد قيد التنفيذ',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: Colors.black87,
+                  ),
+                ),
+                const Spacer(),
+                Text(
+                  session.isOpening ? 'افتتاحي' : 'دوري',
+                  style: const TextStyle(fontSize: 11, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          // Body
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.store_outlined, size: 16, color: Colors.black54),
+                    const SizedBox(width: 6),
+                    Text(branchLabel,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    if (elapsed.isNotEmpty)
+                      Text(
+                        'بدأت $elapsed',
+                        style: const TextStyle(fontSize: 12, color: Colors.black54),
+                      ),
+                  ],
+                ),
+                if (total > 0) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            backgroundColor: Colors.amber.shade100,
+                            color: Colors.amber.shade600,
+                            minHeight: 6,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        '$counted / $total',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: onResume,
+                    icon: const Icon(Icons.play_arrow_rounded),
+                    label: const Text('متابعة الجرد'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amber.shade600,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _elapsed(DateTime? openedAt) {
+    if (openedAt == null) return '';
+    final diff = DateTime.now().difference(openedAt);
+    if (diff.inMinutes < 1) return 'للتو';
+    if (diff.inMinutes < 60) return 'منذ ${diff.inMinutes} دقيقة';
+    if (diff.inHours < 24) return 'منذ ${diff.inHours} ساعة';
+    return 'منذ ${diff.inDays} يوم';
   }
 }
 
@@ -164,7 +342,7 @@ class _SummaryHeader extends StatelessWidget {
         children: [
           const Text(
             'إجمالي الذهب',
-            style: TextStyle(color: Colors.white70, fontSize: 13),
+            style: TextStyle(color: Colors.white, fontSize: 13),
           ),
           const SizedBox(height: 4),
           Text(
@@ -195,18 +373,18 @@ class _KaratChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = AppColors.karatColorFor(k.karat);
     return Container(
       margin: const EdgeInsets.only(left: 8),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.15),
+        color: Colors.black.withOpacity(0.22),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withOpacity(0.6)),
+        border: Border.all(color: Colors.white.withOpacity(0.3)),
       ),
       child: Text(
         'عيار ${k.karat.toStringAsFixed(0)}  ${formatWeight(k.totalWeight)} جم',
-        style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+        style: const TextStyle(
+            color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
       ),
     );
   }

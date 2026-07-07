@@ -116,11 +116,17 @@ class _DualSystemReconciliationScreenState
     final goldPrice =
         (_reportData!['gold_price'] as Map<String, dynamic>?) ?? {};
 
+    final alertCount = alerts.length;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16.0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Summary banner ──────────────────────────────────────
+          _buildSummaryBanner(alertCount),
+          const SizedBox(height: 12),
+
           // Status Card
           _buildStatusCard(status),
           const SizedBox(height: 16),
@@ -149,6 +155,42 @@ class _DualSystemReconciliationScreenState
 
           // Recommendations
           _buildRecommendationsSection(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryBanner(int alertCount) {
+    final ok = alertCount == 0;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+      decoration: BoxDecoration(
+        color: ok ? Colors.green.shade50 : Colors.orange.shade50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: ok ? Colors.green.shade300 : Colors.orange.shade300,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            ok ? Icons.check_circle_outline : Icons.warning_amber_rounded,
+            color: ok ? Colors.green : Colors.orange,
+            size: 28,
+          ),
+          const SizedBox(width: 12),
+          Text(
+            ok
+                ? 'جميع المطابقات سليمة'
+                : 'يوجد $alertCount ${alertCount == 1 ? 'اختلاف' : 'اختلافات'}',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'Cairo',
+              color: ok ? Colors.green.shade800 : Colors.orange.shade800,
+            ),
+          ),
         ],
       ),
     );

@@ -6,18 +6,20 @@ Endpoints:
     GET  /count                    قائمة جلسات الجرد
     POST /count                    فتح جلسة جرد جديدة
     GET  /count/<id>               تفاصيل جلسة + سطورها
-    PUT  /count/<id>/entry         تسج��ل عدّ فعلي لـ bucket
+    PUT  /count/<id>/entry         تسجيل عدّ فعلي لـ bucket
     POST /count/<id>/close         إغلاق الجلسة (تحضير للاعتماد)
-    POST /count/<id>/approve       اعتماد ��لجلسة + توليد قيود التسوية
+    POST /count/<id>/approve       اعتماد الجلسة + توليد قيود التسوية
+    POST /count/<id>/cancel        إلغاء جلسة مفتوحة
     POST /adjustment               تسوية يدوية مستقلة
     GET  /adjustment/<id>          تفاصيل تسوية + سطورها
-    GET  /reconciliation           تقرير الم��ابقة الرباعي
+    GET  /adjustment-reasons       قائمة أسباب التسوية المقننة
+    GET  /reconciliation           تقرير المطابقة الرباعي
     GET  /health                   تقرير صحة محرك الجرد
 
 Permissions:
     inventory.view    → GET  balance, balance/summary, count, count/<id>,
-                              adjustment/<id>, reconciliation*, health*
-    inventory.count   → POST count, PUT entry, POST close
+                              adjustment/<id>, adjustment-reasons, reconciliation*, health*
+    inventory.count   → POST count, PUT entry, POST close, POST cancel
     inventory.approve → POST approve, POST adjustment
     (* reconciliation و health: inventory.approve فقط — بيانات تدقيق حساسة)
 """
@@ -28,6 +30,32 @@ from flask import Blueprint, request, jsonify, g
 
 from auth_decorators import require_permission
 from models import db, Branch, Category, InventoryBalance, InventoryCountSession
+
+# ── Adjustment reason codes ───────────────────────────────────────────────────
+# Source of truth for the coded reason list.  Flutter reads this via
+# GET /inventory/adjustment-reasons — do NOT hardcode reasons in the client.
+# After 3–5 Pilot cycles, run:
+#   SELECT reason, COUNT(*) FROM inventory_adjustment GROUP BY reason ORDER BY 2 DESC
+# to see the distribution and decide whether SKU/Barcode investment is justified.
+ADJUSTMENT_REASONS: list[dict] = [
+    {'code': 'COUNT_ERROR', 'label': 'خطأ عدّ',       'requires_note': False},
+    {'code': 'LOSS',        'label': 'فاقد',           'requires_note': True},
+    {'code': 'NEW_ITEM',    'label': 'قطعة جديدة',     'requires_note': False},
+    {'code': 'OTHER',       'label': 'سبب آخر',        'requires_note': True},
+]
+_VALID_REASON_CODES = {r['code'] for r in ADJUSTMENT_REASONS}
+_REASON_REQUIRES_NOTE = {r['code']: r['requires_note'] for r in ADJUSTMENT_REASONS}
+
+# Category name cache — populated lazily, cleared on first request after restart
+_category_name_cache: dict[int, str] = {}
+
+def _category_name(category_id) -> str | None:
+    if category_id is None:
+        return None
+    if category_id not in _category_name_cache:
+        cat = Category.query.get(category_id)
+        _category_name_cache[category_id] = cat.name if cat else f'#{category_id}'
+    return _category_name_cache[category_id]
 
 inventory_bp = Blueprint('inventory', __name__, url_prefix='/api/inventory')
 
@@ -46,6 +74,17 @@ def _get_session_or_404(session_id: int):
     if s is None:
         return None, jsonify({'error': 'جلسة الجرد غير موجودة', 'session_id': session_id}), 404
     return s, None, None
+
+
+def _resolve_reason(raw: str) -> str | None:
+    """Return the canonical code for a reason; None if unrecognised."""
+    if not raw:
+        return None
+    if raw in _VALID_REASON_CODES:
+        return raw
+    # Accept legacy labels for backward compat
+    match = next((r['code'] for r in ADJUSTMENT_REASONS if r['label'] == raw), None)
+    return match
 
 
 def _err(msg: str, code: int = 400):
@@ -195,15 +234,21 @@ def open_count_session():
     if not isinstance(blind_count, bool):
         blind_count = str(blind_count).lower() not in ('false', '0', 'no')
 
+    session_type = data.get('session_type', 'periodic')
+
     try:
         session = InventoryCountService.open_session(
             branch_id=branch_id,
             opened_by=_current_user(),
             notes=data.get('notes', ''),
             blind_count=blind_count,
+            session_type=session_type,
         )
         db.session.flush()
-        InventoryCountService.populate_lines(session)
+        if session_type == 'opening':
+            InventoryCountService.populate_opening_lines(session)
+        else:
+            InventoryCountService.populate_lines(session)
         db.session.commit()
         return jsonify(_session_detail(session)), 201
     except ValueError as e:
@@ -256,8 +301,9 @@ def record_count_entry(session_id: int):
             counted_weight=float(counted_weight),
             counted_by=_current_user(),
         )
+        is_opening = getattr(s, 'session_type', 'periodic') == 'opening'
         db.session.commit()
-        return jsonify(_count_line(line)), 200
+        return jsonify(_count_line(line, reveal_expected=_should_reveal_expected(s), is_opening=is_opening)), 200
     except ValueError as e:
         db.session.rollback()
         return _err(str(e))
@@ -269,17 +315,32 @@ def record_count_entry(session_id: int):
 @inventory_bp.route('/count/<int:session_id>/close', methods=['POST'])
 @require_permission('inventory.count')
 def close_count_session(session_id: int):
-    """إغلاق الجلسة — تحقق أن جميع السطور تم عدّها."""
+    """إغلاق الجلسة.
+
+    Body (JSON):
+        force (bool, default false) — إغلاق حتى مع وجود أصناف لم تُعدّ.
+            يُستخدم عندما تكون بعض القطع خارج المحل (عند الصائغ، مرهونة…).
+            الأصناف غير المعدودة تظهر في تقرير المطابقة كـ "غير محدد".
+    """
     from services.inventory_count_service import InventoryCountService
 
     s, err, code = _get_session_or_404(session_id)
     if err:
         return err, code
 
+    data = request.get_json(silent=True) or {}
+    force = bool(data.get('force', False))
+    zero_uncounted = bool(data.get('zero_uncounted', False))
+
     try:
-        InventoryCountService.close_session(s)
+        uncounted = InventoryCountService.close_session(
+            s, force=force, zero_uncounted=zero_uncounted
+        )
         db.session.commit()
-        return jsonify(_session_summary(s)), 200
+        resp = _session_summary(s)
+        if uncounted:
+            resp['warning'] = f'{uncounted} صنف لم يُعدّ — تم الإغلاق بالقوة'
+        return jsonify(resp), 200
     except ValueError as e:
         db.session.rollback()
         return _err(str(e))
@@ -288,13 +349,47 @@ def close_count_session(session_id: int):
         return _err(f'خطأ في إغلاق الجلسة: {e}', 500)
 
 
+@inventory_bp.route('/count/<int:session_id>/cancel', methods=['POST'])
+@require_permission('inventory.count')
+def cancel_count_session(session_id: int):
+    """إلغاء جلسة فُتحت بالخطأ (فرع خاطئ، تهيئة خاطئة).
+
+    فقط الجلسات بحالة open أو counting يمكن إلغاؤها.
+    الجلسات المغلقة أو المعتمدة لا يمكن إلغاؤها.
+    """
+    s, err, code = _get_session_or_404(session_id)
+    if err:
+        return err, code
+
+    if s.status not in ('open', 'counting'):
+        return _err(f'لا يمكن إلغاء جلسة بحالة "{s.status}" — فقط الجلسات المفتوحة قابلة للإلغاء')
+
+    s.status = 'cancelled'
+    s.closed_at = datetime.now()
+    try:
+        db.session.commit()
+        return jsonify(_session_summary(s)), 200
+    except Exception as e:
+        db.session.rollback()
+        return _err(f'خطأ في إلغاء الجلسة: {e}', 500)
+
+
+@inventory_bp.route('/adjustment-reasons', methods=['GET'])
+@require_permission('inventory.view')
+def get_adjustment_reasons():
+    """قائمة أسباب التسوية المقننة — مصدر الحقيقة للـ Flutter dropdown."""
+    return jsonify(ADJUSTMENT_REASONS), 200
+
+
 @inventory_bp.route('/count/<int:session_id>/approve', methods=['POST'])
 @require_permission('inventory.approve')
 def approve_count_session(session_id: int):
     """اعتماد الجلسة — ينشئ قيود تسوية لأي فروقات.
 
     Body (JSON):
-        reason (str, optional)  سبب التسوية للقيد
+        reason (str, required for periodic sessions with variance)
+               يجب أن يكون code أو label من ADJUSTMENT_REASONS.
+               مثال: "counting_error" أو "خطأ عدّ"
     """
     from services.inventory_count_service import InventoryCountService
 
@@ -305,13 +400,28 @@ def approve_count_session(session_id: int):
         return _err('جلسة الجرد غير موجودة', 404)
 
     data = request.get_json(silent=True) or {}
-    reason = data.get('reason', 'تسوية جرد دوري')
+    raw_code = (data.get('reason_code') or data.get('reason') or '').strip()
+    note     = (data.get('note') or '').strip()
+
+    reason_code = _resolve_reason(raw_code)
+    is_periodic = getattr(s, 'session_type', 'periodic') == 'periodic'
+
+    if is_periodic and reason_code is None:
+        valid = '، '.join(f'{r["label"]} ({r["code"]})' for r in ADJUSTMENT_REASONS)
+        return _err(f'reason_code مطلوب ومقبول: {valid}')
+
+    if reason_code and _REASON_REQUIRES_NOTE.get(reason_code) and not note:
+        return _err(f'سبب "{reason_code}" يتطلب ملاحظة توضيحية (note)')
+
+    if reason_code is None:
+        reason_code = 'OTHER'
 
     try:
         session, adjustment = InventoryCountService.approve_session(
             session=s,
             approved_by=_current_user(),
-            adjustment_reason=reason,
+            adjustment_reason=reason_code,
+            adjustment_note=note,
         )
         db.session.commit()
         return jsonify({
@@ -392,7 +502,53 @@ def get_adjustment(adjustment_id: int):
     return jsonify(_adjustment_detail(adj)), 200
 
 
-# ── Reports ───────────��───────────────────────────────────��───────────────────
+# ── Admin / Migration ────────────────────────────────────────────────────────
+
+@inventory_bp.route('/admin/backfill-invoices', methods=['POST'])
+@require_permission('inventory.approve')
+def backfill_invoices():
+    """يُعيد معالجة الفواتير التاريخية وتسجيلها في InventoryLedger + InventoryBalance.
+
+    آمن تماماً: الـ posting service يتجاهل الفواتير المُسجَّلة مسبقاً (idempotent).
+    يُستخدم مرة واحدة عند أول إعداد النظام.
+    """
+    from models import Invoice
+    from services.inventory_posting_service import InventoryPostingService
+
+    invoices = Invoice.query.order_by(Invoice.id.asc()).all()
+    posted_count = 0
+    skipped_count = 0
+    errors = []
+
+    for inv in invoices:
+        try:
+            entries = InventoryPostingService.post(inv)
+            if entries:
+                posted_count += len(entries)
+            else:
+                skipped_count += 1
+        except Exception as e:
+            errors.append({'invoice_id': inv.id, 'error': str(e)})
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return _err(f'خطأ في حفظ البيانات: {e}', 500)
+
+    from models import InventoryBalance
+    balance_count = InventoryBalance.query.count()
+
+    return jsonify({
+        'invoices_processed': len(invoices),
+        'ledger_entries_created': posted_count,
+        'invoices_skipped': skipped_count,
+        'balance_buckets_now': balance_count,
+        'errors': errors,
+    }), 200
+
+
+# ── Reports ───────────────────────────────────────────────────────────────────
 
 @inventory_bp.route('/reconciliation', methods=['GET'])
 @require_permission('inventory.approve')
@@ -434,6 +590,7 @@ def _session_summary(s) -> dict:
         'id':                 s.id,
         'branch_id':          s.branch_id,
         'status':             s.status,
+        'session_type':       getattr(s, 'session_type', 'periodic') or 'periodic',
         'blind_count':        getattr(s, 'blind_count', True),
         'snapshot_ledger_id': s.snapshot_ledger_id,
         'opened_by':          s.opened_by,
@@ -448,28 +605,31 @@ def _session_summary(s) -> dict:
 def _session_detail(s) -> dict:
     summary = _session_summary(s)
     reveal = _should_reveal_expected(s)
-    summary['lines'] = [_count_line(ln, reveal_expected=reveal) for ln in s.lines]
+    is_opening = getattr(s, 'session_type', 'periodic') == 'opening'
+    summary['lines'] = [_count_line(ln, reveal_expected=reveal, is_opening=is_opening) for ln in s.lines]
     return summary
 
 
-def _count_line(ln, reveal_expected: bool = True) -> dict:
+def _count_line(ln, reveal_expected: bool = False, is_opening: bool = False) -> dict:
     """Serialise a count line.
 
-    When reveal_expected=False (blind count, session still open/counting),
-    expected_weight and expected_ledger_id are hidden — the counter sees
-    only their own input, preventing anchoring bias.
-    Expected is always revealed once the session is closed or approved.
+    Defaults to reveal_expected=False (fail-secure).
+    Callers must explicitly pass reveal_expected=True or use _should_reveal_expected().
+    When False: expected_weight, expected_ledger_id, and variance are omitted from
+    the response, preventing any client from reading the expected value during a
+    blind-count session — regardless of UI logic.
     """
     return {
         'id':               ln.id,
         'session_id':       ln.session_id,
         'branch_id':        ln.branch_id,
         'category_id':      ln.category_id,
+        'category_name':    _category_name(ln.category_id),
         'karat':            ln.karat,
-        'expected_weight':  round(float(ln.expected_weight or 0), 4) if reveal_expected else None,
-        'expected_ledger_id': ln.expected_ledger_id if reveal_expected else None,
+        'expected_weight':  None if is_opening else (round(float(ln.expected_weight or 0), 4) if reveal_expected else None),
+        'expected_ledger_id': None if is_opening else (ln.expected_ledger_id if reveal_expected else None),
         'counted_weight':   round(float(ln.counted_weight), 4) if ln.counted_weight is not None else None,
-        'variance':         round(float(ln.variance), 4) if ln.variance is not None and reveal_expected else None,
+        'variance':         None if is_opening else (round(float(ln.variance), 4) if ln.variance is not None and reveal_expected else None),
         'counted_by':       ln.counted_by,
         'counted_at':       ln.counted_at.isoformat() if ln.counted_at else None,
         'notes':            ln.notes,
@@ -497,7 +657,8 @@ def _adjustment_summary(adj) -> dict | None:
         'branch_id':       adj.branch_id,
         'adjustment_type': adj.adjustment_type,
         'status':          adj.status,
-        'reason':          adj.reason,
+        'reason_code':     adj.reason,
+        'note':            adj.notes,
         'created_by':      adj.created_by,
         'created_at':      adj.created_at.isoformat() if adj.created_at else None,
         'posted_by':       adj.posted_by,

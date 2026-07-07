@@ -40,6 +40,25 @@ class AppColors {
     }
   }
 
+  /// Dark variant for karat badge text on light-tinted backgrounds (WCAG AA).
+  /// Use instead of karatColorFor() when text sits on karatColor.withOpacity(0.12).
+  static Color karatBadgeTextColorFor(dynamic karatOrKey) {
+    final s = (karatOrKey ?? '').toString();
+    final digits = s.replaceAll(RegExp(r'[^0-9]'), '');
+    final k = int.tryParse(digits.isNotEmpty ? digits : s) ?? 21;
+    switch (k) {
+      case 18: return const Color(0xFFB71C1C); // dark red — 9.7:1 on #FFF0F0
+      case 21: return const Color(0xFF795500); // dark gold — 6.5:1 on #FAF4E5
+      case 22: return const Color(0xFF004D40); // dark teal — 8.6:1 on #EAF9F9
+      case 24: return const Color(0xFF4A148C); // dark purple — 7.2:1 on #F3EEF8
+      default: return const Color(0xFF5D4037); // dark brown fallback
+    }
+  }
+
+  /// Gold color safe for text on light backgrounds (dark mode: primaryGold, light mode: darkGold).
+  static Color goldText(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? primaryGold : darkGold;
+
   // ألوان الفواتير - للتفريق البصري بين أنواع الفواتير
   static const Color invoiceSaleNew = Color(
     0xFF2E7D32,

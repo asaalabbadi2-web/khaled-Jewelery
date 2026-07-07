@@ -124,7 +124,7 @@ class _BucketBalanceCardState extends State<BucketBalanceCard> {
         karatColor,
         child: Text(
           'لا يوجد رصيد مسجّل',
-          style: TextStyle(color: Colors.grey[600], fontSize: 12),
+          style: TextStyle(color: Colors.grey[500], fontSize: 12),
         ),
       );
     }
@@ -137,36 +137,26 @@ class _BucketBalanceCardState extends State<BucketBalanceCard> {
 
   Widget _fullBody(Color karatColor) {
     final b = _bucket!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final karatLabel =
+        'عيار ${b.karat.toStringAsFixed(b.karat == b.karat.truncateToDouble() ? 0 : 1)}';
+    final badgeTextColor = isDark
+        ? karatColor
+        : AppColors.karatBadgeTextColorFor(b.karat);
     return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // Karat badge
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: karatColor.withOpacity(0.15),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: karatColor.withOpacity(0.4)),
-          ),
-          child: Text(
-            'عيار ${b.karat.toStringAsFixed(b.karat == b.karat.truncateToDouble() ? 0 : 1)}',
-            style: TextStyle(
-              color: karatColor,
-              fontWeight: FontWeight.bold,
-              fontSize: 13,
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
+        // Weight — primary element
         Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 '${formatWeight(b.balance)} جم',
-                style: const TextStyle(
-                  fontSize: 18,
+                style: TextStyle(
+                  fontSize: 22,
                   fontWeight: FontWeight.bold,
-                  color: AppColors.primaryGold,
+                  color: AppColors.goldText(context),
                 ),
               ),
               if (b.updatedAt != null)
@@ -177,8 +167,26 @@ class _BucketBalanceCardState extends State<BucketBalanceCard> {
             ],
           ),
         ),
+        // Karat badge — secondary
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+          decoration: BoxDecoration(
+            color: karatColor.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: karatColor.withOpacity(0.4)),
+          ),
+          child: Text(
+            karatLabel,
+            style: TextStyle(
+              color: badgeTextColor,
+              fontWeight: FontWeight.bold,
+              fontSize: 13,
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
         IconButton(
-          icon: const Icon(Icons.refresh, size: 18, color: AppColors.primaryGold),
+          icon: Icon(Icons.refresh, size: 18, color: AppColors.goldText(context)),
           onPressed: _load,
           tooltip: 'تحديث',
           padding: EdgeInsets.zero,
@@ -190,6 +198,10 @@ class _BucketBalanceCardState extends State<BucketBalanceCard> {
 
   Widget _compactBody(Color karatColor) {
     final b = _bucket!;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark
+        ? karatColor
+        : AppColors.karatBadgeTextColorFor(b.karat);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -202,7 +214,7 @@ class _BucketBalanceCardState extends State<BucketBalanceCard> {
           '${formatWeight(b.balance)} جم',
           style: TextStyle(
             fontWeight: FontWeight.bold,
-            color: karatColor,
+            color: textColor,
             fontSize: 13,
           ),
         ),

@@ -4,21 +4,20 @@ import '../api_service.dart';
 import '../models/inventory_models.dart';
 import '../services/inventory_service.dart';
 import '../theme/app_theme.dart';
-import '../widgets/bucket_balance_card.dart';
+import '../widgets/bucket_balance_card.dart' show formatWeight;
 
 /// Screen 2 — Count Session Workspace.
 ///
-/// Design principles enforced here:
-///   • Blind count by default: expected_weight hidden while session is open/counting.
-///   • Save on blur/Enter only — never on keystroke — prevents partial values in DB.
-///   • Per-row status indicator: idle / saving… / ✓ saved / ✗ failed (retry).
-///   • counted_by shown per row for concurrent-count awareness.
-///   • pull-to-refresh with timestamp for multi-device use without websockets.
-///   • Approve dialog shows variance-only rows sorted to top + GL preview stub.
+/// Two roles, two modes:
+///   Employee (counting): simple weight-entry table, no expected values shown.
+///   Manager (review):    variance table + approve with coded reason.
+///
+/// Design invariants:
+///   • Blind count enforced server-side; UI only hides/shows based on flag.
+///   • Save on blur/Enter only — never on keystroke.
+///   • Pull-to-refresh for multi-device awareness without websockets.
 class InventoryCountScreen extends StatefulWidget {
-  /// Pass an existing session ID to resume, or null to open the "new session" flow.
   final int? sessionId;
-
   const InventoryCountScreen({super.key, this.sessionId});
 
   @override
@@ -31,14 +30,15 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
   CountSession? _session;
   bool _loading = true;
   String? _error;
-  DateTime? _lastRefresh;
-
-  // Lines state — maintained locally to avoid full-screen rebuilds on each entry
   late List<_LineState> _lineStates;
+
+  int _currentIndex = 0;
+  final _navScrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
+    _lineStates = [];
     if (widget.sessionId != null) {
       _loadSession(widget.sessionId!);
     } else {
@@ -46,7 +46,7 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
     }
   }
 
-  // ── Loading ───────────────────────────────────────────────────────────────
+  // ── Data ──────────────────────────────────────────────────────────────────
 
   Future<void> _loadSession(int id) async {
     setState(() { _loading = true; _error = null; });
@@ -60,12 +60,19 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _navScrollController.dispose();
+    super.dispose();
+  }
+
   void _applySession(CountSession s) {
     setState(() {
       _session = s;
       _lineStates = s.lines.map((l) => _LineState(line: l)).toList();
       _loading = false;
-      _lastRefresh = DateTime.now();
+      final firstUncounted = _lineStates.indexWhere((ls) => !ls.line.isCounted);
+      _currentIndex = firstUncounted == -1 ? 0 : firstUncounted;
     });
   }
 
@@ -74,7 +81,7 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
     await _loadSession(_session!.id);
   }
 
-  // ── Open Session Sheet ────────────────────────────────────────────────────
+  // ── Open session sheet ────────────────────────────────────────────────────
 
   void _showOpenSessionSheet() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -92,20 +99,22 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
             _applySession(s);
           },
           onCancelled: () {
-            Navigator.pop(context); // sheet
-            Navigator.pop(context); // screen
+            Navigator.pop(context);
+            Navigator.pop(context);
+          },
+          onNavigateToSession: (id) {
+            Navigator.pop(context);
+            _loadSession(id);
           },
         ),
       );
     });
   }
 
-  // ── Entry Save (blur / Enter) ─────────────────────────────────────────────
+  // ── Save entry ────────────────────────────────────────────────────────────
 
   Future<void> _saveEntry(_LineState ls, double value) async {
-    if (_session == null) return;
-    if (ls.line.categoryId == null) return;
-
+    if (_session == null || ls.line.categoryId == null) return;
     setState(() => ls.status = CountLineStatus.saving);
     try {
       final updated = await _svc.recordEntry(
@@ -114,13 +123,12 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
         karat: ls.line.karat,
         countedWeight: value,
       );
-      // Refresh session to pick up status change (open→counting)
       final refreshed = await _svc.getSession(_session!.id);
       setState(() {
         ls.line = updated.copyWith(uiStatus: CountLineStatus.saved);
         ls.status = CountLineStatus.saved;
+        ls.savedAt = DateTime.now();
         _session = refreshed;
-        _lastRefresh = DateTime.now();
       });
     } on InventoryApiException catch (e) {
       setState(() => ls.status = CountLineStatus.failed);
@@ -132,70 +140,190 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
     }
   }
 
-  // ── Actions ───────────────────────────────────────────────────────────────
+  // ── Focused mode navigation ───────────────────────────────────────────────
+
+  void _advanceFromIndex(int from) {
+    for (int i = from + 1; i < _lineStates.length; i++) {
+      if (!_lineStates[i].line.isCounted) {
+        setState(() => _currentIndex = i);
+        _scrollNavTo(i);
+        return;
+      }
+    }
+    for (int i = 0; i < from; i++) {
+      if (!_lineStates[i].line.isCounted) {
+        setState(() => _currentIndex = i);
+        _scrollNavTo(i);
+        return;
+      }
+    }
+    // All counted — stay in place
+  }
+
+  void _scrollNavTo(int index) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_navScrollController.hasClients) {
+        final target = (index * 88.0).clamp(
+          0.0,
+          _navScrollController.position.maxScrollExtent,
+        );
+        _navScrollController.animateTo(
+          target,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
+  }
+
+  Future<void> _saveAndAdvance(int index, double value) async {
+    final ls = _lineStates[index];
+    if (ls.status == CountLineStatus.saving) return;
+    // Advance immediately — don't block on network for scale-paced rhythm
+    _advanceFromIndex(index);
+    // Save in background; errors surface via SnackBar in _saveEntry
+    _saveEntry(ls, value);
+  }
+
+  String _itemLabel(CountLine line) {
+    final name = line.categoryName;
+    final karat = line.karat.toStringAsFixed(0);
+    if (name != null && name.isNotEmpty) return '$name ${karat}K';
+    if (line.categoryId != null) return '#${line.categoryId} ${karat}K';
+    return '${karat}K';
+  }
+
+  // ── Add item (opening sessions) ───────────────────────────────────────────
+
+  void _showAddItemSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _AddItemSheet(
+        onAdd: (categoryId, categoryName, karat, weight) async {
+          Navigator.pop(context);
+          // Create a temporary _LineState so the row appears immediately
+          final tempLine = CountLine(
+            id: -DateTime.now().millisecondsSinceEpoch,
+            sessionId: _session!.id,
+            branchId: _session!.branchId,
+            categoryId: categoryId,
+            categoryName: categoryName,
+            karat: karat,
+            countedWeight: weight,
+          );
+          final ls = _LineState(line: tempLine);
+          setState(() => _lineStates.add(ls));
+          await _saveEntry(ls, weight);
+        },
+      ),
+    );
+  }
+
+  // ── Close session ─────────────────────────────────────────────────────────
 
   Future<void> _closeSession() async {
-    final confirm = await showDialog<bool>(
+    final counted = _lineStates.where((l) => l.line.isCounted).length;
+    final uncountedCount = _lineStates.length - counted;
+    final hasUncounted = uncountedCount > 0;
+    final isOpening = _session?.isOpening ?? false;
+
+    // result: (confirmed, force, zeroUncounted)
+    final result = await showDialog<({bool confirmed, bool force, bool zeroUncounted})>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('إغلاق الجلسة'),
-        content: Text(
-          'سيتم إغلاق الجلسة وحساب الفروقات.\n'
-          'الأصناف غير المعدودة: ${_lineStates.where((l) => !l.line.isCounted).length}',
+        title: const Text('إنهاء العدّ'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(hasUncounted
+                ? 'تم عدّ $counted من ${_lineStates.length} صنف.'
+                : 'تم عدّ جميع الأصناف بنجاح.'),
+            if (hasUncounted) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.warning.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.warning.withOpacity(0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.warning_amber_rounded,
+                        color: AppColors.warning, size: 16),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        isOpening
+                            ? '$uncountedCount صنف لم يُدخَل وزنه.'
+                            : '$uncountedCount صنف لم يُعدّ — قد تكون خارج المحل.',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.warning),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('إلغاء')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('تراجع'),
+          ),
+          // Periodic: allow force-close leaving uncounted lines as NULL
+          if (hasUncounted && !isOpening)
+            TextButton(
+              onPressed: () => Navigator.pop(
+                  context, (confirmed: true, force: true, zeroUncounted: false)),
+              child: const Text('إغلاق مع تحذير',
+                  style: TextStyle(color: AppColors.warning)),
+            ),
+          // Opening: set uncounted lines to 0 automatically
+          if (hasUncounted && isOpening)
+            TextButton(
+              onPressed: () => Navigator.pop(
+                  context, (confirmed: true, force: false, zeroUncounted: true)),
+              child: const Text('سجّل الباقي كصفر وأغلق',
+                  style: TextStyle(color: Colors.teal)),
+            ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primaryGold),
-            child: const Text('إغلاق', style: TextStyle(color: Colors.white)),
+            onPressed: hasUncounted
+                ? null
+                : () => Navigator.pop(
+                    context, (confirmed: true, force: false, zeroUncounted: false)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryGold,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: Colors.grey[300],
+            ),
+            child: const Text('إنهاء العدّ'),
           ),
         ],
       ),
     );
-    if (confirm != true || !mounted) return;
+
+    if (result == null || !result.confirmed || !mounted) return;
 
     setState(() => _loading = true);
     try {
-      final s = await _svc.closeSession(_session!.id);
-      _applySession(s);
-    } on InventoryApiException catch (e) {
-      setState(() => _loading = false);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
-        );
-      }
-    }
-  }
-
-  Future<void> _approveSession() async {
-    if (_session == null) return;
-
-    // Build variance-only rows, sorted by |variance| descending
-    final varLines = _lineStates
-        .where((l) => l.line.variance != null && l.line.variance != 0)
-        .toList()
-      ..sort((a, b) =>
-          (b.line.variance!.abs()).compareTo(a.line.variance!.abs()));
-
-    final approved = await showDialog<String?>(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _ApproveDialog(varLines: varLines, session: _session!),
-    );
-    if (approved == null || !mounted) return; // cancelled
-
-    setState(() => _loading = true);
-    try {
-      final result = await _svc.approveSession(_session!.id, reason: approved);
-      _applySession(result.session);
-      if (mounted) {
+      final r = await _svc.closeSession(
+        _session!.id,
+        force: result.force,
+        zeroUncounted: result.zeroUncounted,
+      );
+      _applySession(r.session);
+      if (r.uncountedLines > 0 && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(result.adjustment != null
-              ? 'تم الاعتماد — تسوية #${result.adjustment!.id} صدرت'
-              : 'تم الاعتماد — لا توجد فروقات'),
-          backgroundColor: AppColors.success,
+          content: Text('${r.uncountedLines} صنف غير معدود — ستظهر في تقرير المطابقة'),
+          backgroundColor: AppColors.warning,
+          duration: const Duration(seconds: 4),
         ));
       }
     } on InventoryApiException catch (e) {
@@ -208,62 +336,496 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
     }
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  // ── Cancel session ────────────────────────────────────────────────────────
 
-  @override
-  Widget build(BuildContext context) {
-    return Directionality(
-      textDirection: TextDirection.rtl,
-      child: Scaffold(
-        appBar: AppBar(
-          title: _session == null
-              ? const Text('جلسة جرد جديدة')
-              : Text('جلسة #${_session!.id}'),
-          backgroundColor: AppColors.primaryGold,
-          foregroundColor: Colors.white,
-          actions: [
-            if (_session != null && _session!.isActive)
-              IconButton(
-                icon: const Icon(Icons.refresh),
-                onPressed: _refresh,
-                tooltip: _lastRefresh != null
-                    ? 'آخر تحديث ${_timeSince(_lastRefresh!)}'
-                    : 'تحديث',
-              ),
+  Future<void> _cancelSession() async {
+    final readingCount = _lineStates.where((l) => l.line.isCounted).length;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('إلغاء الجرد'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              readingCount > 0
+                  ? 'سيتم إبطال جميع القراءات المسجلة في هذه الجلسة ($readingCount قراءة).'
+                  : 'سيتم إبطال هذه الجلسة.',
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 10),
+            _InfoChip(
+              icon: Icons.shield_outlined,
+              label: 'لن تؤثر على المخزون أو التسويات.',
+              color: AppColors.info,
+            ),
+            const SizedBox(height: 6),
+            _InfoChip(
+              icon: Icons.warning_amber_rounded,
+              label: 'لا يمكن التراجع.',
+              color: AppColors.warning,
+            ),
           ],
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator(color: AppColors.primaryGold))
-            : _error != null
-                ? _ErrorRetry(
-                    message: _error!,
-                    onRetry: _session != null
-                        ? () => _loadSession(_session!.id)
-                        : _showOpenSessionSheet,
-                  )
-                : _session == null
-                    ? const SizedBox.shrink()
-                    : _buildBody(),
-        bottomNavigationBar: _session == null || _loading ? null : _buildBottomBar(),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('تراجع'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.error,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('إلغاء الجرد'),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !mounted) return;
+
+    setState(() => _loading = true);
+    try {
+      await _svc.cancelSession(_session!.id);
+      if (mounted) Navigator.pop(context);
+    } on InventoryApiException catch (e) {
+      setState(() => _loading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+        );
+      }
+    }
+  }
+
+  // ── Approve ───────────────────────────────────────────────────────────────
+
+  Future<bool> _showOpeningApproveConfirm() async {
+    final total = _lineStates.length;
+    final counted = _lineStates.where((l) => l.line.isCounted).length;
+    final totalWeight = _lineStates
+        .where((l) => l.line.countedWeight != null)
+        .fold(0.0, (s, l) => s + l.line.countedWeight!);
+
+    return await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => Directionality(
+            textDirection: TextDirection.rtl,
+            child: AlertDialog(
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              title: const Row(
+                children: [
+                  Icon(Icons.lock_outlined, color: AppColors.primaryGold),
+                  SizedBox(width: 8),
+                  Text('اعتماد الرصيد الافتتاحي'),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _WillDo('تسجيل $counted بند كرصيد افتتاحي'),
+                  _WillDo('إجمالي ${formatWeight(totalWeight)} جم في الدفاتر'),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.warning.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                          color: AppColors.warning.withOpacity(0.4)),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded,
+                            color: AppColors.warning, size: 16),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'هذا الإجراء لا يمكن التراجع عنه.\nالجرد الافتتاحي يُنفَّذ مرة واحدة فقط.',
+                            style: TextStyle(
+                                fontSize: 12, color: AppColors.warning),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (counted < total) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      '${total - counted} صنف لم يُدخَل وزنه — سيُسجَّل كصفر.',
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.grey[500]),
+                    ),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('تراجع'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('اعتماد الرصيد'),
+                ),
+              ],
+            ),
+          ),
+        ) ??
+        false;
+  }
+
+  Future<void> _approveSession() async {
+    if (_session == null) return;
+
+    // Opening sessions: simplified confirm — no variance, no reason code
+    if (_session!.isOpening) {
+      final ok = await _showOpeningApproveConfirm();
+      if (!ok || !mounted) return;
+      setState(() => _loading = true);
+      try {
+        final result = await _svc.approveSession(_session!.id);
+        _applySession(result.session);
+        if (mounted) await _showSuccessDialog(result.session, adjustmentId: null);
+      } on InventoryApiException catch (e) {
+        setState(() => _loading = false);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+          );
+        }
+      }
+      return;
+    }
+
+    // Periodic sessions: full dialog with reason codes
+    final totalLines = _lineStates.length;
+    final netDelta = _lineStates
+        .where((l) => l.line.variance != null)
+        .fold(0.0, (sum, l) => sum + l.line.variance!);
+    final varLines = _lineStates
+        .where((l) => l.line.variance != null && l.line.variance != 0)
+        .toList()
+      ..sort((a, b) => b.line.variance!.abs().compareTo(a.line.variance!.abs()));
+
+    final approved = await showDialog<({String code, String note})?>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _ApproveDialog(
+        varLines: varLines,
+        session: _session!,
+        svc: _svc,
+        totalLines: totalLines,
+        netDelta: netDelta,
+      ),
+    );
+    if (approved == null || !mounted) return;
+
+    setState(() => _loading = true);
+    try {
+      final result = await _svc.approveSession(
+        _session!.id,
+        reasonCode: approved.code,
+        note: approved.note,
+      );
+      _applySession(result.session);
+      if (mounted) {
+        await _showSuccessDialog(
+          result.session,
+          adjustmentId: result.adjustment?.id,
+        );
+      }
+    } on InventoryApiException catch (e) {
+      setState(() => _loading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+        );
+      }
+    }
+  }
+
+  Future<void> _showSuccessDialog(CountSession approved, {int? adjustmentId}) async {
+    final totalLines = _lineStates.length;
+    final varCount = _lineStates
+        .where((l) => l.line.variance != null && l.line.variance != 0)
+        .length;
+    final netDelta = _lineStates
+        .where((l) => l.line.variance != null)
+        .fold(0.0, (sum, l) => sum + l.line.variance!);
+
+    Duration? elapsed;
+    if (approved.openedAt != null && approved.approvedAt != null) {
+      elapsed = approved.approvedAt!.difference(approved.openedAt!);
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: AlertDialog(
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.verified_rounded,
+                  size: 64, color: AppColors.success),
+              const SizedBox(height: 12),
+              const Text(
+                'تم اعتماد الجرد',
+                style: TextStyle(
+                    fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 20),
+              _SuccessStat(label: 'بنداً', value: '$totalLines'),
+              if (varCount > 0)
+                _SuccessStat(
+                  label: 'فروقات',
+                  value: varCount.toString(),
+                  sub: '${netDelta >= 0 ? '+' : ''}${formatWeight(netDelta)} جم',
+                  subColor: netDelta >= 0 ? AppColors.success : AppColors.error,
+                ),
+              if (elapsed != null)
+                _SuccessStat(
+                    label: 'استغرق', value: _formatDuration(elapsed)),
+              if (approved.openedBy != null)
+                _SuccessStat(label: 'بدأه', value: approved.openedBy!),
+              if (approved.approvedBy != null)
+                _SuccessStat(label: 'اعتمده', value: approved.approvedBy!),
+            ],
+          ),
+          actionsAlignment: MainAxisAlignment.center,
+          actions: [
+            if (adjustmentId != null)
+              OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  _showAdjustmentSheet(adjustmentId);
+                },
+                icon: const Icon(Icons.receipt_long_outlined, size: 16),
+                label: const Text('عرض مستند ال��سوية'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppColors.primaryGold,
+                  side: const BorderSide(color: AppColors.primaryGold),
+                ),
+              ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.success,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(120, 44),
+              ),
+              child: const Text('إغلاق'),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildBody() {
-    final s = _session!;
+  Future<void> _showAdjustmentSheet(int adjustmentId) async {
+    final InventoryAdjustment adj;
+    try {
+      adj = await _svc.getAdjustment(adjustmentId);
+    } on InventoryApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: AppColors.error),
+        );
+      }
+      return;
+    }
+    if (!mounted) return;
+
+    final reasonLabel = AdjustmentReason.fallback
+        .firstWhere(
+          (r) => r.code == adj.reasonCode,
+          orElse: () => AdjustmentReason(
+              code: adj.reasonCode ?? '', label: adj.reasonCode ?? '—'),
+        )
+        .label;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => Directionality(
+        textDirection: TextDirection.rtl,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 36),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Icon(Icons.receipt_long_outlined,
+                    color: AppColors.primaryGold),
+                const SizedBox(width: 10),
+                Text('مستند تسوية #${adj.id}',
+                    style: const TextStyle(
+                        fontSize: 17, fontWeight: FontWeight.bold)),
+              ]),
+              const Divider(height: 24),
+              _AdjRow(label: 'الحالة',
+                  value: adj.status == 'posted' ? 'مُرحَّل' : adj.status),
+              _AdjRow(label: 'السبب', value: reasonLabel),
+              if (adj.note != null && adj.note!.isNotEmpty)
+                _AdjRow(label: 'ملاحظة', value: adj.note!),
+              _AdjRow(label: 'أنشأه', value: adj.createdBy ?? '—'),
+              if (adj.postedBy != null)
+                _AdjRow(label: 'رحّله', value: adj.postedBy!),
+              if (adj.lines.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                const Text('البنود',
+                    style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                        color: Colors.grey)),
+                const SizedBox(height: 8),
+                ...adj.lines.map((ln) {
+                  final v = ln.varianceWeight;
+                  final catLabel = ln.categoryId != null
+                      ? '#${ln.categoryId} ${ln.karat.toStringAsFixed(0)}K'
+                      : '${ln.karat.toStringAsFixed(0)}K';
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(children: [
+                      Expanded(
+                          child: Text(catLabel,
+                              style: const TextStyle(fontSize: 13))),
+                      Text(
+                        '${v >= 0 ? '+' : ''}${formatWeight(v)} جم',
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: v > 0 ? AppColors.success : AppColors.error,
+                        ),
+                      ),
+                    ]),
+                  );
+                }),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _formatDuration(Duration d) {
+    if (d.inMinutes < 1) return 'أقل من دقيقة';
+    if (d.inHours < 1) return '${d.inMinutes} دقيقة';
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    return m > 0 ? '$h ساعة و$m دقيقة' : '$h ساعة';
+  }
+
+  // ── Build ─────────────────────────────────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    final s = _session;
+    final isOpening = s?.isOpening ?? false;
+    final isActive = s?.isActive ?? false;
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Scaffold(
+        appBar: AppBar(
+          title: s == null
+              ? const Text('جلسة جرد جديدة')
+              : Text(isOpening ? 'الجرد الافتتاحي' : 'جرد دوري'),
+          backgroundColor: AppColors.primaryGold,
+          foregroundColor: Colors.white,
+          actions: [
+            if (s != null && isActive) ...[
+              IconButton(
+                icon: const Icon(Icons.refresh),
+                onPressed: _refresh,
+                tooltip: 'تحديث',
+              ),
+              PopupMenuButton<String>(
+                onSelected: (v) { if (v == 'cancel') _cancelSession(); },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'cancel',
+                    child: Row(children: [
+                      Icon(Icons.cancel_outlined, color: AppColors.error, size: 18),
+                      SizedBox(width: 8),
+                      Text('إلغاء الجلسة',
+                          style: TextStyle(color: AppColors.error)),
+                    ]),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+        body: _loading
+            ? const Center(
+                child: CircularProgressIndicator(color: AppColors.primaryGold))
+            : _error != null
+                ? _ErrorRetry(
+                    message: _error!,
+                    onRetry: s != null
+                        ? () => _loadSession(s.id)
+                        : _showOpenSessionSheet,
+                  )
+                : s == null
+                    ? const SizedBox.shrink()
+                    : _buildBody(s),
+        floatingActionButton: (s != null && isActive)
+            ? FloatingActionButton.extended(
+                onPressed: _showAddItemSheet,
+                backgroundColor: AppColors.primaryGold,
+                foregroundColor: Colors.white,
+                icon: const Icon(Icons.add),
+                label: const Text('إضافة صنف'),
+              )
+            : null,
+        bottomNavigationBar:
+            s == null || _loading ? null : _buildBottomBar(s),
+      ),
+    );
+  }
+
+  Widget _buildBody(CountSession s) {
+    if (s.isActive) return _buildFocusedBody(s);
+    return _buildReviewBody(s);
+  }
+
+  Widget _buildReviewBody(CountSession s) {
+    final counted = _lineStates.where((l) => l.line.isCounted).length;
+    final total = _lineStates.length;
     return Column(
       children: [
-        _SessionStatusBar(session: s, lastRefresh: _lastRefresh),
+        _ProgressBanner(counted: counted, total: total, session: s),
         Expanded(
           child: RefreshIndicator(
             onRefresh: _refresh,
             color: AppColors.primaryGold,
             child: _lineStates.isEmpty
-                ? const Center(child: Text('لا توجد أصناف في هذا الفرع'))
+                ? _EmptyCountState(
+                    isOpening: s.isOpening,
+                    isActive: false,
+                    onAdd: null,
+                  )
                 : ListView.separated(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
                     itemCount: _lineStates.length,
-                    separatorBuilder: (ctx, i) => const SizedBox(height: 8),
+                    separatorBuilder: (_, _) => const SizedBox(height: 8),
                     itemBuilder: (_, i) => _CountLineRow(
                       key: ValueKey(_lineStates[i].line.id),
                       ls: _lineStates[i],
@@ -282,50 +844,217 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
     );
   }
 
-  Widget _buildBottomBar() {
-    final s = _session!;
-    final countedCount = _lineStates.where((l) => l.line.isCounted).length;
+  Widget _buildFocusedBody(CountSession s) {
+    if (_lineStates.isEmpty) {
+      return Column(
+        children: [
+          _ProgressBanner(counted: 0, total: 0, session: s),
+          Expanded(
+            child: _EmptyCountState(
+              isOpening: s.isOpening,
+              isActive: true,
+              onAdd: _showAddItemSheet,
+            ),
+          ),
+        ],
+      );
+    }
+
+    final idx = _currentIndex.clamp(0, _lineStates.length - 1);
+    final current = _lineStates[idx];
+    final counted = _lineStates.where((l) => l.line.isCounted).length;
     final total = _lineStates.length;
+
+    String? nextLabel;
+    for (int i = idx + 1; i < _lineStates.length; i++) {
+      if (!_lineStates[i].line.isCounted) {
+        nextLabel = _itemLabel(_lineStates[i].line);
+        break;
+      }
+    }
+
+    return LayoutBuilder(
+      builder: (ctx, constraints) {
+        final wide = constraints.maxWidth > 640;
+        if (wide) {
+          return _buildWideFocusedBody(s, idx, current, counted, total, nextLabel);
+        }
+        return _buildNarrowFocusedBody(s, idx, current, counted, total, nextLabel);
+      },
+    );
+  }
+
+  Widget _buildNarrowFocusedBody(
+    CountSession s, int idx, _LineState current,
+    int counted, int total, String? nextLabel,
+  ) {
+    return Column(
+      children: [
+        _ProgressBanner(
+          counted: counted,
+          total: total,
+          session: s,
+          currentLabel: _itemLabel(current.line),
+          nextLabel: nextLabel,
+        ),
+        Expanded(
+          child: SingleChildScrollView(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: _FocusedCard(
+                key: ValueKey(idx),
+                ls: current,
+                session: s,
+                onSaveAndAdvance: (v) => _saveAndAdvance(idx, v),
+                onRetry: () {
+                  if (current.line.countedWeight != null) {
+                    _saveAndAdvance(idx, current.line.countedWeight!);
+                  }
+                },
+                onPrev: idx > 0 ? () => setState(() => _currentIndex = idx - 1) : null,
+                onNext: idx < _lineStates.length - 1
+                    ? () => setState(() => _currentIndex = idx + 1)
+                    : null,
+              ),
+            ),
+          ),
+        ),
+        _NavStrip(
+          lineStates: _lineStates,
+          currentIndex: idx,
+          scrollController: _navScrollController,
+          onTap: (i) => setState(() => _currentIndex = i),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWideFocusedBody(
+    CountSession s, int idx, _LineState current,
+    int counted, int total, String? nextLabel,
+  ) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 260,
+          child: _NavList(
+            lineStates: _lineStates,
+            currentIndex: idx,
+            onTap: (i) => setState(() => _currentIndex = i),
+          ),
+        ),
+        const VerticalDivider(width: 1),
+        Expanded(
+          child: Column(
+            children: [
+              _ProgressBanner(
+                counted: counted,
+                total: total,
+                session: s,
+                currentLabel: _itemLabel(current.line),
+                nextLabel: nextLabel,
+              ),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: _FocusedCard(
+                      key: ValueKey(idx),
+                      ls: current,
+                      session: s,
+                      onSaveAndAdvance: (v) => _saveAndAdvance(idx, v),
+                      onRetry: () {
+                        if (current.line.countedWeight != null) {
+                          _saveAndAdvance(idx, current.line.countedWeight!);
+                        }
+                      },
+                      onPrev: idx > 0 ? () => setState(() => _currentIndex = idx - 1) : null,
+                      onNext: idx < _lineStates.length - 1
+                          ? () => setState(() => _currentIndex = idx + 1)
+                          : null,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomBar(CountSession s) {
+    final counted = _lineStates.where((l) => l.line.isCounted).length;
+    final total = _lineStates.length;
+    final allDone = counted == total && total > 0;
 
     return SafeArea(
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)],
+          boxShadow: [
+            BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8)
+          ],
         ),
         child: Row(
           children: [
-            Expanded(
-              child: Text(
-                'تم عدّ $countedCount / $total صنف',
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-            if (s.status == 'open' || s.status == 'counting')
-              ElevatedButton(
-                onPressed: countedCount == total ? _closeSession : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryGold,
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: Colors.grey[300],
+            if (s.status == 'open' || s.status == 'counting') ...[
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: counted > 0 ? _closeSession : null,
+                  icon: Icon(allDone
+                      ? Icons.check_circle_outline
+                      : Icons.lock_clock),
+                  label: Text(allDone
+                      ? 'انتهيت — إنهاء العدّ'
+                      : 'إنهاء العدّ ($counted/$total)'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor:
+                        allDone ? AppColors.success : AppColors.primaryGold,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.grey[300],
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
                 ),
-                child: const Text('إغلاق والمراجعة'),
               ),
+            ],
             if (s.status == 'closed')
-              ElevatedButton.icon(
-                onPressed: _approveSession,
-                icon: const Icon(Icons.check_circle_outline),
-                label: const Text('اعتماد الجرد'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.success,
-                  foregroundColor: Colors.white,
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _approveSession,
+                  icon: const Icon(Icons.verified_outlined),
+                  label: const Text('اعتماد الجرد'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.success,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
                 ),
               ),
             if (s.status == 'approved')
-              const Chip(
-                label: Text('معتمد ✓', style: TextStyle(color: Colors.white)),
-                backgroundColor: AppColors.success,
+              Expanded(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: AppColors.success.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                        color: AppColors.success.withOpacity(0.4)),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.check_circle,
+                          color: AppColors.success, size: 20),
+                      SizedBox(width: 8),
+                      Text('تم الاعتماد بنجاح',
+                          style: TextStyle(
+                              color: AppColors.success,
+                              fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
               ),
           ],
         ),
@@ -334,74 +1063,682 @@ class _InventoryCountScreenState extends State<InventoryCountScreen> {
   }
 }
 
-// ── Session Status Bar ────────────────────────────────────────────────────────
+// ── Progress Banner ───────────────────────────────────────────────────────────
 
-class _SessionStatusBar extends StatelessWidget {
-  const _SessionStatusBar({required this.session, required this.lastRefresh});
+class _ProgressBanner extends StatelessWidget {
+  const _ProgressBanner({
+    required this.counted,
+    required this.total,
+    required this.session,
+    this.currentLabel,
+    this.nextLabel,
+  });
+  final int counted;
+  final int total;
   final CountSession session;
-  final DateTime? lastRefresh;
+  final String? currentLabel;
+  final String? nextLabel;
 
   @override
   Widget build(BuildContext context) {
-    final statusColor = _statusColor(session.status);
+    final isActive = session.isActive;
+    final isApproved = session.status == 'approved';
+    final isClosed = session.status == 'closed';
+    final progress = total == 0 ? 0.0 : counted / total;
+
+    Color barColor;
+    String label;
+
+    if (isApproved) {
+      barColor = AppColors.success;
+      label = 'معتمد — تم تحديث الأرصدة';
+    } else if (isClosed) {
+      barColor = AppColors.primaryGold;
+      label = 'بانتظار اعتماد المدير';
+    } else if (total == 0) {
+      barColor = Colors.grey;
+      label = session.isOpening
+          ? 'اضغط + لإضافة الأصناف'
+          : 'لا توجد أصناف في هذا الفرع';
+    } else if (counted == total) {
+      barColor = AppColors.success;
+      label = 'تم عدّ جميع الأصناف ✓';
+    } else {
+      barColor = AppColors.primaryGold;
+      label = 'تم عدّ $counted من $total صنف';
+    }
+
+    // primaryGold (#D4AF37) fails contrast on near-white bg — use darkGold for text
+    final labelColor = barColor == AppColors.primaryGold
+        ? AppColors.darkGold
+        : barColor;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      color: statusColor.withOpacity(0.08),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+      color: barColor.withOpacity(0.05),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 8, height: 8,
-            decoration: BoxDecoration(color: statusColor, shape: BoxShape.circle),
-          ),
-          const SizedBox(width: 8),
-          Text(
-            _statusLabel(session.status),
-            style: TextStyle(color: statusColor, fontWeight: FontWeight.bold, fontSize: 13),
-          ),
-          if (session.blindCount && session.isActive) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: AppColors.info.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(6),
+          // ── Label row ────────────────────────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: labelColor,
+                  ),
+                ),
               ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.visibility_off, size: 12, color: AppColors.info),
-                  SizedBox(width: 4),
-                  Text('جرد أعمى', style: TextStyle(fontSize: 11, color: AppColors.info)),
+              if (session.blindCount && isActive)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: AppColors.info.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.visibility_off, size: 12, color: AppColors.info),
+                      SizedBox(width: 4),
+                      Text('أعمى',
+                          style: TextStyle(fontSize: 11, color: AppColors.info)),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // ── Progress bar + counter ────────────────────────────────────
+          Row(
+            children: [
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(5),
+                  child: LinearProgressIndicator(
+                    value: total == 0 ? 0 : progress,
+                    backgroundColor: Colors.grey.shade200,
+                    color: barColor,
+                    minHeight: 10,
+                  ),
+                ),
+              ),
+              if (total > 0) ...[
+                const SizedBox(width: 10),
+                RichText(
+                  text: TextSpan(
+                    children: [
+                      TextSpan(
+                        text: '$counted',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                          color: labelColor,
+                        ),
+                      ),
+                      TextSpan(
+                        text: ' / $total',
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.grey[500],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+          // ── Current / next hint (focused mode only) ──────────────────
+          if (currentLabel != null) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Icon(Icons.my_location, size: 11, color: labelColor.withOpacity(0.7)),
+                const SizedBox(width: 4),
+                Text(
+                  currentLabel!,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: labelColor,
+                  ),
+                ),
+                if (nextLabel != null) ...[
+                  Text('  ←  ',
+                      style: TextStyle(fontSize: 11, color: Colors.grey[400])),
+                  Icon(Icons.navigate_next, size: 13, color: Colors.grey[400]),
+                  const SizedBox(width: 2),
+                  Text(
+                    nextLabel!,
+                    style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                  ),
                 ],
-              ),
+              ],
             ),
           ],
-          const Spacer(),
-          if (lastRefresh != null)
-            Text(
-              'آخر تحديث ${_timeSince(lastRefresh!)}',
-              style: TextStyle(fontSize: 11, color: Colors.grey[500]),
-            ),
         ],
       ),
     );
   }
+}
 
-  static Color _statusColor(String s) => switch (s) {
-        'open' => AppColors.info,
-        'counting' => AppColors.warning,
-        'closed' => AppColors.primaryGold,
-        'approved' => AppColors.success,
-        _ => Colors.grey,
-      };
+// ── Empty count state ─────────────────────────────────────────────────────────
 
-  static String _statusLabel(String s) => switch (s) {
-        'open' => 'مفتوحة',
-        'counting' => 'قيد العدّ',
-        'closed' => 'مغلقة — بانتظار الاعتماد',
-        'approved' => 'معتمدة',
-        _ => s,
-      };
+class _EmptyCountState extends StatelessWidget {
+  const _EmptyCountState({
+    required this.isOpening,
+    required this.isActive,
+    this.onAdd,
+  });
+  final bool isOpening;
+  final bool isActive;
+  final VoidCallback? onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    final String message;
+    final IconData icon;
+
+    if (isOpening) {
+      icon = Icons.add_box_outlined;
+      message = 'لا توجد أصناف بعد\nاضغط + لإضافة أول صنف';
+    } else if (isActive) {
+      icon = Icons.inventory_2_outlined;
+      message = 'لا يوجد رصيد مسجّل لهذا الفرع\n'
+          'إذا كانت هذه أول جلسة، أغلقها\n'
+          'وافتح جرداً افتتاحياً بدلاً منها';
+    } else {
+      icon = Icons.inventory_2_outlined;
+      message = 'لا توجد أصناف مسجّلة في هذا الفرع';
+    }
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 64, color: Colors.grey[300]),
+            const SizedBox(height: 16),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey[500], fontSize: 15, height: 1.6),
+            ),
+            if (isActive && onAdd != null) ...[
+              const SizedBox(height: 20),
+              ElevatedButton.icon(
+                onPressed: onAdd,
+                icon: const Icon(Icons.add),
+                label: const Text('إضافة صنف يدوياً'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primaryGold,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Focused Card ─────────────────────────────────────────────────────────────
+
+class _FocusedCard extends StatefulWidget {
+  const _FocusedCard({
+    super.key,
+    required this.ls,
+    required this.session,
+    required this.onSaveAndAdvance,
+    required this.onRetry,
+    this.onPrev,
+    this.onNext,
+  });
+  final _LineState ls;
+  final CountSession session;
+  final ValueChanged<double> onSaveAndAdvance;
+  final VoidCallback onRetry;
+  final VoidCallback? onPrev;
+  final VoidCallback? onNext;
+
+  @override
+  State<_FocusedCard> createState() => _FocusedCardState();
+}
+
+class _FocusedCardState extends State<_FocusedCard> {
+  late final TextEditingController _ctrl;
+  late final FocusNode _focus;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(
+      text: widget.ls.line.countedWeight?.toStringAsFixed(3) ?? '',
+    );
+    _focus = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focus.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final text = _ctrl.text.trim();
+    if (text.endsWith('.')) return;
+    final val = double.tryParse(text);
+    if (val == null) return;
+    widget.onSaveAndAdvance(val);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ls = widget.ls;
+    final line = ls.line;
+    final karat = line.karat;
+    final karatColor = AppColors.karatColorFor(karat);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final badgeTextColor =
+        isDark ? karatColor : AppColors.karatBadgeTextColorFor(karat);
+    final categoryLabel = line.categoryName ??
+        (line.categoryId != null ? '#${line.categoryId}' : '—');
+    final saved = ls.status == CountLineStatus.saved || line.isCounted;
+    final saving = ls.status == CountLineStatus.saving;
+    final failed = ls.status == CountLineStatus.failed;
+
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Container(
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
+            color: saved
+                ? AppColors.success.withOpacity(0.04)
+                : Theme.of(context).cardColor,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: failed
+                  ? AppColors.error.withOpacity(0.5)
+                  : saved
+                      ? AppColors.success.withOpacity(0.4)
+                      : karatColor.withOpacity(0.2),
+              width: saved || failed ? 1.5 : 1.0,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: (saved ? AppColors.success : karatColor).withOpacity(0.08),
+                blurRadius: 16,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Category name
+              Text(
+                categoryLabel,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
+              // Karat badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                decoration: BoxDecoration(
+                  color: karatColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  'عيار ${karat.toStringAsFixed(0)}',
+                  style: TextStyle(
+                    color: badgeTextColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 28),
+              // Weight input — oversized for scale reading
+              TextField(
+                controller: _ctrl,
+                focusNode: _focus,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _submit(),
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 36, fontWeight: FontWeight.bold),
+                decoration: InputDecoration(
+                  suffixText: 'جم',
+                  suffixStyle: TextStyle(fontSize: 18, color: Colors.grey[500]),
+                  hintText: '0.000',
+                  hintStyle: TextStyle(
+                    fontSize: 36,
+                    color: Colors.grey[300],
+                    fontWeight: FontWeight.bold,
+                  ),
+                  isDense: true,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                  focusedBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(color: karatColor, width: 2),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: BorderSide(
+                      color: saved
+                          ? AppColors.success.withOpacity(0.4)
+                          : Colors.grey.shade300,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              // Status row
+              SizedBox(
+                height: 24,
+                child: saving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: AppColors.primaryGold),
+                      )
+                    : ls.savedAt != null && !failed
+                        ? Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.check_circle,
+                                  size: 14, color: AppColors.success),
+                              const SizedBox(width: 5),
+                              Text(
+                                'حُفظ ${_savedAgo(ls.savedAt!)}',
+                                style: TextStyle(
+                                    fontSize: 12, color: Colors.grey[500]),
+                              ),
+                            ],
+                          )
+                        : failed
+                            ? GestureDetector(
+                                onTap: widget.onRetry,
+                                child: const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(Icons.replay,
+                                        size: 14, color: AppColors.error),
+                                    SizedBox(width: 4),
+                                    Text('فشل الحفظ — اضغط للمحاولة',
+                                        style: TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.error)),
+                                  ],
+                                ),
+                              )
+                            : const SizedBox.shrink(),
+              ),
+              const SizedBox(height: 20),
+              // Action buttons
+              Row(
+                children: [
+                  // حفظ + التالي — primary action
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: _submit,
+                      icon: const Icon(Icons.save_alt_outlined, size: 16),
+                      label: const Text('حفظ + التالي'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primaryGold,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 13),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  // السابق — secondary
+                  OutlinedButton.icon(
+                    onPressed: widget.onPrev,
+                    icon: const Icon(Icons.arrow_forward_ios, size: 13),
+                    label: const Text('السابق'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.grey[600],
+                      side: BorderSide(color: Colors.grey.shade300),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 13, horizontal: 12),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Center(
+                child: Text(
+                  'أو Enter من لوحة المفاتيح',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[400]),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _savedAgo(DateTime t) {
+    final diff = DateTime.now().difference(t);
+    if (diff.inSeconds < 60) return 'قبل ${diff.inSeconds} ث';
+    if (diff.inMinutes < 60) return 'قبل ${diff.inMinutes} د';
+    return 'قبل ${diff.inHours} س';
+  }
+}
+
+// ── Nav Strip (narrow) ────────────────────────────────────────────────────────
+
+class _NavStrip extends StatelessWidget {
+  const _NavStrip({
+    required this.lineStates,
+    required this.currentIndex,
+    required this.scrollController,
+    required this.onTap,
+  });
+  final List<_LineState> lineStates;
+  final int currentIndex;
+  final ScrollController scrollController;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 60,
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        border: Border(top: BorderSide(color: Colors.grey.shade200)),
+      ),
+      child: ListView.builder(
+        controller: scrollController,
+        scrollDirection: Axis.horizontal,
+        reverse: true,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        itemCount: lineStates.length,
+        itemBuilder: (_, i) {
+          final ls = lineStates[i];
+          final isCurrent = i == currentIndex;
+          final isDone = ls.line.isCounted;
+          final karatColor = AppColors.karatColorFor(ls.line.karat);
+
+          return GestureDetector(
+            onTap: () => onTap(i),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              margin: const EdgeInsets.only(left: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: isCurrent
+                    ? AppColors.primaryGold
+                    : isDone
+                        ? AppColors.success.withOpacity(0.1)
+                        : Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: isCurrent
+                      ? AppColors.primaryGold
+                      : isDone
+                          ? AppColors.success.withOpacity(0.35)
+                          : Colors.grey.shade300,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 8,
+                    height: 8,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isCurrent
+                          ? Colors.white
+                          : isDone
+                              ? AppColors.success
+                              : karatColor.withOpacity(0.5),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    '${i + 1}  ${ls.line.karat.toStringAsFixed(0)}K',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isCurrent ? Colors.white : null,
+                      fontWeight: isCurrent ? FontWeight.bold : null,
+                    ),
+                  ),
+                  if (isDone && !isCurrent) ...[
+                    const SizedBox(width: 3),
+                    const Icon(Icons.check, size: 10, color: AppColors.success),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ── Nav List (wide layout) ────────────────────────────────────────────────────
+
+class _NavList extends StatelessWidget {
+  const _NavList({
+    required this.lineStates,
+    required this.currentIndex,
+    required this.onTap,
+  });
+  final List<_LineState> lineStates;
+  final int currentIndex;
+  final ValueChanged<int> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: ListView.builder(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        itemCount: lineStates.length,
+        itemBuilder: (_, i) {
+          final ls = lineStates[i];
+          final isCurrent = i == currentIndex;
+          final isDone = ls.line.isCounted;
+          final karatColor = AppColors.karatColorFor(ls.line.karat);
+          final label = ls.line.categoryName != null
+              ? ls.line.categoryName!
+              : ls.line.categoryId != null
+                  ? '#${ls.line.categoryId}'
+                  : '—';
+
+          return InkWell(
+            onTap: () => onTap(i),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: isCurrent
+                    ? AppColors.primaryGold.withOpacity(0.1)
+                    : Colors.transparent,
+                border: Border(
+                  right: BorderSide(
+                    color: isCurrent ? AppColors.primaryGold : Colors.transparent,
+                    width: 3,
+                  ),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: isDone ? AppColors.success : karatColor.withOpacity(0.4),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          label,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: isCurrent
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          'عيار ${ls.line.karat.toStringAsFixed(0)}',
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.grey[500]),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (isDone)
+                    const Icon(Icons.check_circle,
+                        size: 16, color: AppColors.success)
+                  else
+                    Text(
+                      '${i + 1}',
+                      style: TextStyle(
+                          fontSize: 11, color: Colors.grey[400]),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
 }
 
 // ── Count Line Row ────────────────────────────────────────────────────────────
@@ -441,8 +1778,6 @@ class _CountLineRowState extends State<_CountLineRow> {
   @override
   void didUpdateWidget(_CountLineRow old) {
     super.didUpdateWidget(old);
-    // When pull-to-refresh brings a new countedWeight from another device,
-    // update the text field only if it doesn't have focus (user isn't typing).
     final newWeight = widget.ls.line.countedWeight;
     final oldWeight = old.ls.line.countedWeight;
     if (newWeight != oldWeight && !_focus.hasFocus) {
@@ -460,177 +1795,174 @@ class _CountLineRowState extends State<_CountLineRow> {
   void _commit() {
     final val = double.tryParse(_ctrl.text.trim());
     if (val == null) return;
-    if (val == widget.ls.line.countedWeight) return; // no change
+    if (val == widget.ls.line.countedWeight) return;
     widget.onSave(val);
   }
 
   bool get _editable =>
       widget.session.status == 'open' || widget.session.status == 'counting';
 
+  bool get _isBlind =>
+      widget.session.blindCount && widget.session.isActive;
+
   @override
   Widget build(BuildContext context) {
     final ls = widget.ls;
     final line = ls.line;
-    final karatColor = AppColors.karatColorFor(line.karat);
-    final blind = widget.session.blindCount && widget.session.isActive;
+    final karat = line.karat;
+    final karatColor = AppColors.karatColorFor(karat);
+    final categoryLabel = line.categoryName ??
+        (line.categoryId != null ? '#${line.categoryId}' : '—');
 
-    // Variance row (revealed after close)
-    final showVariance = line.variance != null && !blind;
-    final hasVariance = showVariance && line.variance != 0;
+    // ── Counting mode (employee view) ─────────────────────────────────────
+    if (_editable || (_isBlind && !_editable)) {
+      return _buildCountingCard(ls, line, karat, karatColor, categoryLabel);
+    }
+
+    // ── Review mode (manager view after close) ────────────────────────────
+    return _buildReviewCard(ls, line, karat, karatColor, categoryLabel);
+  }
+
+  Widget _buildCountingCard(
+    _LineState ls,
+    CountLine line,
+    double karat,
+    Color karatColor,
+    String categoryLabel,
+  ) {
+    final saved = ls.status == CountLineStatus.saved || line.isCounted;
+    final saving = ls.status == CountLineStatus.saving;
+    final failed = ls.status == CountLineStatus.failed;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final badgeTextColor =
+        isDark ? karatColor : AppColors.karatBadgeTextColorFor(karat);
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 200),
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: hasVariance
-            ? AppColors.warning.withOpacity(0.06)
+        color: saved
+            ? AppColors.success.withOpacity(0.04)
             : Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: hasVariance
-              ? AppColors.warning.withOpacity(0.4)
-              : ls.status == CountLineStatus.failed
-                  ? AppColors.error.withOpacity(0.5)
+          color: failed
+              ? AppColors.error.withOpacity(0.5)
+              : saved
+                  ? AppColors.success.withOpacity(0.25)
                   : Colors.grey.shade200,
+          width: saved ? 1.5 : 1.0,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Top row: karat + category info + status indicator
+          // Header: category + karat + save indicator
           Row(
             children: [
+              Expanded(
+                child: Text(
+                  categoryLabel,
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                   color: karatColor.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  'عيار ${line.karat.toStringAsFixed(0)}',
+                  'عيار ${karat.toStringAsFixed(0)}',
                   style: TextStyle(
-                    color: karatColor,
+                    color: badgeTextColor,
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
                   ),
                 ),
               ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'تصنيف #${line.categoryId ?? "—"}',
-                  style: const TextStyle(fontSize: 13),
-                ),
+              const SizedBox(width: 10),
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: saving
+                    ? const CircularProgressIndicator(
+                        strokeWidth: 2, color: AppColors.primaryGold)
+                    : saved
+                        ? const Icon(Icons.check_circle,
+                            size: 20, color: AppColors.success)
+                        : failed
+                            ? const Icon(Icons.error_outline,
+                                size: 20, color: AppColors.error)
+                            : const SizedBox(),
               ),
-              _StatusDot(status: ls.status),
             ],
           ),
           const SizedBox(height: 10),
-          // Input row
-          Row(
-            children: [
-              // Expected weight (hidden during blind count)
-              if (!blind) ...[
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('المتوقع', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
-                    Text(
-                      line.expectedWeight != null
-                          ? '${formatWeight(line.expectedWeight!)} جم'
-                          : '—',
-                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          // Weight input
+          _editable
+              ? TextField(
+                  controller: _ctrl,
+                  focusNode: _focus,
+                  keyboardType:
+                      const TextInputType.numberWithOptions(decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) => _commit(),
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w600),
+                  decoration: InputDecoration(
+                    suffixText: 'جم',
+                    suffixStyle: TextStyle(
+                        fontSize: 14, color: Colors.grey[500]),
+                    hintText: '0.000',
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12, vertical: 10),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                  ],
-                ),
-                const SizedBox(width: 16),
-              ],
-              // Counted input
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('المعدود', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
-                    _editable
-                        ? TextField(
-                            controller: _ctrl,
-                            focusNode: _focus,
-                            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                            inputFormatters: [
-                              FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
-                            ],
-                            textInputAction: TextInputAction.done,
-                            onSubmitted: (_) => _commit(),
-                            decoration: InputDecoration(
-                              suffixText: 'جم',
-                              isDense: true,
-                              contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 8),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(8),
-                                borderSide: BorderSide(color: karatColor, width: 2),
-                              ),
-                            ),
-                          )
-                        : Text(
-                            line.countedWeight != null
-                                ? '${formatWeight(line.countedWeight!)} جم'
-                                : '—',
-                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
-                          ),
-                  ],
-                ),
-              ),
-              // Variance (revealed after close)
-              if (showVariance) ...[
-                const SizedBox(width: 16),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('الفرق', style: TextStyle(fontSize: 10, color: Colors.grey[500])),
-                    Text(
-                      '${line.variance! >= 0 ? '+' : ''}${formatWeight(line.variance!)} جم',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: line.variance! > 0
-                            ? AppColors.success
-                            : line.variance! < 0
-                                ? AppColors.error
-                                : Colors.grey,
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide:
+                          BorderSide(color: karatColor, width: 2),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                        color: saved
+                            ? AppColors.success.withOpacity(0.4)
+                            : Colors.grey.shade300,
                       ),
                     ),
-                  ],
-                ),
-              ],
-            ],
-          ),
-          // Counted-by footer (shows other counter's name for awareness)
-          if (line.countedBy != null) ...[
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Icon(Icons.person_outline, size: 12, color: Colors.grey[400]),
-                const SizedBox(width: 4),
-                Text(
-                  line.countedBy!,
-                  style: TextStyle(fontSize: 10, color: Colors.grey[500]),
-                ),
-                if (line.countedAt != null) ...[
-                  const SizedBox(width: 6),
-                  Text(
-                    _timeSince(line.countedAt!),
-                    style: TextStyle(fontSize: 10, color: Colors.grey[400]),
                   ),
-                ],
+                )
+              : Text(
+                  line.countedWeight != null
+                      ? '${formatWeight(line.countedWeight!)} جم'
+                      : '—',
+                  style: const TextStyle(
+                      fontSize: 18, fontWeight: FontWeight.w600),
+                ),
+          if (ls.savedAt != null && !failed) ...[
+            const SizedBox(height: 5),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.check, size: 12, color: AppColors.success),
+                const SizedBox(width: 3),
+                Text(
+                  'حُفظ ${_savedAgo(ls.savedAt!)}',
+                  style: TextStyle(fontSize: 11, color: Colors.grey[500]),
+                ),
               ],
             ),
           ],
-          // Retry button on failure
-          if (ls.status == CountLineStatus.failed) ...[
+          if (failed) ...[
             const SizedBox(height: 6),
             GestureDetector(
               onTap: () => widget.onRetry(ls),
@@ -639,10 +1971,9 @@ class _CountLineRowState extends State<_CountLineRow> {
                 children: [
                   Icon(Icons.replay, size: 14, color: AppColors.error),
                   SizedBox(width: 4),
-                  Text(
-                    'فشل الحفظ — اضغط لإعادة المحاولة',
-                    style: TextStyle(fontSize: 11, color: AppColors.error),
-                  ),
+                  Text('فشل الحفظ — اضغط للمحاولة مجدداً',
+                      style:
+                          TextStyle(fontSize: 11, color: AppColors.error)),
                 ],
               ),
             ),
@@ -651,180 +1982,565 @@ class _CountLineRowState extends State<_CountLineRow> {
       ),
     );
   }
+
+  static String _savedAgo(DateTime t) {
+    final diff = DateTime.now().difference(t);
+    if (diff.inSeconds < 60) return 'قبل ${diff.inSeconds} ث';
+    if (diff.inMinutes < 60) return 'قبل ${diff.inMinutes} د';
+    return 'قبل ${diff.inHours} س';
+  }
+
+  Widget _buildReviewCard(
+    _LineState ls,
+    CountLine line,
+    double karat,
+    Color karatColor,
+    String categoryLabel,
+  ) {
+    final variance = line.variance;
+    final hasVariance = variance != null && variance != 0;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final badgeTextColor =
+        isDark ? karatColor : AppColors.karatBadgeTextColorFor(karat);
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: hasVariance
+            ? AppColors.warning.withOpacity(0.05)
+            : Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: hasVariance
+              ? AppColors.warning.withOpacity(0.35)
+              : Colors.grey.shade200,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  categoryLabel,
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ),
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: karatColor.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'عيار ${karat.toStringAsFixed(0)}',
+                  style: TextStyle(
+                    color: badgeTextColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          // Opening session: only show counted weight — no expected/variance
+          if (widget.session.isOpening)
+            _ReviewCell(
+              label: 'الوزن المعدود',
+              value: line.countedWeight != null
+                  ? '${formatWeight(line.countedWeight!)} جم'
+                  : '—',
+            )
+          else
+          // Periodic: comparison row: expected | counted | variance
+          Row(
+            children: [
+              _ReviewCell(
+                label: 'المتوقع',
+                value: line.expectedWeight != null
+                    ? '${formatWeight(line.expectedWeight!)} جم'
+                    : '—',
+              ),
+              const SizedBox(width: 12),
+              _ReviewCell(
+                label: 'المعدود',
+                value: line.countedWeight != null
+                    ? '${formatWeight(line.countedWeight!)} جم'
+                    : '—',
+              ),
+              if (variance != null) ...[
+                const SizedBox(width: 12),
+                _ReviewCell(
+                  label: 'الفرق',
+                  value: '${variance >= 0 ? '+' : ''}${formatWeight(variance)} جم',
+                  valueColor: variance > 0
+                      ? AppColors.success
+                      : variance < 0
+                          ? AppColors.error
+                          : Colors.grey,
+                  bold: hasVariance,
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 }
 
-// ── Status Dot ────────────────────────────────────────────────────────────────
-
-class _StatusDot extends StatelessWidget {
-  const _StatusDot({required this.status});
-  final CountLineStatus status;
+class _ReviewCell extends StatelessWidget {
+  const _ReviewCell({
+    required this.label,
+    required this.value,
+    this.valueColor,
+    this.bold = false,
+  });
+  final String label;
+  final String value;
+  final Color? valueColor;
+  final bool bold;
 
   @override
-  Widget build(BuildContext context) {
-    return switch (status) {
-      CountLineStatus.saving => const SizedBox(
-          width: 16, height: 16,
-          child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primaryGold),
+  Widget build(BuildContext context) => Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style:
+                    TextStyle(fontSize: 10, color: Colors.grey[500])),
+            const SizedBox(height: 2),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight:
+                    bold ? FontWeight.bold : FontWeight.w600,
+                color: valueColor,
+              ),
+            ),
+          ],
         ),
-      CountLineStatus.saved => const Icon(Icons.check_circle, size: 16, color: AppColors.success),
-      CountLineStatus.failed => const Icon(Icons.error_outline, size: 16, color: AppColors.error),
-      CountLineStatus.idle => const SizedBox(width: 16),
-    };
-  }
+      );
 }
 
 // ── Approve Dialog ────────────────────────────────────────────────────────────
 
 class _ApproveDialog extends StatefulWidget {
-  const _ApproveDialog({required this.varLines, required this.session});
+  const _ApproveDialog({
+    required this.varLines,
+    required this.session,
+    required this.svc,
+    required this.totalLines,
+    required this.netDelta,
+  });
   final List<_LineState> varLines;
   final CountSession session;
+  final InventoryService svc;
+  final int totalLines;
+  final double netDelta;
 
   @override
   State<_ApproveDialog> createState() => _ApproveDialogState();
 }
 
 class _ApproveDialogState extends State<_ApproveDialog> {
-  final _reasonCtrl = TextEditingController(text: 'تسوية جرد دوري');
+  List<AdjustmentReason> _reasons = [];
+  AdjustmentReason? _selectedReason;
+  final _noteCtrl = TextEditingController();
+  bool _loadingReasons = true;
+  bool _confirming = false;
+
+  bool get _needsNote => _selectedReason?.requiresNote ?? false;
+  bool get _noteOk => !_needsNote || _noteCtrl.text.trim().isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadReasons();
+  }
 
   @override
   void dispose() {
-    _reasonCtrl.dispose();
+    _noteCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadReasons() async {
+    try {
+      final reasons = await widget.svc.getAdjustmentReasons();
+      if (mounted) {
+        setState(() {
+          _reasons = reasons.isNotEmpty ? reasons : AdjustmentReason.fallback;
+          _selectedReason = _reasons.first;
+          _loadingReasons = false;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _reasons = AdjustmentReason.fallback;
+          _selectedReason = _reasons.first;
+          _loadingReasons = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final hasVariance = widget.varLines.isNotEmpty;
+    return _confirming ? _buildConfirmStep() : _buildSummaryStep();
+  }
 
-    return AlertDialog(
-      title: const Text('اعتماد جلسة الجرد'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!hasVariance)
-              const _InfoChip(
-                icon: Icons.check_circle_outline,
-                label: 'لا توجد فروقات — الجرد مطابق تماماً',
-                color: AppColors.success,
-              )
-            else ...[
-              _InfoChip(
-                icon: Icons.warning_amber_rounded,
-                label: '${widget.varLines.length} صنف فيه فرق — سيتم إنشاء قيد تسوية',
-                color: AppColors.warning,
-              ),
-              const SizedBox(height: 10),
-              // Variance rows sorted by magnitude (already sorted by caller)
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 200),
-                child: ListView(
-                  shrinkWrap: true,
-                  children: widget.varLines.map((ls) {
-                    final v = ls.line.variance!;
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 3),
-                      child: Row(
-                        children: [
-                          Text(
-                            'عيار ${ls.line.karat.toStringAsFixed(0)} / #${ls.line.categoryId}',
-                            style: const TextStyle(fontSize: 13),
-                          ),
-                          const Spacer(),
-                          Text(
-                            '${v >= 0 ? '+' : ''}${formatWeight(v)} جم',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: v > 0 ? AppColors.success : AppColors.error,
+  // ── Step 1: Summary + variances + reason ─────────────────────────────────
+
+  Widget _buildSummaryStep() {
+    final hasVariance = widget.varLines.isNotEmpty;
+    final canProceed =
+        !_loadingReasons && (!hasVariance || _selectedReason != null) && _noteOk;
+    final delta = widget.netDelta;
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        title: const Text('اعتماد جلسة الجرد'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Big summary strip
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                      vertical: 16, horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: hasVariance
+                        ? AppColors.warning.withOpacity(0.06)
+                        : AppColors.success.withOpacity(0.06),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: hasVariance
+                          ? AppColors.warning.withOpacity(0.3)
+                          : AppColors.success.withOpacity(0.3),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _BigStat(
+                          value: '${widget.totalLines}',
+                          label: 'بنداً'),
+                      _BigStat(
+                          value: '${widget.varLines.length}',
+                          label: 'فروقات',
+                          color: hasVariance
+                              ? AppColors.warning
+                              : AppColors.success),
+                      _BigStat(
+                          value:
+                              '${delta >= 0 ? '+' : ''}${formatWeight(delta)} جم',
+                          label: 'صافي الفرق',
+                          color: delta > 0.001
+                              ? AppColors.success
+                              : delta < -0.001
+                                  ? AppColors.error
+                                  : Colors.grey),
+                    ],
+                  ),
+                ),
+                // Variance list (sorted descending by absolute value)
+                if (hasVariance) ...[
+                  const SizedBox(height: 14),
+                  const Text('الفروقات',
+                      style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey)),
+                  const SizedBox(height: 6),
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 160),
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: widget.varLines.map((ls) {
+                        final v = ls.line.variance!;
+                        final label = ls.line.categoryName != null
+                            ? '${ls.line.categoryName} ${ls.line.karat.toStringAsFixed(0)}K'
+                            : 'عيار ${ls.line.karat.toStringAsFixed(0)}';
+                        return Padding(
+                          padding:
+                              const EdgeInsets.symmetric(vertical: 3),
+                          child: Row(children: [
+                            Icon(
+                              v > 0
+                                  ? Icons.arrow_upward
+                                  : Icons.arrow_downward,
+                              size: 14,
+                              color: v > 0
+                                  ? AppColors.success
+                                  : AppColors.error,
                             ),
-                          ),
-                        ],
+                            const SizedBox(width: 6),
+                            Expanded(
+                                child: Text(label,
+                                    style:
+                                        const TextStyle(fontSize: 13))),
+                            Text(
+                              '${v >= 0 ? '+' : ''}${formatWeight(v)} جم',
+                              style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                                color: v > 0
+                                    ? AppColors.success
+                                    : AppColors.error,
+                              ),
+                            ),
+                          ]),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // Reason dropdown
+                  if (_loadingReasons)
+                    const Center(
+                        child: SizedBox(
+                            height: 24,
+                            width: 24,
+                            child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.primaryGold)))
+                  else if (_reasons.isEmpty)
+                    _InfoChip(
+                        icon: Icons.warning_amber_rounded,
+                        label: 'تعذّر تحميل أسباب التسوية',
+                        color: AppColors.warning)
+                  else
+                    DropdownButtonFormField<AdjustmentReason>(
+                      value: _selectedReason,
+                      isExpanded: true,
+                      decoration: InputDecoration(
+                        labelText: 'سبب التسوية',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        isDense: true,
                       ),
-                    );
-                  }).toList(),
-                ),
-              ),
-              // GL preview stub — shows that a JE will be created in Phase 5
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppColors.info.withOpacity(0.06),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.info.withOpacity(0.2)),
-                ),
-                child: const Row(
-                  children: [
-                    Icon(Icons.receipt_long_outlined, size: 14, color: AppColors.info),
-                    SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'سيُنشأ قيد تسوية في الدفتر العام عند الترحيل (المرحلة 5)',
-                        style: TextStyle(fontSize: 11, color: AppColors.info),
+                      items: _reasons
+                          .map((r) => DropdownMenuItem(
+                              value: r, child: Text(r.label)))
+                          .toList(),
+                      onChanged: (v) =>
+                          setState(() => _selectedReason = v),
+                    ),
+                  // Note field — shown only when requires_note = true
+                  if (_needsNote) ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _noteCtrl,
+                      onChanged: (_) => setState(() {}),
+                      maxLines: 2,
+                      decoration: InputDecoration(
+                        labelText: 'ملاحظة توضيحية (مطلوبة)',
+                        hintText: 'اذكر سبب الفرق بالتفصيل...',
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8)),
+                        isDense: true,
                       ),
                     ),
                   ],
-                ),
-              ),
-            ],
+                ] else
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: _InfoChip(
+                      icon: Icons.check_circle_outline,
+                      label: 'الجرد مطابق تماماً — لا توجد فروقات',
+                      color: AppColors.success,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('إلغاء'),
+          ),
+          ElevatedButton(
+            onPressed: canProceed
+                ? () => setState(() => _confirming = true)
+                : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryGold,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: Colors.grey[300],
+            ),
+            child: const Text('متابعة'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Step 2: What-will-happen confirmation ────────────────────────────────
+
+  Widget _buildConfirmStep() {
+    final hasVariance = widget.varLines.isNotEmpty;
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: AlertDialog(
+        title: const Text('تأكيد الاعتماد'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('سيتم:',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 14)),
+            const SizedBox(height: 12),
+            if (hasVariance)
+              _WillDo('إنشاء مستند تسوية بالفروقات'),
+            _WillDo('تحديث أرصدة المخزون'),
+            if (hasVariance)
+              _WillDo('إنشاء قيود محاسبية في الدفتر العام'),
             const SizedBox(height: 14),
-            TextField(
-              controller: _reasonCtrl,
-              decoration: InputDecoration(
-                labelText: 'سبب التسوية',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
-                isDense: true,
-              ),
+            _InfoChip(
+              icon: Icons.warning_amber_rounded,
+              label: 'هذه العملية لا يمكن التراجع عنها.',
+              color: AppColors.warning,
             ),
           ],
         ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, null),
-          child: const Text('إلغاء'),
-        ),
-        ElevatedButton.icon(
-          onPressed: () => Navigator.pop(context, _reasonCtrl.text.trim()),
-          icon: const Icon(Icons.check),
-          label: Text(hasVariance ? 'اعتماد وترحيل' : 'اعتماد'),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: AppColors.primaryGold,
-            foregroundColor: Colors.white,
+        actions: [
+          TextButton(
+            onPressed: () => setState(() => _confirming = false),
+            child: const Text('رجوع'),
           ),
-        ),
-      ],
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pop(context, (
+              code: _selectedReason?.code ?? 'OTHER',
+              note: _noteCtrl.text.trim(),
+            )),
+            icon: const Icon(Icons.verified_outlined),
+            label: Text(hasVariance ? 'اعتماد وترحيل' : 'اعتماد'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.success,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
+class _BigStat extends StatelessWidget {
+  const _BigStat(
+      {required this.value, required this.label, this.color});
+  final String value;
+  final String label;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) => Column(
+        children: [
+          Text(value,
+              style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: color)),
+          const SizedBox(height: 2),
+          Text(label,
+              style: TextStyle(fontSize: 11, color: Colors.grey[500])),
+        ],
+      );
+}
+
+class _WillDo extends StatelessWidget {
+  const _WillDo(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(children: [
+          const Icon(Icons.check_circle_outline,
+              size: 16, color: AppColors.success),
+          const SizedBox(width: 8),
+          Expanded(
+              child:
+                  Text(text, style: const TextStyle(fontSize: 13))),
+        ]),
+      );
+}
+
+class _SuccessStat extends StatelessWidget {
+  const _SuccessStat(
+      {required this.label,
+      required this.value,
+      this.sub,
+      this.subColor});
+  final String label;
+  final String value;
+  final String? sub;
+  final Color? subColor;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13, color: Colors.grey[500])),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Text(value,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.bold, fontSize: 14)),
+                if (sub != null)
+                  Text(sub!,
+                      style: TextStyle(
+                          fontSize: 12, color: subColor)),
+              ],
+            ),
+          ],
+        ),
+      );
+}
+
 class _InfoChip extends StatelessWidget {
-  const _InfoChip({required this.icon, required this.label, required this.color});
+  const _InfoChip(
+      {required this.icon, required this.label, required this.color});
   final IconData icon;
   final String label;
   final Color color;
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: color.withOpacity(0.25)),
-      ),
-      child: Row(
-        children: [
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color.withOpacity(0.25)),
+        ),
+        child: Row(children: [
           Icon(icon, size: 16, color: color),
           const SizedBox(width: 8),
-          Expanded(child: Text(label, style: TextStyle(fontSize: 12, color: color))),
-        ],
-      ),
-    );
-  }
+          Expanded(
+              child: Text(label,
+                  style: TextStyle(fontSize: 12, color: color))),
+        ]),
+      );
 }
 
 // ── Open Session Sheet ────────────────────────────────────────────────────────
@@ -834,47 +2550,80 @@ class _OpenSessionSheet extends StatefulWidget {
     required this.svc,
     required this.onOpened,
     required this.onCancelled,
+    required this.onNavigateToSession,
   });
   final InventoryService svc;
   final ValueChanged<CountSession> onOpened;
   final VoidCallback onCancelled;
+  final ValueChanged<int> onNavigateToSession;
 
   @override
   State<_OpenSessionSheet> createState() => _OpenSessionSheetState();
 }
 
 class _OpenSessionSheetState extends State<_OpenSessionSheet> {
+  List<Map<String, dynamic>> _branches = [];
+  Map<String, dynamic>? _selectedBranch;
   bool _blindCount = true;
-  bool _loading = false;
+  bool _isOpening = false;
+  bool _loadingBranches = true;
+  bool _submitting = false;
   String? _error;
+  int? _existingSessionId; // parsed from "مفتوحة بالفعل (#N)" errors
 
-  // In a real app, branches would be loaded from BranchProvider.
-  // Using a simple text field for branch ID here as a placeholder.
-  final _branchCtrl = TextEditingController();
+  static int? _parseExistingSessionId(String message) {
+    final m = RegExp(r'#(\d+)').firstMatch(message);
+    return m != null ? int.tryParse(m.group(1)!) : null;
+  }
 
   @override
-  void dispose() {
-    _branchCtrl.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _loadBranches();
+  }
+
+  Future<void> _loadBranches() async {
+    try {
+      final branches = await ApiService().getBranches(activeOnly: true);
+      setState(() {
+        _branches = branches;
+        _selectedBranch = branches.isNotEmpty ? branches.first : null;
+        _loadingBranches = false;
+      });
+    } catch (_) {
+      setState(() {
+        _loadingBranches = false;
+        _error = 'تعذّر تحميل الفروع';
+      });
+    }
   }
 
   Future<void> _open() async {
-    final branchId = int.tryParse(_branchCtrl.text.trim());
-    if (branchId == null) {
-      setState(() => _error = 'أدخل رقم الفرع');
+    if (_selectedBranch == null) {
+      setState(() => _error = 'اختر الفرع أولاً');
       return;
     }
-    setState(() { _loading = true; _error = null; });
+    setState(() { _submitting = true; _error = null; });
     try {
       final s = await widget.svc.openSession(
-        branchId: branchId,
-        blindCount: _blindCount,
+        branchId: _selectedBranch!['id'] as int,
+        blindCount: _isOpening ? false : _blindCount,
+        sessionType: _isOpening ? 'opening' : 'periodic',
       );
       widget.onOpened(s);
     } on InventoryApiException catch (e) {
-      setState(() { _error = e.message; _loading = false; });
+      final existingId = _parseExistingSessionId(e.message);
+      setState(() {
+        _error = e.message;
+        _existingSessionId = existingId;
+        _submitting = false;
+      });
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() {
+        _error = e.toString();
+        _existingSessionId = null;
+        _submitting = false;
+      });
     }
   }
 
@@ -885,15 +2634,19 @@ class _OpenSessionSheetState extends State<_OpenSessionSheet> {
       child: Padding(
         padding: EdgeInsets.only(
           bottom: MediaQuery.of(context).viewInsets.bottom + 24,
-          top: 24, left: 24, right: 24,
+          top: 24,
+          left: 24,
+          right: 24,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // Handle bar
             Center(
               child: Container(
-                width: 40, height: 4,
+                width: 40,
+                height: 4,
                 decoration: BoxDecoration(
                   color: Colors.grey[300],
                   borderRadius: BorderRadius.circular(2),
@@ -906,50 +2659,483 @@ class _OpenSessionSheetState extends State<_OpenSessionSheet> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 16),
-            TextField(
-              controller: _branchCtrl,
-              keyboardType: TextInputType.number,
-              decoration: InputDecoration(
-                labelText: 'رقم الفرع',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                errorText: _error,
+            // Branch selector
+            if (_loadingBranches)
+              const Center(
+                child: SizedBox(
+                  height: 24,
+                  width: 24,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: AppColors.primaryGold),
+                ),
+              )
+            else if (_branches.isEmpty)
+              _InfoChip(
+                icon: Icons.warning_amber_rounded,
+                label: 'لا توجد فروع — أضف فرعاً من الإعدادات',
+                color: AppColors.warning,
+              )
+            else
+              DropdownButtonFormField<Map<String, dynamic>>(
+                value: _selectedBranch,
+                isExpanded: true,
+                decoration: InputDecoration(
+                  labelText: 'الفرع',
+                  prefixIcon: const Icon(Icons.store_outlined),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                items: _branches
+                    .map((b) => DropdownMenuItem(
+                          value: b,
+                          child: Text(b['name'] as String? ?? '—'),
+                        ))
+                    .toList(),
+                onChanged: (v) => setState(() {
+                  _selectedBranch = v;
+                  _error = null;
+                  _existingSessionId = null;
+                }),
               ),
-            ),
             const SizedBox(height: 14),
+            // Session type
             SwitchListTile(
-              value: _blindCount,
-              onChanged: (v) => setState(() => _blindCount = v),
-              title: const Text('جرد أعمى', style: TextStyle(fontWeight: FontWeight.w600)),
+              value: _isOpening,
+              onChanged: (v) => setState(() {
+                _isOpening = v;
+                if (v) _blindCount = false;
+                _error = null;
+                _existingSessionId = null;
+              }),
+              title: const Text('جرد افتتاحي (أول مرة)',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
               subtitle: const Text(
-                'الرصيد المتوقع مخفي أثناء العدّ — موصى به',
+                'لتسجيل أرصدة البداية — لا تُنشئ قيود تسوية',
                 style: TextStyle(fontSize: 12),
               ),
-              activeColor: AppColors.primaryGold,
+              activeColor: Colors.teal,
               contentPadding: EdgeInsets.zero,
             ),
+            if (!_isOpening)
+              SwitchListTile(
+                value: _blindCount,
+                onChanged: (v) =>
+                    setState(() => _blindCount = v),
+                title: const Text('جرد أعمى',
+                    style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text(
+                  'الرصيد المتوقع مخفي أثناء العدّ — موصى به',
+                  style: TextStyle(fontSize: 12),
+                ),
+                activeColor: AppColors.primaryGold,
+                contentPadding: EdgeInsets.zero,
+              ),
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              _InfoChip(
+                  icon: Icons.error_outline,
+                  label: _error!,
+                  color: AppColors.error),
+            ],
+            const SizedBox(height: 16),
+            if (_existingSessionId != null) ...[
+              // Existing session — offer navigation instead of retry
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () =>
+                      widget.onNavigateToSession(_existingSessionId!),
+                  icon: const Icon(Icons.arrow_forward),
+                  label: Text('الانتقال إلى الجلسة #$_existingSessionId'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGold,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            ] else ...[
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: (_submitting ||
+                          _loadingBranches ||
+                          _selectedBranch == null)
+                      ? null
+                      : _open,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGold,
+                    foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.grey[300],
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                  ),
+                  child: _submitting
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: Colors.white),
+                        )
+                      : const Text('بدء الجرد',
+                          style: TextStyle(fontSize: 16)),
+                ),
+              ),
+            ],
+            TextButton(
+              onPressed: widget.onCancelled,
+              child: const Text('إلغاء',
+                  style: TextStyle(color: Colors.grey)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Add Item Sheet (opening sessions) ────────────────────────────────────────
+
+class _AddItemSheet extends StatefulWidget {
+  const _AddItemSheet({required this.onAdd});
+  final void Function(int categoryId, String categoryName, double karat,
+      double weight) onAdd;
+
+  @override
+  State<_AddItemSheet> createState() => _AddItemSheetState();
+}
+
+class _AddItemSheetState extends State<_AddItemSheet> {
+  List<Map<String, dynamic>> _allCategories = [];
+  List<Map<String, dynamic>> _filtered = [];
+  Map<String, dynamic>? _selectedCategory;
+  double _selectedKarat = 21.0;
+
+  final _searchCtrl = TextEditingController();
+  final _weightCtrl = TextEditingController();
+  final _weightFocus = FocusNode();
+
+  bool _loadingCats = true;
+  bool _creatingCat = false;
+  bool _submitting = false;
+  String? _error;
+
+  static const _karats = [18.0, 21.0, 22.0, 24.0];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCategories();
+    _searchCtrl.addListener(_onSearchChanged);
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    _weightCtrl.dispose();
+    _weightFocus.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCategories() async {
+    try {
+      final cats = (await ApiService().getCategories())
+          .cast<Map<String, dynamic>>();
+      setState(() {
+        _allCategories = cats;
+        _filtered = cats;
+        _loadingCats = false;
+      });
+    } catch (_) {
+      setState(() { _loadingCats = false; _error = 'تعذّر تحميل الأصناف'; });
+    }
+  }
+
+  void _onSearchChanged() {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    setState(() {
+      _filtered = q.isEmpty
+          ? _allCategories
+          : _allCategories
+              .where((c) =>
+                  (c['name'] as String? ?? '').toLowerCase().contains(q))
+              .toList();
+      // Clear selection if it no longer matches
+      if (_selectedCategory != null) {
+        final name =
+            (_selectedCategory!['name'] as String? ?? '').toLowerCase();
+        if (!name.contains(q)) _selectedCategory = null;
+      }
+    });
+  }
+
+  String get _searchQuery => _searchCtrl.text.trim();
+
+  bool get _canCreateNew {
+    if (_searchQuery.isEmpty) return false;
+    return !_allCategories.any(
+        (c) => (c['name'] as String? ?? '').toLowerCase() ==
+            _searchQuery.toLowerCase());
+  }
+
+  Future<void> _createAndSelect(String name) async {
+    setState(() { _creatingCat = true; _error = null; });
+    try {
+      final created = await ApiService().addCategory({'name': name});
+      final cat = created.cast<String, dynamic>();
+      setState(() {
+        _allCategories.add(cat);
+        _filtered = [cat];
+        _selectedCategory = cat;
+        _searchCtrl.text = name;
+        _creatingCat = false;
+      });
+      _weightFocus.requestFocus();
+    } catch (e) {
+      setState(() {
+        _error = 'تعذّر إنشاء الصنف: $e';
+        _creatingCat = false;
+      });
+    }
+  }
+
+  void _select(Map<String, dynamic> cat) {
+    setState(() {
+      _selectedCategory = cat;
+      _searchCtrl.text = cat['name'] as String? ?? '';
+      _filtered = [cat];
+    });
+    _weightFocus.requestFocus();
+  }
+
+  Future<void> _submit() async {
+    if (_selectedCategory == null) {
+      setState(() => _error = 'اختر الصنف أولاً');
+      return;
+    }
+    final weight = double.tryParse(_weightCtrl.text.trim());
+    if (weight == null || weight < 0) {
+      setState(() => _error = 'أدخل وزناً صحيحاً (يمكن أن يكون صفراً)');
+      return;
+    }
+    setState(() { _submitting = true; _error = null; });
+    widget.onAdd(
+      _selectedCategory!['id'] as int,
+      _selectedCategory!['name'] as String? ?? '—',
+      _selectedKarat,
+      weight,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final showList = _selectedCategory == null && !_loadingCats;
+    final canAdd =
+        _selectedCategory != null && !_submitting && !_creatingCat;
+
+    return Directionality(
+      textDirection: TextDirection.rtl,
+      child: Padding(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom + 24,
+          top: 24,
+          left: 24,
+          right: 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Handle bar
+            Center(
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text('إضافة صنف',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+
+            // ── Category search/select ─────────────────────────────────────
+            TextField(
+              controller: _searchCtrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'الصنف',
+                hintText: 'ابحث أو اكتب اسماً جديداً...',
+                prefixIcon: _loadingCats
+                    ? const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: SizedBox(
+                          width: 16, height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: AppColors.primaryGold),
+                        ),
+                      )
+                    : const Icon(Icons.search),
+                suffixIcon: _selectedCategory != null
+                    ? IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => setState(() {
+                          _selectedCategory = null;
+                          _searchCtrl.clear();
+                          _filtered = _allCategories;
+                        }),
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10)),
+                // Green border when selected
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(
+                    color: _selectedCategory != null
+                        ? AppColors.success
+                        : Colors.grey.shade400,
+                    width: _selectedCategory != null ? 1.5 : 1.0,
+                  ),
+                ),
+              ),
+              readOnly: _selectedCategory != null,
+            ),
+
+            // Dropdown list
+            if (showList && (_filtered.isNotEmpty || _canCreateNew)) ...[
+              const SizedBox(height: 4),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 180),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    // Existing matches
+                    ..._filtered.map((cat) => ListTile(
+                          dense: true,
+                          title: Text(cat['name'] as String? ?? '—'),
+                          leading: const Icon(Icons.label_outline, size: 18),
+                          onTap: () => _select(cat),
+                        )),
+                    // Create new option
+                    if (_canCreateNew)
+                      ListTile(
+                        dense: true,
+                        leading: _creatingCat
+                            ? const SizedBox(
+                                width: 18, height: 18,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: AppColors.primaryGold))
+                            : const Icon(Icons.add_circle_outline,
+                                size: 18, color: AppColors.primaryGold),
+                        title: Text.rich(TextSpan(children: [
+                          const TextSpan(
+                              text: 'إنشاء صنف جديد: ',
+                              style: TextStyle(color: AppColors.primaryGold)),
+                          TextSpan(
+                              text: '"$_searchQuery"',
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.primaryGold)),
+                        ])),
+                        onTap: _creatingCat
+                            ? null
+                            : () => _createAndSelect(_searchQuery),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+
+            const SizedBox(height: 14),
+
+            // ── Karat chips ───────────────────────────────────────────────
+            const Text('العيار',
+                style: TextStyle(fontSize: 13, color: Colors.grey)),
+            const SizedBox(height: 8),
+            Row(
+              children: _karats.map((k) {
+                final selected = _selectedKarat == k;
+                final color = AppColors.karatColorFor(k);
+                return Padding(
+                  padding: const EdgeInsets.only(left: 8),
+                  child: ChoiceChip(
+                    label: Text(k.toStringAsFixed(0)),
+                    selected: selected,
+                    onSelected: (_) =>
+                        setState(() => _selectedKarat = k),
+                    selectedColor: color.withOpacity(0.2),
+                    labelStyle: TextStyle(
+                        color: selected ? color : null,
+                        fontWeight: selected
+                            ? FontWeight.bold
+                            : FontWeight.normal),
+                  ),
+                );
+              }).toList(),
+            ),
+
+            const SizedBox(height: 14),
+
+            // ── Weight ────────────────────────────────────────────────────
+            TextField(
+              controller: _weightCtrl,
+              focusNode: _weightFocus,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+              ],
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              decoration: InputDecoration(
+                labelText: 'الوزن',
+                hintText: '0.000',
+                suffixText: 'جم',
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+
+            if (_error != null) ...[
+              const SizedBox(height: 8),
+              _InfoChip(
+                  icon: Icons.error_outline,
+                  label: _error!,
+                  color: AppColors.error),
+            ],
+
             const SizedBox(height: 16),
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: _loading ? null : _open,
+                onPressed: canAdd ? _submit : null,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primaryGold,
                   foregroundColor: Colors.white,
+                  disabledBackgroundColor: Colors.grey[300],
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
                 ),
-                child: _loading
+                child: _submitting
                     ? const SizedBox(
                         height: 20, width: 20,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white),
-                      )
-                    : const Text('بدء الجرد', style: TextStyle(fontSize: 16)),
+                            strokeWidth: 2, color: Colors.white))
+                    : const Text('إضافة', style: TextStyle(fontSize: 16)),
               ),
-            ),
-            TextButton(
-              onPressed: widget.onCancelled,
-              child: const Text('إلغاء', style: TextStyle(color: Colors.grey)),
             ),
           ],
         ),
@@ -960,9 +3146,34 @@ class _OpenSessionSheetState extends State<_OpenSessionSheet> {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+class _AdjRow extends StatelessWidget {
+  const _AdjRow({required this.label, required this.value});
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 5),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(label,
+                style: TextStyle(fontSize: 13, color: Colors.grey[500])),
+            Flexible(
+              child: Text(value,
+                  textAlign: TextAlign.left,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.w600, fontSize: 13)),
+            ),
+          ],
+        ),
+      );
+}
+
 class _LineState {
   CountLine line;
   CountLineStatus status = CountLineStatus.idle;
+  DateTime? savedAt;
   _LineState({required this.line});
 }
 
@@ -973,27 +3184,28 @@ class _ErrorRetry extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(message, textAlign: TextAlign.center),
-            const SizedBox(height: 12),
-            ElevatedButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh),
-              label: const Text('إعادة المحاولة'),
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: AppColors.primaryGold,
-                  foregroundColor: Colors.white),
-            ),
-          ],
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline,
+                  size: 48, color: AppColors.error),
+              const SizedBox(height: 12),
+              Text(message,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 14)),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('إعادة المحاولة'),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGold,
+                    foregroundColor: Colors.white),
+              ),
+            ],
+          ),
         ),
       );
-}
-
-String _timeSince(DateTime dt) {
-  final d = DateTime.now().difference(dt);
-  if (d.inSeconds < 60) return 'الآن';
-  if (d.inMinutes < 60) return 'منذ ${d.inMinutes} د';
-  return 'منذ ${d.inHours} س';
 }

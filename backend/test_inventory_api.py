@@ -252,7 +252,7 @@ class TestCountSessionEndpoints:
 
             r = client.post(
                 f'/api/inventory/count/{sid}/approve',
-                json={'reason': 'جرد دوري'},
+                json={'reason': 'خطأ عدّ'},
                 headers=auth_headers,
             )
             assert r.status_code == 200
@@ -277,7 +277,7 @@ class TestCountSessionEndpoints:
             client.post(f'/api/inventory/count/{sid}/close', headers=auth_headers)
             r = client.post(
                 f'/api/inventory/count/{sid}/approve',
-                json={'reason': 'فاقد'},
+                json={'reason': 'فاقد تصنيع'},
                 headers=auth_headers,
             )
             assert r.status_code == 200
@@ -306,7 +306,7 @@ class TestCountSessionEndpoints:
             # First approval succeeds
             r1 = client.post(
                 f'/api/inventory/count/{sid}/approve',
-                json={'reason': 'جرد دوري'},
+                json={'reason': 'خطأ عدّ'},
                 headers=auth_headers,
             )
             assert r1.status_code == 200
@@ -314,7 +314,7 @@ class TestCountSessionEndpoints:
             # Second approval on the now-approved session must fail cleanly
             r2 = client.post(
                 f'/api/inventory/count/{sid}/approve',
-                json={'reason': 'جرد دوري'},
+                json={'reason': 'خطأ عدّ'},
                 headers=auth_headers,
             )
             assert r2.status_code == 400
@@ -421,3 +421,287 @@ class TestReportEndpoints:
             metric_keys = {m['key'] for m in data.get('metrics', [])}
             assert 'ledger_row_count' in metric_keys
             assert 'invariant_violations' in metric_keys
+
+
+# ── Opening Session ───────────────────────────────────────────────────────────
+
+class TestOpeningSession:
+    """session_type='opening': first-time stock entry.
+
+    Approval must post InventoryLedger rows with movement_type='opening'
+    and set InventoryBalance — no InventoryAdjustment should be created.
+    """
+
+    def test_opening_session_full_flow(self, client, auth_headers):
+        """Open → entry → close → approve creates Ledger + Balance, no Adjustment."""
+        with app.app_context():
+            from models import InventoryLedger, InventoryBalance, InventoryAdjustment
+
+            cat = _category(); br = _branch()
+
+            # Open an opening session (no prior balances needed)
+            r = client.post('/api/inventory/count', headers=auth_headers, json={
+                'branch_id': br.id,
+                'session_type': 'opening',
+            })
+            assert r.status_code == 201
+            data = _json(r)
+            sid = data['id']
+            assert data['session_type'] == 'opening'
+            assert data['blind_count'] is False  # forced off for opening
+
+            # Record the physical count
+            r = client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers, json={
+                'category_id': cat.id, 'karat': 21.0, 'counted_weight': 42.5,
+            })
+            assert r.status_code == 200
+
+            # Close
+            r = client.post(f'/api/inventory/count/{sid}/close', headers=auth_headers)
+            assert r.status_code == 200
+            assert _json(r)['status'] == 'closed'
+
+            # Approve
+            r = client.post(
+                f'/api/inventory/count/{sid}/approve',
+                headers=auth_headers,
+                json={'reason': 'رصيد افتتاحي'},
+            )
+            assert r.status_code == 200
+            result = _json(r)
+            assert result['session']['status'] == 'approved'
+            assert result['adjustment'] is None  # opening — no adjustment
+
+            # Ledger must have an 'opening_balance' entry
+            ledger = InventoryLedger.query.filter_by(
+                source_type='opening_balance', source_id=sid,
+                movement_type='opening',
+            ).first()
+            assert ledger is not None
+            assert ledger.weight_delta == pytest.approx(42.5)
+            assert ledger.branch_id == br.id
+            assert ledger.category_id == cat.id
+
+            # InventoryBalance must reflect the opening weight
+            bal = InventoryBalance.query.filter_by(
+                branch_id=br.id, category_id=cat.id, karat=21.0,
+            ).first()
+            assert bal is not None
+            assert bal.balance == pytest.approx(42.5)
+
+            db.session.rollback()
+
+    def test_opening_session_idempotent_approve(self, client, auth_headers):
+        """Approving an already-approved opening session returns 400 (Arabic error)."""
+        with app.app_context():
+            cat = _category(); br = _branch()
+
+            r = client.post('/api/inventory/count', headers=auth_headers,
+                            json={'branch_id': br.id, 'session_type': 'opening'})
+            sid = _json(r)['id']
+            client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers,
+                       json={'category_id': cat.id, 'karat': 21.0, 'counted_weight': 10.0})
+            client.post(f'/api/inventory/count/{sid}/close', headers=auth_headers)
+            r1 = client.post(f'/api/inventory/count/{sid}/approve', headers=auth_headers,
+                             json={'reason': 'افتتاح'})
+            assert r1.status_code == 200
+
+            r2 = client.post(f'/api/inventory/count/{sid}/approve', headers=auth_headers,
+                             json={'reason': 'افتتاح'})
+            assert r2.status_code == 400
+            err = _json(r2).get('error', '')
+            assert any('؀' <= c <= 'ۿ' for c in err), f'Expected Arabic error, got: {err!r}'
+            db.session.rollback()
+
+    def test_opening_session_no_prior_balance_required(self, client, auth_headers):
+        """Opening session with no lines (empty branch) closes cleanly."""
+        with app.app_context():
+            br = _branch()
+            r = client.post('/api/inventory/count', headers=auth_headers,
+                            json={'branch_id': br.id, 'session_type': 'opening'})
+            assert r.status_code == 201
+            sid = _json(r)['id']
+            # No entries — session has no lines; close without force should succeed
+            r_close = client.post(f'/api/inventory/count/{sid}/close', headers=auth_headers)
+            assert r_close.status_code == 200
+            db.session.rollback()
+
+    def test_opening_session_rejects_second_opening_same_branch(self, client, auth_headers):
+        """A branch may not have two approved opening sessions."""
+        with app.app_context():
+            cat = _category(); br = _branch()
+
+            # First opening session — full flow
+            r = client.post('/api/inventory/count', headers=auth_headers,
+                            json={'branch_id': br.id, 'session_type': 'opening'})
+            sid = _json(r)['id']
+            client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers,
+                       json={'category_id': cat.id, 'karat': 21.0, 'counted_weight': 10.0})
+            client.post(f'/api/inventory/count/{sid}/close', headers=auth_headers)
+            client.post(f'/api/inventory/count/{sid}/approve', headers=auth_headers,
+                        json={'reason': 'افتتاح'})
+
+            # Second opening session on same branch must be rejected
+            r2 = client.post('/api/inventory/count', headers=auth_headers,
+                             json={'branch_id': br.id, 'session_type': 'opening'})
+            assert r2.status_code == 400
+            err = _json(r2).get('error', '')
+            assert any('؀' <= c <= 'ۿ' for c in err), f'Expected Arabic error, got: {err!r}'
+            db.session.rollback()
+
+    def test_opening_session_replaces_prior_balance(self, client, auth_headers):
+        """Opening session must REPLACE existing balance, not add to it.
+
+        Scenario: backfill created 50g balance → opening session counts 48g
+        Expected result: balance = 48g (not 50 + 48 = 98g).
+        """
+        with app.app_context():
+            from models import InventoryBalance
+
+            cat = _category(); br = _branch()
+            # Simulate prior balance from backfill
+            _post_invoice('شراء', br.id, cat.id, 21.0, 50.0)
+            db.session.commit()
+
+            bal_before = InventoryBalance.query.filter_by(
+                branch_id=br.id, category_id=cat.id, karat=21.0,
+            ).first()
+            assert bal_before is not None
+            assert bal_before.balance == pytest.approx(50.0)
+
+            # Run opening session with different (physically counted) weight
+            r = client.post('/api/inventory/count', headers=auth_headers,
+                            json={'branch_id': br.id, 'session_type': 'opening'})
+            sid = _json(r)['id']
+            client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers,
+                       json={'category_id': cat.id, 'karat': 21.0, 'counted_weight': 48.0})
+            client.post(f'/api/inventory/count/{sid}/close', headers=auth_headers)
+            r_approve = client.post(f'/api/inventory/count/{sid}/approve',
+                                    headers=auth_headers, json={'reason': 'رصيد افتتاحي'})
+            assert r_approve.status_code == 200
+
+            # Balance must be 48, not 50+48=98
+            db.session.expire_all()
+            bal_after = InventoryBalance.query.filter_by(
+                branch_id=br.id, category_id=cat.id, karat=21.0,
+            ).first()
+            assert bal_after is not None
+            assert bal_after.balance == pytest.approx(48.0), \
+                f'Expected 48.0 but got {bal_after.balance} — opening session added instead of replaced'
+            db.session.rollback()
+
+    def test_opening_session_rejects_force_close(self, client, auth_headers):
+        """Opening session must not allow partial close (force=True is ignored/rejected)."""
+        with app.app_context():
+            cat1 = _category(); cat2 = _category(); br = _branch()
+
+            r = client.post('/api/inventory/count', headers=auth_headers,
+                            json={'branch_id': br.id, 'session_type': 'opening'})
+            sid = _json(r)['id']
+
+            # Manually create a count line by posting an entry — then simulate a second
+            # line that remains uncounted by inserting it directly
+            client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers,
+                       json={'category_id': cat1.id, 'karat': 21.0, 'counted_weight': 5.0})
+            # Add a second line that won't be counted
+            client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers,
+                       json={'category_id': cat2.id, 'karat': 18.0, 'counted_weight': 0.0})
+
+            # Simulate uncounted line: set counted_weight to None directly
+            from models import InventoryCountLine
+            line2 = InventoryCountLine.query.filter_by(
+                session_id=sid, category_id=cat2.id,
+            ).first()
+            if line2:
+                line2.counted_weight = None
+                db.session.flush()
+
+            # force=True must be rejected for opening sessions
+            r_close = client.post(f'/api/inventory/count/{sid}/close',
+                                  headers=auth_headers, json={'force': True})
+            assert r_close.status_code == 400
+            err = _json(r_close).get('error', '')
+            assert any('؀' <= c <= 'ۿ' for c in err)
+            db.session.rollback()
+
+
+# ── Rounding ──────────────────────────────────────────────────────────────────
+
+class TestRounding:
+    """Verify that float rounding is consistent between Python and the DB.
+
+    Gold weights are stored and compared to 4 decimal places.
+    Any variance < 0.0001g is treated as floating-point noise, not a real gap.
+    """
+
+    def test_variance_rounds_to_4dp(self, client, auth_headers):
+        """Variance stored in InventoryCountLine rounds to 4 decimal places."""
+        with app.app_context():
+            from models import InventoryCountLine
+
+            cat = _category(); br = _branch()
+            _post_invoice('شراء', br.id, cat.id, 21.0, 10.0)
+            db.session.commit()
+
+            r = client.post('/api/inventory/count', headers=auth_headers,
+                            json={'branch_id': br.id})
+            sid = _json(r)['id']
+
+            # Use a weight that triggers float drift: 10.0 - 0.0001 = 9.9999
+            r = client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers,
+                           json={'category_id': cat.id, 'karat': 21.0,
+                                 'counted_weight': 9.9999})
+            assert r.status_code == 200
+            line_data = _json(r)
+            assert line_data['variance'] == pytest.approx(-0.0001, abs=1e-6)
+
+            # Confirm DB value is also rounded correctly
+            line = InventoryCountLine.query.filter_by(session_id=sid).first()
+            assert line is not None
+            assert round(line.variance, 4) == pytest.approx(-0.0001)
+            db.session.rollback()
+
+    def test_balance_accumulates_without_drift(self, client, auth_headers):
+        """Posting multiple small weights doesn't accumulate float error > 0.001g."""
+        with app.app_context():
+            from models import InventoryBalance
+
+            cat = _category(); br = _branch()
+            weights = [3.333, 3.333, 3.334]  # should sum to exactly 10.0
+            for w in weights:
+                _post_invoice('شراء', br.id, cat.id, 21.0, w)
+            db.session.commit()
+
+            bal = InventoryBalance.query.filter_by(
+                branch_id=br.id, category_id=cat.id, karat=21.0,
+            ).first()
+            assert bal is not None
+            # Acceptable drift: ±0.001g (much less than the 0.01g minimum weighing unit)
+            assert abs(bal.balance - 10.0) < 0.001
+            db.session.rollback()
+
+    def test_opening_weight_preserved_exactly(self, client, auth_headers):
+        """Opening session preserves exact counted weight through Ledger → Balance."""
+        with app.app_context():
+            from models import InventoryBalance
+
+            cat = _category(); br = _branch()
+            exact_weight = 123.4567  # 4 decimal places
+
+            r = client.post('/api/inventory/count', headers=auth_headers,
+                            json={'branch_id': br.id, 'session_type': 'opening'})
+            sid = _json(r)['id']
+            client.put(f'/api/inventory/count/{sid}/entry', headers=auth_headers,
+                       json={'category_id': cat.id, 'karat': 18.0,
+                             'counted_weight': exact_weight})
+            client.post(f'/api/inventory/count/{sid}/close', headers=auth_headers,
+                        json={'force': True})
+            client.post(f'/api/inventory/count/{sid}/approve', headers=auth_headers,
+                        json={'reason': 'افتتاح'})
+
+            bal = InventoryBalance.query.filter_by(
+                branch_id=br.id, category_id=cat.id, karat=18.0,
+            ).first()
+            assert bal is not None
+            assert bal.balance == pytest.approx(exact_weight, abs=1e-4)
+            db.session.rollback()

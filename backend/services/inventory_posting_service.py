@@ -79,18 +79,18 @@ class InventoryPostingService:
         invoice_id = int(invoice.id)
         entries: list = []
 
+        # Source 1: InvoiceItem rows (بيع / شراء من عميل)
         for item in (getattr(invoice, 'items', None) or []):
             karat  = getattr(item, 'karat', None)
             weight = getattr(item, 'weight', None)
-            item_id = getattr(item, 'id', None)
-            if not karat or not weight or not item_id:
+            line_id = getattr(item, 'id', None)
+            if not karat or not weight or not line_id:
                 continue
 
-            # Idempotency check (cheaper than catching IntegrityError)
             already = InventoryLedger.query.filter_by(
                 source_type='invoice',
                 source_id=invoice_id,
-                source_line_id=int(item_id),
+                source_line_id=int(line_id),
                 movement_type=movement_type,
             ).first()
             if already:
@@ -99,9 +99,9 @@ class InventoryPostingService:
             row = InventoryLedger(
                 source_type='invoice',
                 source_id=invoice_id,
-                source_line_id=int(item_id),
+                source_line_id=int(line_id),
                 movement_type=movement_type,
-                branch_id=branch_id,
+                branch_id=branch_id or getattr(item, 'branch_id', None),
                 category_id=getattr(item, 'category_id', None),
                 karat=float(karat),
                 weight_delta=round(float(weight) * direction, 4),
@@ -109,9 +109,46 @@ class InventoryPostingService:
                 posted_by=posted_by,
             )
             db.session.add(row)
-            db.session.flush()  # get row.id before updating Balance
+            db.session.flush()
             cls._apply_to_balance(row)
             entries.append(row)
+
+        # Source 2: InvoiceKaratLine rows (شراء من مورد — no item_id, weight per karat)
+        if not entries:
+            from models import InvoiceKaratLine
+            karat_lines = InvoiceKaratLine.query.filter_by(invoice_id=invoice_id).all()
+            for kl in karat_lines:
+                karat  = getattr(kl, 'karat', None)
+                weight = getattr(kl, 'weight_grams', None)
+                line_id = getattr(kl, 'id', None)
+                if not karat or not weight or not line_id:
+                    continue
+
+                already = InventoryLedger.query.filter_by(
+                    source_type='invoice_karat',
+                    source_id=invoice_id,
+                    source_line_id=int(line_id),
+                    movement_type=movement_type,
+                ).first()
+                if already:
+                    continue
+
+                row = InventoryLedger(
+                    source_type='invoice_karat',
+                    source_id=invoice_id,
+                    source_line_id=int(line_id),
+                    movement_type=movement_type,
+                    branch_id=branch_id,
+                    category_id=None,
+                    karat=float(karat),
+                    weight_delta=round(float(weight) * direction, 4),
+                    posted_at=now,
+                    posted_by=posted_by,
+                )
+                db.session.add(row)
+                db.session.flush()
+                cls._apply_to_balance(row)
+                entries.append(row)
 
         return entries
 
@@ -236,6 +273,36 @@ class InventoryPostingService:
         return entries
 
     # ── Balance Projection ────────────────────────────────────────────────────
+
+    @classmethod
+    def rebuild_balance_for_session(cls, session) -> None:
+        """Apply all Ledger entries from an opening session to InventoryBalance.
+
+        Processes both 'opening_reversal' (zeroing prior balance) and
+        'opening_balance' (posting counted weight), in that order.
+        Called after _post_opening_balances flushes the new Ledger rows.
+        """
+        from models import InventoryLedger
+        from sqlalchemy import case
+
+        entries = (
+            InventoryLedger.query
+            .filter(
+                InventoryLedger.source_id == session.id,
+                InventoryLedger.source_type.in_(['opening_reversal', 'opening_balance']),
+            )
+            # reversals first, then balance entries
+            .order_by(
+                case(
+                    (InventoryLedger.source_type == 'opening_reversal', 0),
+                    else_=1,
+                ),
+                InventoryLedger.id,
+            )
+            .all()
+        )
+        for entry in entries:
+            cls._apply_to_balance(entry)
 
     @classmethod
     def _apply_to_balance(cls, entry) -> None:

@@ -4817,8 +4817,12 @@ class InventoryCountSession(db.Model):
     id          = db.Column(db.Integer, primary_key=True)
     branch_id   = db.Column(db.Integer, db.ForeignKey('branch.id'), nullable=True, index=True)
 
-    # 'open' | 'counting' | 'closed' | 'approved'
+    # 'open' | 'counting' | 'closed' | 'approved' | 'cancelled'
     status      = db.Column(db.String(20), nullable=False, default='open', index=True)
+
+    # 'periodic' (default) | 'opening' (first-time stock entry — no GL adjustment)
+    session_type = db.Column(db.String(20), nullable=False, default='periodic',
+                             server_default='periodic')
 
     # MAX(InventoryLedger.id) captured at open time — the reference point
     snapshot_ledger_id = db.Column(db.Integer, nullable=True)
@@ -4847,7 +4851,9 @@ class InventoryCountSession(db.Model):
             'id':                  self.id,
             'branch_id':           self.branch_id,
             'status':              self.status,
+            'session_type':        getattr(self, 'session_type', 'periodic'),
             'snapshot_ledger_id':  self.snapshot_ledger_id,
+            'blind_count':         self.blind_count,
             'opened_by':           self.opened_by,
             'opened_at':           self.opened_at.isoformat() if self.opened_at else None,
             'closed_at':           self.closed_at.isoformat() if self.closed_at else None,
