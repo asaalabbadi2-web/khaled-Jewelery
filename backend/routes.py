@@ -36751,7 +36751,7 @@ def update_employee_goals(employee_id):
 
 
 @api.route('/admin/clearing-gap-report', methods=['GET'])
-@jwt_required
+@require_permission('system.settings')
 def clearing_gap_report():
     """تقرير تشخيصي مؤقت: ثغرات SettlementLine في صناديق المقاصة.
 
@@ -36759,9 +36759,6 @@ def clearing_gap_report():
     - incomplete_vouchers: سندات لها SettlementLine أقل من amount_cash
     - uncovered_ips: IPs بلا أي SettlementLine (True Gap — لا voucher يغطيها)
     """
-    if not (g.get('is_admin') or g.get('current_user_type') == 'app_user'):
-        return jsonify({'error': 'admin only'}), 403
-
     from allocation_repair_service import AllocationRepairService
     from sqlalchemy import func as sqlfunc
 
