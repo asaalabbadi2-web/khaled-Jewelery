@@ -72,6 +72,7 @@ from office_account_service import ensure_office_account
 from party_account_service import ensure_customer_accounts, ensure_supplier_accounts
 from account_pair_service import link_accounts, unlink_account
 from settlement_state_service import get_settled_amounts, is_locked
+from allocation_service import AllocationService
 from code_generator import generate_item_code, generate_barcode_from_item_code, validate_item_code
 from dual_system_helpers import (
     create_dual_journal_entry,
@@ -28007,9 +28008,7 @@ def cancel_voucher(voucher_id):
         # لم تكن تُحذف، مما منع المجدوِّل من رؤية الدفعات كغير مسوّاة.
         # حادثة إنتاجية: AV-2026-00223 (2026-06-29) -- 5 دفعات، 21,770 ريال معلَّقة.
         if voucher.reference_type == 'clearing_settlement':
-            SettlementLine.query.filter_by(voucher_id=voucher.id).delete(
-                synchronize_session=False
-            )
+            AllocationService().unallocate(voucher)
 
         # Audit log
         try:
@@ -31066,81 +31065,14 @@ def _create_clearing_settlement_voucher(
         commission_vat_account.update_balance(cash_amount=fee_vat)
 
     # --- Per-transaction settlement lines ---
-    # If the caller provided specific invoice_payment_ids, link them to this
-    # voucher.  Only create SettlementLine entries for IPs that are actually
-    # covered by gross_amount (FIFO from oldest to newest).  This prevents
-    # "phantom settlement" where an IP is marked settled but the voucher amount
-    # did not actually include its value — which causes due_amount > 0 while
-    # pending_count = 0 on subsequent queries.
     if invoice_payment_ids:
-        ip_rows = sorted(
-            InvoicePayment.query.filter(
-                InvoicePayment.id.in_(invoice_payment_ids)
-            ).all(),
-            key=lambda x: x.created_at or datetime.min,
+        AllocationService().allocate(
+            voucher=voucher,
+            invoice_payment_ids=invoice_payment_ids,
+            gross_amount=gross_amount,
+            fee_amount=fee_amount,
+            fee_vat=fee_vat,
         )
-        # Root-cause fix (2026-07-01): cancel_voucher() now deletes SettlementLine
-        # rows for clearing_settlement vouchers, so future cancellations won't
-        # leave phantom-settled IPs. See the cancel_voucher() edit above.
-        #
-        # This approved-filter predates that fix (added after incident
-        # AV-2026-00133 in May 2026 -- IP#1547 phantom-settled from cancelled
-        # AV-130/AV-131). It is kept here as protection against the existing
-        # historical orphaned rows from those 3 vouchers (AV-130/131/132) until
-        # they are cleaned up in the DB. Once cleaned, this filter becomes
-        # redundant with get_settled_amounts() and can be simplified.
-        _all_ids = [ip.id for ip in ip_rows]
-        _prev_settled: dict = {}
-        if _all_ids:
-            _sl_rows = (
-                db.session.query(
-                    SettlementLine.invoice_payment_id,
-                    func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
-                )
-                .join(Voucher, Voucher.id == SettlementLine.voucher_id)
-                .filter(SettlementLine.invoice_payment_id.in_(_all_ids))
-                .filter(Voucher.status == 'approved')
-                .group_by(SettlementLine.invoice_payment_id)
-                .all()
-            )
-            _prev_settled = {r[0]: round(float(r[1]), 2) for r in _sl_rows}
-        ip_total = sum(float(ip.amount or 0) for ip in ip_rows) or 1.0
-        remaining_gross = round(float(gross_amount), 2)
-        for ip in ip_rows:
-            if remaining_gross <= 0.005:
-                # gross_amount exhausted: stop — do NOT create SettlementLine
-                # for remaining IPs so they stay visible as pending next cycle.
-                break
-            ip_amt = round(float(ip.amount or 0), 2)
-            already_settled = _prev_settled.get(ip.id, 0.0)
-            # Use the true remaining balance, not the full IP amount.
-            ip_remaining = round(ip_amt - already_settled, 2)
-            if ip_remaining <= 0.005:
-                continue
-            amount_to_settle = round(min(ip_remaining, remaining_gross), 2)
-            ratio = ip_amt / ip_total
-            db.session.add(SettlementLine(
-                voucher_id=voucher.id,
-                invoice_payment_id=ip.id,
-                amount_settled=amount_to_settle,
-                commission=round(fee_amount * ratio, 2),
-                commission_vat=round(fee_vat * ratio, 2),
-            ))
-            remaining_gross = round(remaining_gross - amount_to_settle, 2)
-
-        # Invariant: when the caller asks us to link specific invoice
-        # payments, the SettlementLine total we actually created must equal
-        # gross_amount. If the given invoice_payment_ids can't absorb the
-        # full gross_amount (e.g. a manual entry listing fewer/smaller IPs
-        # than the amount entered), reject the whole voucher instead of
-        # silently crediting cash with no matching SettlementLine — that
-        # silent gap is exactly what produced AV-2026-00133's unexplained
-        # +6050 (credited 19710, SettlementLine totalled only 13660).
-        if remaining_gross > 0.01:
-            raise ValueError(
-                f'settlement_line_coverage_mismatch:requested={gross_amount:.2f},'
-                f'unallocated={remaining_gross:.2f}'
-            )
 
     return {
         'success': True,
@@ -36816,4 +36748,88 @@ def update_employee_goals(employee_id):
         setattr(employee, field, val)
     db.session.commit()
     return jsonify({'success': True, 'employee': employee.to_dict()}), 200
+
+
+@api.route('/admin/clearing-gap-report', methods=['GET'])
+@jwt_required
+def clearing_gap_report():
+    """تقرير تشخيصي مؤقت: ثغرات SettlementLine في صناديق المقاصة.
+
+    يعيد:
+    - incomplete_vouchers: سندات لها SettlementLine أقل من amount_cash
+    - uncovered_ips: IPs بلا أي SettlementLine (True Gap — لا voucher يغطيها)
+    """
+    if not (g.get('is_admin') or g.get('current_user_type') == 'app_user'):
+        return jsonify({'error': 'admin only'}), 403
+
+    from allocation_repair_service import AllocationRepairService
+    from sqlalchemy import func as sqlfunc
+
+    result = {}
+    sbs = SafeBox.query.filter_by(safe_type='clearing', is_active=True).all()
+    svc = AllocationRepairService()
+
+    for sb in sbs:
+        sb_key = f'SB#{sb.id}_{sb.name}'
+
+        # 1. سندات ذات تغطية ناقصة
+        incomplete = svc.find_incomplete_vouchers(safe_box=sb)
+        incomplete_list = []
+        for v in incomplete:
+            total_sl = (
+                db.session.query(sqlfunc.coalesce(sqlfunc.sum(SettlementLine.amount_settled), 0.0))
+                .filter(SettlementLine.voucher_id == v.id)
+                .scalar()
+            ) or 0.0
+            incomplete_list.append({
+                'voucher_id': v.id,
+                'voucher_number': v.voucher_number,
+                'amount_cash': float(v.amount_cash or 0),
+                'total_settled': round(float(total_sl), 2),
+                'gap': round(float(v.amount_cash or 0) - round(float(total_sl), 2), 2),
+                'date': str(v.date)[:10] if v.date else None,
+            })
+
+        # 2. IPs بلا أي SettlementLine (True Gap)
+        all_ips = (
+            InvoicePayment.query
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+            .filter(PaymentMethod.default_safe_box_id == sb.id)
+            .all()
+        )
+        ip_ids = [ip.id for ip in all_ips]
+        settled_map = {}
+        if ip_ids:
+            sl_rows = (
+                db.session.query(
+                    SettlementLine.invoice_payment_id,
+                    sqlfunc.coalesce(sqlfunc.sum(SettlementLine.amount_settled), 0.0),
+                )
+                .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
+                .group_by(SettlementLine.invoice_payment_id)
+                .all()
+            )
+            settled_map = {r[0]: round(float(r[1]), 2) for r in sl_rows}
+
+        uncovered = []
+        for ip in all_ips:
+            remaining = round(float(ip.amount or 0) - settled_map.get(ip.id, 0.0), 2)
+            if remaining > 0.01:
+                uncovered.append({
+                    'ip_id': ip.id,
+                    'amount': float(ip.amount or 0),
+                    'settled': settled_map.get(ip.id, 0.0),
+                    'remaining': remaining,
+                    'created_at': str(ip.created_at)[:19] if ip.created_at else None,
+                })
+
+        result[sb_key] = {
+            'incomplete_vouchers': incomplete_list,
+            'incomplete_count': len(incomplete_list),
+            'uncovered_ips': sorted(uncovered, key=lambda x: x['created_at'] or ''),
+            'uncovered_count': len(uncovered),
+            'total_uncovered_amount': round(sum(x['remaining'] for x in uncovered), 2),
+        }
+
+    return jsonify({'gap_report': result}), 200
 

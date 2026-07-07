@@ -24,6 +24,7 @@ from sqlalchemy import case, func
 from models import db, PaymentMethod, SafeBoxTransaction, Voucher, InvoicePayment, SettlementLine
 from services.live_balances import live_balances_by_account_ids
 from settlement_state_service import get_settled_amounts
+from allocation_repair_service import AllocationRepairService
 
 
 @dataclass
@@ -363,6 +364,10 @@ class ClearingSettlementScheduler:
                 print('[ClearingSettlementScheduler] No enabled payment methods')
                 return result
 
+            # Track repaired safe boxes so Phase 0 runs at most once per safe box
+            # even when multiple PMs share the same clearing safe box.
+            _repaired_sb_ids: set[int] = set()
+
             for pm in methods:
                 try:
                     pm_name = getattr(pm, 'name', str(pm.id))
@@ -393,6 +398,38 @@ class ClearingSettlementScheduler:
                     if (bank_sb.safe_type or '').strip().lower() != 'bank':
                         _skip(f'bank_safe_wrong_type:{bank_sb.safe_type}')
                         continue
+
+                    # ═══ Phase 0: Repair ════════════════════════════════════════
+                    # Runs before balance and schedule checks — SettlementLine gaps
+                    # must be repaired even when clearing_balance = 0 (the exact
+                    # condition that originally caused 07-06 IPs to be skipped).
+                    # Idempotent: find_incomplete_vouchers returns [] if already clean.
+                    # At-most-once per safe box per scheduler run (deduplicated by ID).
+                    if clearing_sb.id not in _repaired_sb_ids:
+                        _repaired_sb_ids.add(clearing_sb.id)
+                        try:
+                            _repair_svc = AllocationRepairService()
+                            _repair_results = _repair_svc.repair_safe_box(safe_box=clearing_sb)
+                            _ok = [r for r in _repair_results if r.is_repaired]
+                            _failed = [r for r in _repair_results if not r.is_repaired]
+                            if _ok:
+                                print(
+                                    f'[ClearingSettlementScheduler] 🔧 SB#{clearing_sb.id}:'
+                                    f' repaired {len(_ok)} voucher(s): '
+                                    + ', '.join(r.voucher_number for r in _ok)
+                                )
+                            for _r in _failed:
+                                print(
+                                    f'[ClearingSettlementScheduler] ❌ SB#{clearing_sb.id}:'
+                                    f' repair failed for {_r.voucher_number}: {_r.error}'
+                                )
+                        except Exception as _repair_exc:
+                            db.session.rollback()
+                            print(
+                                f'[ClearingSettlementScheduler] ❌ SB#{clearing_sb.id}:'
+                                f' repair phase error: {_repair_exc}'
+                            )
+                    # ════════════════════════════════════════════════════════════
 
                     schedule_type = str(pm.settlement_schedule_type or 'days').strip().lower()
                     if schedule_type not in ('days', 'weekday'):
