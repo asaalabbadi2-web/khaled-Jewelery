@@ -53,6 +53,8 @@ from models import (
     db, Voucher, VoucherAccountLine, SettlementLine,
     InvoicePayment, PaymentMethod, SafeBox, Invoice,
 )
+from allocation_service import AllocationService
+from allocation_repair_service import _extract_fee_vat, _get_clearing_account_id
 try:
     from models import Invoice as InvoiceModel  # alias
 except ImportError:
@@ -155,96 +157,95 @@ def run() -> None:
             .order_by(InvoicePayment.created_at.asc())
             .all()
         )
-
-        # حساب المُسوَّى السابق لكل IP من السندات المعتمَدة الأقدم من AV133
-        # (أي ما "استهلك" قبل أن يجيء دور AV133 في FIFO)
-        sl_by_ip: dict[int, list[SettlementLine]] = defaultdict(list)
-        all_sl_for_ips = (
-            SettlementLine.query
-            .filter(SettlementLine.invoice_payment_id.in_([ip.id for ip in all_ips]))
-            .all()
-        ) if all_ips else []
-        for sl in all_sl_for_ips:
-            sl_by_ip[sl.invoice_payment_id].append(sl)
-
-        # الرصيد الخالي (unsettled) لكل IP بحسب الوضع الراهن
-        # — هذا يتضمن تأثير Phase 0 (ستُبدي IPs يوليو كمُستهلَكة)
-        # نحتاج مقارنة نظيفة: what would have been available at v_date
-        # assuming ONLY settlements from vouchers dated before v_date
-
-        # السندات الأقدم: approved + date < AV133_date
-        earlier_voucher_ids: set[int] = {
-            sl.voucher_id for sl in all_sl_for_ips
-            if sl.voucher_id != AV133_VOUCHER_ID
+        ip_date_map: dict[int, datetime] = {
+            ip.id: (ip.created_at or datetime.min) for ip in all_ips
         }
-        earlier_voucher_dates: dict[int, datetime] = {}
-        if earlier_voucher_ids:
-            for ev in Voucher.query.filter(Voucher.id.in_(earlier_voucher_ids)).all():
-                earlier_voucher_dates[ev.id] = _dt(ev.date)
+        all_ip_ids = [ip.id for ip in all_ips]
 
-        # لكل IP: ما المُسوَّى منها فعلياً بواسطة سندات أقدم من AV133 (approved)?
-        def prev_settled_before_av133(ip_id: int) -> float:
-            total = 0.0
-            for sl in sl_by_ip.get(ip_id, []):
-                if sl.voucher_id == AV133_VOUCHER_ID:
-                    continue  # نتجاهل AV133 نفسها
-                v_sl = Voucher.query.get(sl.voucher_id)
-                if v_sl and v_sl.status == 'approved' and _dt(v_sl.date) < v_date:
-                    total += sl.amount_settled
-            return round(total, 2)
+        _alloc_svc = AllocationService()
+        _fee_amount, _fee_vat = _extract_fee_vat(v, _get_clearing_account_id(v))
 
-        # ── الطبقة 1: نافذة معيارية (+ 2 أيام) ──────────────────────────────
-        print(f"\n{'='*70}")
-        print(f"الطبقة 1: IPs مؤهلة بالنافذة المعيارية (created_at ≤ {cutoff_std.strftime('%Y-%m-%d')})")
-        print(f"{'='*70}")
+        # ── analyze_pool — مصدر حقيقة واحد: AllocationService.build_allocation_plan ──
+        #
+        # النسخة الأولى كانت تحسب "المتاح" باستخدام prev_settled_before_av133()
+        # التي تستبعد فقط سندات ما قبل تاريخ AV133 — فتعطي 31,790 "متاح" رغم
+        # أن build_allocation_plan() يرى 13,660 فقط. السبب: السندات من مايو 20+
+        # استهلكت تلك الـ IPs شرعياً، لكن الأداة القديمة لم تحسبها.
+        #
+        # الحل: savepoint يُحاكي unallocate(AV133) بالضبط ثم يستدعي
+        # build_allocation_plan() — نفس ما يفعله repair_voucher الحقيقي.
+        # كلا الأداتين يقرآن من نفس prev_settled → نتيجة واحدة لا اثنتان.
 
         def analyze_pool(cutoff: datetime, label: str) -> dict:
-            pool = [ip for ip in all_ips if (ip.created_at or datetime.min) <= cutoff]
-            total_gross = round(sum(float(ip.amount or 0) for ip in pool), 2)
-            available_rows = []
-            total_available = 0.0
-            for ip in pool:
-                already = prev_settled_before_av133(ip.id)
-                remaining = round(float(ip.amount or 0) - already, 2)
-                available_rows.append({
-                    'ip_id': ip.id,
-                    'created_at': ip.created_at.isoformat() if ip.created_at else None,
-                    'amount': float(ip.amount or 0),
-                    'settled_by_prior_vouchers': already,
-                    'available_for_av133': remaining,
-                })
-                if remaining > EPS:
-                    total_available += remaining
-            total_available = round(total_available, 2)
-            gap_coverage = round(v_gross - total_available, 2)
+            pool_ids = [ip_id for ip_id in all_ip_ids
+                        if ip_date_map.get(ip_id, datetime.min) <= cutoff]
+            pool_ips = [ip for ip in all_ips
+                        if ip_date_map.get(ip.id, datetime.min) <= cutoff]
+            total_gross = round(sum(float(ip.amount or 0) for ip in pool_ips), 2)
 
-            print(f"  عدد IPs في النافذة            : {len(pool)}")
-            print(f"  إجمالي قيم IPs (gross)         : {total_gross:.2f}")
-            print(f"  إجمالي المُسوَّى مسبقاً          : {round(total_gross - total_available, 2):.2f}")
-            print(f"  المتاح فعلاً لـ AV133          : {total_available:.2f}")
-            print(f"  قيمة AV133 (amount_cash)       : {v_gross:.2f}")
-            if gap_coverage <= 0:
-                print(f"  ✅ التغطية كافية — كان يمكن تسوية AV133 بالكامل من هذه النافذة")
+            # محاكاة unallocate(AV133) داخل savepoint
+            sp = db.session.begin_nested()
+            try:
+                SettlementLine.query.filter_by(
+                    voucher_id=AV133_VOUCHER_ID
+                ).delete(synchronize_session=False)
+                db.session.flush()
+                plan = _alloc_svc.build_allocation_plan(
+                    voucher=v,
+                    invoice_payment_ids=pool_ids,
+                    gross_amount=v_gross,
+                    fee_amount=_fee_amount,
+                    fee_vat=_fee_vat,
+                )
+            finally:
+                sp.rollback()
+
+            total_allocated = plan.total_allocated
+            remainder = plan.unallocated_remainder
+            gap_coverage = round(remainder, 2)
+
+            print(f"  عدد IPs في النافذة                : {len(pool_ids)}")
+            print(f"  إجمالي قيم IPs (gross)             : {total_gross:.2f}")
+            print(f"  سيُخصَّص لـ AV133 (build_plan)     : {total_allocated:.2f}")
+            print(f"  فجوة متبقية                        : {remainder:.2f}")
+            print(f"  قيمة AV133 (amount_cash)           : {v_gross:.2f}")
+            if gap_coverage <= EPS:
+                print(f"  ✅ التغطية كافية — يمكن تسوية AV133 بالكامل من هذه النافذة")
             else:
-                print(f"  ❌ فجوة = {gap_coverage:.2f} ريال — التغطية غير كافية من هذه النافذة")
+                print(f"  ❌ فجوة = {gap_coverage:.2f} ريال — لا تكفي IPs هذه النافذة")
+
+            # تفاصيل الـ IPs المُخصَّصة
+            if plan.lines:
+                print(f"  IPs التي سيختارها build_plan (FIFO):")
+                for ln in plan.lines:
+                    print(f"    IP#{ln.invoice_payment_id:>6} → {ln.amount_to_allocate:.2f}")
 
             return {
                 'label': label,
                 'cutoff': cutoff.isoformat(),
-                'ip_count': len(pool),
+                'ip_pool_size': len(pool_ids),
                 'total_gross': total_gross,
-                'total_available': total_available,
+                'plan_allocated': total_allocated,
+                'plan_remainder': remainder,
                 'gap': gap_coverage,
-                'verdict': 'sufficient' if gap_coverage <= 0 else 'insufficient',
-                'rows': available_rows,
+                'verdict': 'sufficient' if gap_coverage <= EPS else 'insufficient',
+                'plan_lines': [
+                    {'ip_id': ln.invoice_payment_id,
+                     'amount_to_allocate': ln.amount_to_allocate}
+                    for ln in plan.lines
+                ],
             }
 
+        # ── الطبقة 1: نافذة معيارية (+ 2 أيام) ──────────────────────────────
+        print(f"\n{'='*70}")
+        print(f"الطبقة 1 [build_allocation_plan]: نافذة معيارية ≤ {cutoff_std.strftime('%Y-%m-%d')}")
+        print(f"{'='*70}")
         layer1 = analyze_pool(cutoff_std, 'standard_window')
         report['layer1_standard_window'] = layer1
 
         # ── الطبقة 2: نافذة موسّعة (+ 7 أيام) ───────────────────────────────
         print(f"\n{'='*70}")
-        print(f"الطبقة 2: IPs مؤهلة بالنافذة الموسّعة (created_at ≤ {cutoff_wide.strftime('%Y-%m-%d')})")
+        print(f"الطبقة 2 [build_allocation_plan]: نافذة موسّعة ≤ {cutoff_wide.strftime('%Y-%m-%d')}")
         print(f"{'='*70}")
         layer2 = analyze_pool(cutoff_wide, 'wide_window_7d')
         report['layer2_wide_window'] = layer2
@@ -329,28 +330,17 @@ def run() -> None:
         # "voucher_amount_error": السند أُنشئ بمبلغ أكبر مما تُنتجه IPs يومه —
         # هذا مختلف عن genuine_accounting_gap (التي تعني cash وصل البنك لكن
         # IP مقابله غير مسجّل).
-        # هنا: المجدول قد يكون حسب amount_cash من رصيد الحساب بدلاً من
-        # مجموع IPs، مما يُنشئ سنداً أكبر من الممكن تسويته.
+        # نستخدم نتيجة layer1 (build_allocation_plan) مباشرة — مصدر حقيقة واحد.
         print(f"\n{'='*70}")
-        print("الطبقة 5: مقارنة amount_cash بما يجب أن يُنتجه المجدول من IPs")
+        print("الطبقة 5: مقارنة amount_cash بما يُنتجه build_allocation_plan من IPs")
         print(f"{'='*70}")
 
-        # المجموع المتوقع = IPs اليوم فقط (لم تُسوَّ بسندات سابقة)
-        # الفكرة: إذا شغّل المجدول بشكل صحيح، يجب أن يكون amount_cash
-        # = مجموع IPs التي وصلت في نافذة التسوية (created_at بين
-        # آخر سند ويوم هذا السند) وغير مُسوَّاة بعد.
-        # نحسب هذا باستخدام prev_settled_before_av133 المُعرَّفة سابقاً:
-        day_pool_std = [ip for ip in all_ips if (ip.created_at or datetime.min) <= cutoff_std]
-        expected_gross_from_ips = round(
-            sum(
-                max(0.0, round(float(ip.amount or 0) - prev_settled_before_av133(ip.id), 2))
-                for ip in day_pool_std
-            ), 2
-        )
+        # ما يستطيع build_allocation_plan تخصيصه = نتيجة layer1
+        expected_gross_from_ips = layer1['plan_allocated']
         voucher_excess = round(v_gross - expected_gross_from_ips, 2)
 
-        print(f"  المجموع المتاح من IPs (بعد خصم المُسوَّى مسبقاً): {expected_gross_from_ips:.2f}")
-        print(f"  amount_cash للسند:                                  {v_gross:.2f}")
+        print(f"  ما يُخصِّصه build_plan من IPs المعيارية: {expected_gross_from_ips:.2f}")
+        print(f"  amount_cash للسند:                       {v_gross:.2f}")
         if abs(voucher_excess) < 1.0:
             print(f"  ✅ amount_cash يتطابق مع IPs المتاحة — مبلغ السند صحيح")
             voucher_amount_verdict = 'amount_matches_ips'
