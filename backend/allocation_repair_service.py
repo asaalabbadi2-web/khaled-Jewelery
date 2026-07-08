@@ -26,7 +26,7 @@ TYPICAL CAUSE OF REPAIRABLE GAPS:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date as date_type, timedelta
 
 from sqlalchemy import func
 
@@ -185,17 +185,25 @@ class AllocationRepairService:
         expires the remaining voucher objects so the next iteration re-fetches
         from DB, ensuring clean state.
 
+        DATE BOUNDARY: each voucher only receives IPs whose created_at is on or
+        before the voucher date + 2 days (1-day deposit delay + 1-day buffer).
+        This prevents a May voucher from absorbing July IPs to fill its gap —
+        the root cause of the AV-2026-00133 / -6,050 balance incident.
+
         Returns RepairResult for every attempted repair (check .is_repaired).
         """
-        ip_pool = [
-            ip.id for ip in (
-                InvoicePayment.query
-                .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
-                .filter(PaymentMethod.default_safe_box_id == safe_box.id)
-                .order_by(InvoicePayment.created_at.asc())
-                .all()
-            )
-        ]
+        all_ips = (
+            InvoicePayment.query
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+            .filter(PaymentMethod.default_safe_box_id == safe_box.id)
+            .order_by(InvoicePayment.created_at.asc())
+            .all()
+        )
+        # Pre-build a date map for O(1) cutoff filtering per voucher.
+        ip_date_map: dict[int, datetime] = {
+            ip.id: (ip.created_at or datetime.min) for ip in all_ips
+        }
+        all_ip_ids: list[int] = [ip.id for ip in all_ips]
 
         incomplete = self.find_incomplete_vouchers(safe_box=safe_box)
         results: list[RepairResult] = []
@@ -204,6 +212,20 @@ class AllocationRepairService:
             v_id = v.id
             v_number = v.voucher_number or str(v.id)
             v_gross = round(float(v.amount_cash or 0), 2)
+
+            # Date-bounded IP pool: only IPs whose payment was collected on or
+            # before this voucher's deposit date (voucher.date + 2-day window).
+            # Prevents future-period IPs from filling historical voucher gaps.
+            if v.date:
+                v_dt = v.date if isinstance(v.date, datetime) else datetime(
+                    v.date.year, v.date.month, v.date.day, 23, 59, 59
+                )
+                cutoff = v_dt + timedelta(days=2)
+                ip_pool = [ip_id for ip_id in all_ip_ids
+                           if ip_date_map.get(ip_id, datetime.min) <= cutoff]
+            else:
+                ip_pool = all_ip_ids
+
             try:
                 result = self.repair_voucher(voucher=v, ip_pool=ip_pool)
                 # flush → next voucher's allocate() sees these lines in prev_settled

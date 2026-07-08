@@ -36893,3 +36893,100 @@ def ip_settlement_trace():
 
     return jsonify({'ip_trace': result}), 200
 
+
+@api.route('/admin/repair-voucher-date-bounded', methods=['POST'])
+@require_permission('system.settings')
+def repair_voucher_date_bounded():
+    """أعِد تخصيص سند واحد مع احترام حدود التاريخ (IPs <= voucher.date + 2 days).
+
+    Body JSON: {"voucher_id": 1649}
+
+    يحذف جميع SettlementLines الحالية للسند ويُعيد التخصيص بـ IP pool
+    مُقيَّد بالتاريخ — لا يستطيع استخدام IPs من فترة لاحقة على تاريخ السند.
+    إذا تعذّر التغطية الكاملة يُرجع الخطأ بدون commit.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    from allocation_service import AllocationService
+    from allocation_repair_service import _get_clearing_account_id, _extract_fee_vat
+
+    data = request.get_json(force=True) or {}
+    voucher_id = data.get('voucher_id')
+    if not voucher_id:
+        return jsonify({'error': 'voucher_id required'}), 400
+
+    voucher = Voucher.query.get(voucher_id)
+    if not voucher:
+        return jsonify({'error': f'voucher {voucher_id} not found'}), 404
+    if voucher.reference_type != 'clearing_settlement':
+        return jsonify({'error': 'not a clearing_settlement voucher'}), 400
+    if voucher.status != 'approved':
+        return jsonify({'error': 'voucher is not approved'}), 400
+
+    # Determine safe box from the credit VoucherAccountLine (clearing account)
+    clearing_account_id = _get_clearing_account_id(voucher)
+    if not clearing_account_id:
+        return jsonify({'error': 'cannot determine clearing account from voucher'}), 400
+
+    sb = SafeBox.query.filter_by(account_id=clearing_account_id).first()
+    if not sb:
+        return jsonify({'error': f'no safe box for account_id={clearing_account_id}'}), 400
+
+    # Build date-bounded IP pool
+    v_dt = voucher.date
+    if v_dt:
+        if not isinstance(v_dt, _dt):
+            v_dt = _dt(v_dt.year, v_dt.month, v_dt.day, 23, 59, 59)
+        cutoff = v_dt + _td(days=2)
+    else:
+        cutoff = None
+
+    ips_q = (
+        InvoicePayment.query
+        .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+        .filter(PaymentMethod.default_safe_box_id == sb.id)
+        .order_by(InvoicePayment.created_at.asc())
+    )
+    if cutoff:
+        ips_q = ips_q.filter(InvoicePayment.created_at <= cutoff)
+    ip_pool = [ip.id for ip in ips_q.all()]
+
+    fee_amount, fee_vat = _extract_fee_vat(voucher, clearing_account_id)
+    gross_amount = round(float(voucher.amount_cash or 0), 2)
+
+    svc = AllocationService()
+    deleted = svc.unallocate(voucher)
+    db.session.flush()
+
+    try:
+        plan = svc.allocate(
+            voucher=voucher,
+            invoice_payment_ids=ip_pool,
+            gross_amount=gross_amount,
+            fee_amount=fee_amount,
+            fee_vat=fee_vat,
+        )
+        db.session.commit()
+        return jsonify({
+            'voucher_id': voucher_id,
+            'voucher_number': voucher.voucher_number,
+            'gross_amount': gross_amount,
+            'ip_pool_size': len(ip_pool),
+            'cutoff_date': str(cutoff)[:10] if cutoff else None,
+            'lines_deleted': deleted,
+            'lines_created': len(plan.lines),
+            'unallocated_remainder': plan.unallocated_remainder,
+            'is_fully_covered': plan.is_fully_covered,
+        }), 200
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({
+            'error': str(exc),
+            'voucher_id': voucher_id,
+            'voucher_number': voucher.voucher_number,
+            'gross_amount': gross_amount,
+            'ip_pool_size': len(ip_pool),
+            'cutoff_date': str(cutoff)[:10] if cutoff else None,
+            'lines_deleted': deleted,
+            'lines_restored': 0,
+        }), 422
+
