@@ -48,8 +48,23 @@ EPS = 0.005
 
 def _build_dry_run_preview(safe_box: SafeBox) -> list[dict]:
     """
-    يُحاكي repair_safe_box بدون كتابة: لكل سند ناقص، يبني خطة التخصيص
-    بحماية حد التاريخ، ويُعيد قائمة من preview rows.
+    يُحاكي repair_safe_box بدون كتابة فعلية.
+
+    المشكلة التي حُلّت:
+        النسخة الأولى كانت تستدعي build_allocation_plan() مباشرة بدون
+        محاكاة unallocate — فتظهر SettlementLines الموجودة للسند كـ prev_settled
+        وتُعطي نتيجة "0 IPs متاحة" رغم وجود تغطية كافية.
+
+    الحل — savepoint يُحاكي repair_voucher بدقة:
+        لكل سند:
+          1. begin_nested() → savepoint
+          2. حذف SettlementLines الحالية (unallocate) + flush
+          3. build_allocation_plan() — يرى نفس الـ prev_settled التي
+             سيراها repair_voucher الحقيقي بعد الـ unallocate
+          4. rollback إلى الـ savepoint → قاعدة البيانات تعود كما كانت
+
+    هذا يضمن أن الـ dry run يستخدم نفس منطق build_allocation_plan
+    تماماً كما سيفعل الـ apply، بلا أي اختلاف في مصدر الحقيقة.
     """
     svc = AllocationService()
 
@@ -96,16 +111,27 @@ def _build_dry_run_preview(safe_box: SafeBox) -> list[dict]:
         ) or 0.0
         current_gap = round(v_gross - float(current_sl_total), 2)
 
-        # بناء خطة التخصيص (بدون كتابة)
+        # محاكاة unallocate داخل savepoint ثم rollback
+        # → build_allocation_plan يرى نفس الـ prev_settled الذي سيراه
+        #   repair_voucher الحقيقي بعد حذف السطور الحالية
         clearing_account_id = _get_clearing_account_id(v)
         fee_amount, fee_vat = _extract_fee_vat(v, clearing_account_id)
-        plan = svc.build_allocation_plan(
-            voucher=v,
-            invoice_payment_ids=ip_pool,
-            gross_amount=v_gross,
-            fee_amount=fee_amount,
-            fee_vat=fee_vat,
-        )
+
+        sp = db.session.begin_nested()
+        try:
+            SettlementLine.query.filter_by(voucher_id=v.id).delete(
+                synchronize_session=False
+            )
+            db.session.flush()
+            plan = svc.build_allocation_plan(
+                voucher=v,
+                invoice_payment_ids=ip_pool,
+                gross_amount=v_gross,
+                fee_amount=fee_amount,
+                fee_vat=fee_vat,
+            )
+        finally:
+            sp.rollback()  # يُعيد SettlementLines كما كانت — لا تغيير دائم
 
         previews.append({
             'voucher_id': v.id,
