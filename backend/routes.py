@@ -36830,3 +36830,64 @@ def clearing_gap_report():
 
     return jsonify({'gap_report': result}), 200
 
+
+@api.route('/admin/ip-settlement-trace', methods=['GET'])
+@require_permission('system.settings')
+def ip_settlement_trace():
+    """تتبع SettlementLines لمجموعة من InvoicePayment IDs.
+
+    Query params: ids=2435,2436,2440 (comma-separated)
+    """
+    ip_ids_param = request.args.get('ids', '')
+    try:
+        ip_ids = [int(x.strip()) for x in ip_ids_param.split(',') if x.strip()]
+    except ValueError:
+        return jsonify({'error': 'ids must be comma-separated integers'}), 400
+
+    if not ip_ids:
+        return jsonify({'error': 'ids param required'}), 400
+
+    result = []
+    for ip_id in ip_ids:
+        ip = InvoicePayment.query.get(ip_id)
+        if not ip:
+            result.append({'ip_id': ip_id, 'error': 'not found'})
+            continue
+
+        sl_rows = (
+            db.session.query(
+                SettlementLine.voucher_id,
+                SettlementLine.amount_settled,
+                Voucher.voucher_number,
+                Voucher.status,
+                Voucher.date,
+            )
+            .join(Voucher, Voucher.id == SettlementLine.voucher_id)
+            .filter(SettlementLine.invoice_payment_id == ip_id)
+            .all()
+        )
+
+        total_all = sum(float(r[1] or 0) for r in sl_rows)
+        total_approved = sum(float(r[1] or 0) for r in sl_rows if r[3] == 'approved')
+
+        result.append({
+            'ip_id': ip_id,
+            'ip_amount': float(ip.amount or 0),
+            'created_at': str(ip.created_at)[:19] if ip.created_at else None,
+            'total_settled_all': round(total_all, 2),
+            'total_settled_approved': round(total_approved, 2),
+            'remaining_approved': round(float(ip.amount or 0) - total_approved, 2),
+            'settlement_lines': [
+                {
+                    'voucher_id': r[0],
+                    'voucher_number': r[2],
+                    'voucher_status': r[3],
+                    'voucher_date': str(r[4])[:10] if r[4] else None,
+                    'amount_settled': float(r[1] or 0),
+                }
+                for r in sl_rows
+            ],
+        })
+
+    return jsonify({'ip_trace': result}), 200
+
