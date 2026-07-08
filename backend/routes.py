@@ -36802,7 +36802,9 @@ def clearing_gap_report():
                     SettlementLine.invoice_payment_id,
                     sqlfunc.coalesce(sqlfunc.sum(SettlementLine.amount_settled), 0.0),
                 )
+                .join(Voucher, Voucher.id == SettlementLine.voucher_id)
                 .filter(SettlementLine.invoice_payment_id.in_(ip_ids))
+                .filter(Voucher.status == 'approved')
                 .group_by(SettlementLine.invoice_payment_id)
                 .all()
             )
