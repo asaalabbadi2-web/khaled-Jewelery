@@ -868,7 +868,10 @@ class Customer(db.Model):
     balance_gold_21k = db.Column(db.Float, default=0.0)
     balance_gold_22k = db.Column(db.Float, default=0.0)
     balance_gold_24k = db.Column(db.Float, default=0.0)
-    
+
+    # 'عميل' | 'مورد' — للفلترة في تقارير السيولة والمستحقات
+    customer_type = db.Column(db.String(20), nullable=True)
+
     invoices = db.relationship('Invoice', backref='customer', lazy=True, cascade="all, delete-orphan")
 
     def to_dict(self):
@@ -4822,7 +4825,7 @@ class InventoryCountSession(db.Model):
 
     # 'periodic' (default) | 'opening' (first-time stock entry — no GL adjustment)
     session_type = db.Column(db.String(20), nullable=False, default='periodic',
-                             server_default='periodic')
+                             server_default=db.text("'periodic'"))
 
     # MAX(InventoryLedger.id) captured at open time — the reference point
     snapshot_ledger_id = db.Column(db.Integer, nullable=True)
