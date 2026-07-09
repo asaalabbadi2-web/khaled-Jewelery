@@ -225,18 +225,9 @@ class AllocationService:
         Raises ValueError (via validate()) if coverage is incomplete.
         Caller is responsible for db.session.commit().
         """
-        if not invoice_payment_ids:
-            # No IPs provided — nothing to allocate, not an error
-            return AllocationPlan(
-                voucher_id=voucher.id,
-                gross_amount=round(float(gross_amount), 2),
-                lines=[],
-                unallocated_remainder=0.0,
-            )
-
         plan = self.build_allocation_plan(
             voucher=voucher,
-            invoice_payment_ids=invoice_payment_ids,
+            invoice_payment_ids=invoice_payment_ids or [],
             gross_amount=gross_amount,
             fee_amount=fee_amount,
             fee_vat=fee_vat,
@@ -251,6 +242,19 @@ class AllocationService:
                 commission=line.commission,
                 commission_vat=line.commission_vat,
             ))
+
+        db.session.flush()
+        created_total = float(
+            db.session.query(func.coalesce(func.sum(SettlementLine.amount_settled), 0.0))
+            .filter(SettlementLine.voucher_id == voucher.id)
+            .scalar()
+            or 0.0
+        )
+        if abs(created_total - round(float(gross_amount), 2)) > 0.01:
+            raise ValueError(
+                f'settlement_lines_db_mismatch:'
+                f'created={created_total:.2f},expected={gross_amount:.2f}'
+            )
 
         return plan
 

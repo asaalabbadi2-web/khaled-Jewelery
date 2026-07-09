@@ -31065,14 +31065,13 @@ def _create_clearing_settlement_voucher(
         commission_vat_account.update_balance(cash_amount=fee_vat)
 
     # --- Per-transaction settlement lines ---
-    if invoice_payment_ids:
-        AllocationService().allocate(
-            voucher=voucher,
-            invoice_payment_ids=invoice_payment_ids,
-            gross_amount=gross_amount,
-            fee_amount=fee_amount,
-            fee_vat=fee_vat,
-        )
+    AllocationService().allocate(
+        voucher=voucher,
+        invoice_payment_ids=invoice_payment_ids or [],
+        gross_amount=gross_amount,
+        fee_amount=fee_amount,
+        fee_vat=fee_vat,
+    )
 
     return {
         'success': True,
