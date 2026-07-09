@@ -68,14 +68,19 @@ def _all_clearing_vouchers(safe_box: SafeBox) -> list[Voucher]:
 
 
 def _ip_pool(v: Voucher, all_ip_ids: list[int], ip_date_map: dict[int, datetime]) -> list[int]:
-    """IPs بـ created_at ≤ voucher.date + 2d — نفس حد repair_safe_box."""
+    """IPs بـ created_at ≤ voucher.date + 3d.
+
+    3d = settlement_days(1) + 2 days safety buffer.
+    النسخة السابقة كانت +2d وهو ما جعل AV-2026-00001 (2026-02-28)
+    يفوّت أقدم IP في النظام (2026-03-02) بفارق 24 ساعة.
+    """
     if not v.date:
         return all_ip_ids
     v_dt = (
         v.date if isinstance(v.date, datetime)
         else datetime(v.date.year, v.date.month, v.date.day, 23, 59, 59)
     )
-    cutoff = v_dt + timedelta(days=2)
+    cutoff = v_dt + timedelta(days=3)
     return [ip_id for ip_id in all_ip_ids
             if ip_date_map.get(ip_id, datetime.min) <= cutoff]
 
