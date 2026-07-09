@@ -233,6 +233,11 @@ def _apply(
     ينفّذ الإعادة الفعلية سنداً تلو الآخر.
     Commit مستقل لكل سند: فشل السند N لا يُلغي نجاح 1..N-1.
     """
+    # في SQLAlchemy 1.x، استعلامات run() تفتح outer transaction تلقائياً.
+    # db.session.commit() داخل الحلقة يعمل كـ subtransaction (ليس COMMIT حقيقياً).
+    # نُغلق هذه الـ outer transaction أولاً حتى تصبح كل commit في الحلقة دائمة.
+    db.session.commit()
+
     svc = AllocationService()
     results: list[dict] = []
 
