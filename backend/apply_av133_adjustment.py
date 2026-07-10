@@ -10,24 +10,24 @@ from historical_clearing_adjustment_service import (
 SAFE_BOX_ID              = 32
 AMOUNT                   = 6050.00
 CLEARING_ACCOUNT_ID      = 777
-CONTRA_ACCOUNT_CODE      = '340'
+CONTRA_ACCOUNT_NUMBER    = '340'
 REFERENCE_VOUCHER_NUMBER = 'AV-2026-00133'
 APPLIED_BY               = 'admin'
 
 with app.app_context():
     print("=== تطبيق تصحيح AV-2026-00133 ===\n")
 
-    contra = Account.query.filter_by(code=CONTRA_ACCOUNT_CODE).first()
+    contra = Account.query.filter_by(account_number=CONTRA_ACCOUNT_NUMBER).first()
     if not contra:
-        print(f"❌ حساب كود={CONTRA_ACCOUNT_CODE} غير موجود — أنشئه أولاً في النظام")
+        print(f"❌ حساب رقم={CONTRA_ACCOUNT_NUMBER} غير موجود — أنشئه أولاً في النظام")
         sys.exit(1)
-    print(f"✅ حساب الفروقات: id={contra.id}  كود={contra.code}  {contra.name}")
+    print(f"✅ حساب الفروقات: id={contra.id}  رقم={contra.account_number}  {contra.name}")
 
     clearing = Account.query.get(CLEARING_ACCOUNT_ID)
     if not clearing:
         print(f"❌ حساب مدى id={CLEARING_ACCOUNT_ID} غير موجود")
         sys.exit(1)
-    print(f"✅ حساب مدى:      id={clearing.id}  كود={clearing.code}  {clearing.name}")
+    print(f"✅ حساب مدى:      id={clearing.id}  رقم={clearing.account_number}  {clearing.name}")
 
     existing = HistoricalClearingAdjustment.query.filter_by(
         reference_voucher_number=REFERENCE_VOUCHER_NUMBER,
