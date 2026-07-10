@@ -114,6 +114,10 @@ class HistoricalClearingAdjustmentService:
         db.session.flush()
         return adj
 
+    # Types that require a SafeBoxTransaction IN (physical cash gap)
+    # historical_gl_adjustment = GL-only fix; no cash gap → no SBT
+    _TYPES_REQUIRING_SBT = {'historical_allocation_gap', 'historical_opening_balance'}
+
     def apply(
         self,
         *,
@@ -129,7 +133,8 @@ class HistoricalClearingAdjustmentService:
           1. Lock the row with SELECT FOR UPDATE.
           2. Guard: raise AlreadyAppliedError if status != pending.
           3. Validate: accounts exist, no duplicate applied adj for same ref+type.
-          4. Create SafeBoxTransaction IN.
+          4. Create SafeBoxTransaction IN — only for types in _TYPES_REQUIRING_SBT.
+             historical_gl_adjustment skips SBT (GL-only fix, no physical cash gap).
           5. Create JournalEntry + two JournalEntryLines (Dr / Cr).
           6. Mark adjustment applied and link the created records.
 
@@ -167,17 +172,19 @@ class HistoricalClearingAdjustmentService:
         amount = adj.amount
         ref_label = adj.reference_voucher_number or f'adj#{adj.id}'
 
-        # ── 4. SafeBoxTransaction IN ──────────────────────────────────────────
-        sbt = SafeBoxTransaction(
-            safe_box_id=adj.safe_box_id,
-            ref_type='historical_clearing_adjustment',
-            ref_id=adj.id,
-            direction='in',
-            amount_cash=amount,
-            created_by=applied_by,
-        )
-        db.session.add(sbt)
-        db.session.flush()
+        # ── 4. SafeBoxTransaction IN (only for cash-gap types) ───────────────
+        sbt = None
+        if adj.adjustment_type in self._TYPES_REQUIRING_SBT:
+            sbt = SafeBoxTransaction(
+                safe_box_id=adj.safe_box_id,
+                ref_type='historical_clearing_adjustment',
+                ref_id=adj.id,
+                direction='in',
+                amount_cash=amount,
+                created_by=applied_by,
+            )
+            db.session.add(sbt)
+            db.session.flush()
 
         # ── 5. JournalEntry: Dr clearing / Cr contra ──────────────────────────
         je = JournalEntry(
@@ -216,7 +223,7 @@ class HistoricalClearingAdjustmentService:
         adj.status = 'applied'
         adj.approved_by = applied_by    # approved_by = applied_by (audit actor)
         adj.approved_at = apply_date
-        adj.safe_box_transaction_id = sbt.id
+        adj.safe_box_transaction_id = sbt.id if sbt else None
         adj.journal_entry_id = je.id
 
         db.session.flush()
