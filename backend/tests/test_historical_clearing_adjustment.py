@@ -73,13 +73,14 @@ def account_ids(app):
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 
-def _create_pending(safe_box_id, amount=6050.00):
+def _create_pending(safe_box_id, amount=6050.00,
+                    adjustment_type='historical_allocation_gap'):
     svc = HistoricalClearingAdjustmentService()
     return svc.create(
         safe_box_id=safe_box_id,
         amount=amount,
-        adjustment_type='historical_allocation_gap',
-        reason='Integration test — AV133 allocation gap',
+        adjustment_type=adjustment_type,
+        reason=f'Integration test — {adjustment_type}',
         created_by='test',
     )
 
@@ -129,10 +130,11 @@ class TestCreate:
 
 
 class TestApply:
-    def test_apply_creates_exactly_one_sbt(self, test_safe_box, account_ids):
-        clearing_acc, contra_acc = account_ids
-        adj = _create_pending(test_safe_box.id)
+    # ── allocation_gap: creates SBT + JE ─────────────────────────────────────
 
+    def test_allocation_gap_creates_sbt(self, test_safe_box, account_ids):
+        clearing_acc, contra_acc = account_ids
+        adj = _create_pending(test_safe_box.id, adjustment_type='historical_allocation_gap')
         svc = HistoricalClearingAdjustmentService()
         svc.apply(
             adjustment_id=adj.id,
@@ -140,19 +142,69 @@ class TestApply:
             clearing_account_id=clearing_acc,
             contra_account_id=contra_acc,
         )
-
         sbts = SafeBoxTransaction.query.filter_by(
-            ref_type='historical_clearing_adjustment',
-            ref_id=adj.id,
+            ref_type='historical_clearing_adjustment', ref_id=adj.id,
         ).all()
-        assert len(sbts) == 1, f'Expected 1 SBT, got {len(sbts)}'
+        assert len(sbts) == 1
         assert sbts[0].direction == 'in'
         assert abs(sbts[0].amount_cash - 6050.0) < 0.01
+
+    def test_allocation_gap_links_sbt_to_adjustment(self, test_safe_box, account_ids):
+        clearing_acc, contra_acc = account_ids
+        adj = _create_pending(test_safe_box.id, adjustment_type='historical_allocation_gap')
+        svc = HistoricalClearingAdjustmentService()
+        svc.apply(
+            adjustment_id=adj.id,
+            applied_by='test',
+            clearing_account_id=clearing_acc,
+            contra_account_id=contra_acc,
+        )
+        assert adj.safe_box_transaction_id is not None
+        sbt = SafeBoxTransaction.query.get(adj.safe_box_transaction_id)
+        assert sbt is not None and sbt.ref_id == adj.id
+
+    # ── gl_adjustment: creates JE only, no SBT ───────────────────────────────
+
+    def test_gl_adjustment_skips_sbt(self, test_safe_box, account_ids):
+        """historical_gl_adjustment is GL-only — no physical cash gap → no SBT."""
+        clearing_acc, contra_acc = account_ids
+        adj = _create_pending(test_safe_box.id, adjustment_type='historical_gl_adjustment')
+        svc = HistoricalClearingAdjustmentService()
+        svc.apply(
+            adjustment_id=adj.id,
+            applied_by='test',
+            clearing_account_id=clearing_acc,
+            contra_account_id=contra_acc,
+        )
+        assert adj.safe_box_transaction_id is None, \
+            'historical_gl_adjustment must not create a SafeBoxTransaction'
+
+        sbts = SafeBoxTransaction.query.filter_by(
+            ref_type='historical_clearing_adjustment', ref_id=adj.id,
+        ).all()
+        assert len(sbts) == 0
+
+    def test_gl_adjustment_still_creates_je(self, test_safe_box, account_ids):
+        clearing_acc, contra_acc = account_ids
+        adj = _create_pending(test_safe_box.id, adjustment_type='historical_gl_adjustment')
+        svc = HistoricalClearingAdjustmentService()
+        svc.apply(
+            adjustment_id=adj.id,
+            applied_by='test',
+            clearing_account_id=clearing_acc,
+            contra_account_id=contra_acc,
+        )
+        assert adj.journal_entry_id is not None
+        lines = JournalEntryLine.query.filter_by(journal_entry_id=adj.journal_entry_id).all()
+        assert len(lines) == 2
+        assert abs(sum(l.cash_debit for l in lines) - 6050.0) < 0.01
+        assert abs(sum(l.cash_credit for l in lines) - 6050.0) < 0.01
+
+    # ── common: JE always created, status always applied ─────────────────────
 
     def test_apply_creates_exactly_one_je(self, test_safe_box, account_ids):
         clearing_acc, contra_acc = account_ids
         adj = _create_pending(test_safe_box.id)
-
         svc = HistoricalClearingAdjustmentService()
         svc.apply(
             adjustment_id=adj.id,
@@ -160,25 +212,19 @@ class TestApply:
             clearing_account_id=clearing_acc,
             contra_account_id=contra_acc,
         )
-
         jes = JournalEntry.query.filter_by(
             reference_type='historical_clearing_adjustment',
             reference_id=adj.id,
         ).all()
-        assert len(jes) == 1, f'Expected 1 JE, got {len(jes)}'
-
+        assert len(jes) == 1
         lines = JournalEntryLine.query.filter_by(journal_entry_id=jes[0].id).all()
         assert len(lines) == 2
-
-        total_debit = sum(l.cash_debit for l in lines)
-        total_credit = sum(l.cash_credit for l in lines)
-        assert abs(total_debit - 6050.0) < 0.01
-        assert abs(total_credit - 6050.0) < 0.01
+        assert abs(sum(l.cash_debit for l in lines) - 6050.0) < 0.01
+        assert abs(sum(l.cash_credit for l in lines) - 6050.0) < 0.01
 
     def test_apply_sets_status_applied(self, test_safe_box, account_ids):
         clearing_acc, contra_acc = account_ids
         adj = _create_pending(test_safe_box.id)
-
         svc = HistoricalClearingAdjustmentService()
         result = svc.apply(
             adjustment_id=adj.id,
@@ -186,32 +232,10 @@ class TestApply:
             clearing_account_id=clearing_acc,
             contra_account_id=contra_acc,
         )
-
         assert result.status == 'applied'
-        assert result.safe_box_transaction_id is not None
         assert result.journal_entry_id is not None
         assert result.approved_by == 'test'
         assert result.approved_at is not None
-
-    def test_apply_links_sbt_and_je_to_adjustment(self, test_safe_box, account_ids):
-        clearing_acc, contra_acc = account_ids
-        adj = _create_pending(test_safe_box.id)
-
-        svc = HistoricalClearingAdjustmentService()
-        svc.apply(
-            adjustment_id=adj.id,
-            applied_by='test',
-            clearing_account_id=clearing_acc,
-            contra_account_id=contra_acc,
-        )
-
-        # FKs on the adjustment record point to the created records
-        sbt = SafeBoxTransaction.query.get(adj.safe_box_transaction_id)
-        je = JournalEntry.query.get(adj.journal_entry_id)
-        assert sbt is not None
-        assert je is not None
-        assert sbt.ref_id == adj.id
-        assert je.reference_id == adj.id
 
 
 class TestIdempotency:
