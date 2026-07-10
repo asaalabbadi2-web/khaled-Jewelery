@@ -5038,3 +5038,72 @@ class InventoryAdjustmentLine(db.Model):
         }
 
 
+class HistoricalClearingAdjustment(db.Model):
+    """Admin-only tool for correcting historical clearing gaps.
+
+    Three typed categories keep the audit trail unambiguous:
+      historical_allocation_gap   – SL/SafeBox mismatch from rebuild reallocation (e.g. AV133)
+      historical_gl_adjustment    – GL-only correction made before SafeBox layer existed (e.g. AV210)
+      historical_opening_balance  – Opening balance entry with no matching IP history
+
+    Workflow: create (status=pending) → approve → apply → status=applied
+    Only 'applied' records have safe_box_transaction_id and journal_entry_id populated.
+    """
+
+    __tablename__ = 'historical_clearing_adjustment'
+
+    VALID_TYPES = {
+        'historical_allocation_gap',
+        'historical_gl_adjustment',
+        'historical_opening_balance',
+    }
+
+    id = db.Column(db.Integer, primary_key=True)
+    safe_box_id = db.Column(db.Integer, db.ForeignKey('safe_box.id'), nullable=False, index=True)
+    amount = db.Column(db.Float, nullable=False)
+
+    adjustment_type = db.Column(db.String(50), nullable=False)
+    # historical_allocation_gap | historical_gl_adjustment | historical_opening_balance
+
+    reference_voucher_id = db.Column(db.Integer, db.ForeignKey('voucher.id'), nullable=True)
+    reference_voucher_number = db.Column(db.String(50), nullable=True)
+
+    reason = db.Column(db.Text, nullable=False)
+
+    created_by = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+
+    approved_by = db.Column(db.String(100), nullable=True)
+    approved_at = db.Column(db.DateTime, nullable=True)
+
+    status = db.Column(db.String(20), nullable=False, default='pending', index=True)
+    # pending | applied | cancelled
+
+    # Populated after apply()
+    safe_box_transaction_id = db.Column(db.Integer, db.ForeignKey('safe_box_transaction.id'), nullable=True)
+    journal_entry_id = db.Column(db.Integer, db.ForeignKey('journal_entry.id'), nullable=True)
+
+    safe_box = db.relationship('SafeBox', foreign_keys=[safe_box_id])
+    reference_voucher = db.relationship('Voucher', foreign_keys=[reference_voucher_id])
+    safe_box_transaction = db.relationship('SafeBoxTransaction', foreign_keys=[safe_box_transaction_id])
+    journal_entry = db.relationship('JournalEntry', foreign_keys=[journal_entry_id])
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'safe_box_id': self.safe_box_id,
+            'amount': self.amount,
+            'adjustment_type': self.adjustment_type,
+            'reference_voucher_id': self.reference_voucher_id,
+            'reference_voucher_number': self.reference_voucher_number,
+            'reason': self.reason,
+            'created_by': self.created_by,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'approved_by': self.approved_by,
+            'approved_at': self.approved_at.isoformat() if self.approved_at else None,
+            'status': self.status,
+            'safe_box_transaction_id': self.safe_box_transaction_id,
+            'journal_entry_id': self.journal_entry_id,
+        }
+
+

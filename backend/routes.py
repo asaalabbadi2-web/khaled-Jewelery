@@ -37003,3 +37003,124 @@ def repair_voucher_date_bounded():
             'lines_restored': 0,
         }), 422
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  HistoricalClearingAdjustment — Admin API
+# ═══════════════════════════════════════════════════════════════════════════
+
+@api.route('/admin/historical-clearing-adjustment', methods=['GET'])
+@require_permission('system.settings')
+def list_historical_clearing_adjustments():
+    """List all HistoricalClearingAdjustment records (newest first)."""
+    from models import HistoricalClearingAdjustment as HCA
+    rows = HCA.query.order_by(HCA.id.desc()).all()
+    return jsonify({'adjustments': [r.to_dict() for r in rows]}), 200
+
+
+@api.route('/admin/historical-clearing-adjustment', methods=['POST'])
+@require_permission('system.settings')
+def create_historical_clearing_adjustment():
+    """Create a pending HistoricalClearingAdjustment.
+
+    Body:
+      {
+        "safe_box_id": 32,
+        "amount": 6050.00,
+        "adjustment_type": "historical_allocation_gap",
+        "reason": "...",
+        "reference_voucher_number": "AV-2026-00133"   // optional
+      }
+    """
+    from historical_clearing_adjustment_service import HistoricalClearingAdjustmentService
+
+    data = request.get_json(force=True) or {}
+    required = ('safe_box_id', 'amount', 'adjustment_type', 'reason')
+    missing = [f for f in required if not data.get(f)]
+    if missing:
+        return jsonify({'error': f'missing fields: {missing}'}), 400
+
+    actor = getattr(g, 'current_user', None)
+    created_by = actor.username if actor else 'admin'
+
+    try:
+        svc = HistoricalClearingAdjustmentService()
+        adj = svc.create(
+            safe_box_id=int(data['safe_box_id']),
+            amount=float(data['amount']),
+            adjustment_type=data['adjustment_type'],
+            reason=data['reason'],
+            created_by=created_by,
+            reference_voucher_number=data.get('reference_voucher_number'),
+        )
+        db.session.commit()
+        return jsonify({'adjustment': adj.to_dict()}), 201
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+
+
+@api.route('/admin/historical-clearing-adjustment/<int:adj_id>/apply', methods=['POST'])
+@require_permission('system.settings')
+def apply_historical_clearing_adjustment(adj_id):
+    """Apply a pending adjustment: creates SafeBoxTransaction + JournalEntry.
+
+    Body:
+      {
+        "clearing_account_id": 777,
+        "contra_account_id": 900
+      }
+    """
+    from historical_clearing_adjustment_service import HistoricalClearingAdjustmentService
+
+    data = request.get_json(force=True) or {}
+    clearing_account_id = data.get('clearing_account_id')
+    contra_account_id = data.get('contra_account_id')
+    if not clearing_account_id or not contra_account_id:
+        return jsonify({'error': 'clearing_account_id and contra_account_id required'}), 400
+
+    actor = getattr(g, 'current_user', None)
+    approved_by = actor.username if actor else 'admin'
+
+    try:
+        svc = HistoricalClearingAdjustmentService()
+        adj = svc.apply(
+            adjustment_id=adj_id,
+            approved_by=approved_by,
+            clearing_account_id=int(clearing_account_id),
+            contra_account_id=int(contra_account_id),
+        )
+        db.session.commit()
+        return jsonify({'adjustment': adj.to_dict()}), 200
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+
+
+@api.route('/admin/historical-clearing-adjustment/<int:adj_id>/cancel', methods=['POST'])
+@require_permission('system.settings')
+def cancel_historical_clearing_adjustment(adj_id):
+    """Cancel a pending adjustment.
+
+    Body: {"reason": "..."}
+    """
+    from historical_clearing_adjustment_service import HistoricalClearingAdjustmentService
+
+    data = request.get_json(force=True) or {}
+    reason = data.get('reason', '')
+
+    actor = getattr(g, 'current_user', None)
+    cancelled_by = actor.username if actor else 'admin'
+
+    try:
+        svc = HistoricalClearingAdjustmentService()
+        adj = svc.cancel(
+            adjustment_id=adj_id,
+            cancelled_by=cancelled_by,
+            reason=reason,
+        )
+        db.session.commit()
+        return jsonify({'adjustment': adj.to_dict()}), 200
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc)}), 400
+
