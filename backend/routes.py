@@ -30650,29 +30650,67 @@ def create_melting_renewal():
 
 
 def _compute_clearing_due_amount(safe_box_id):
-    """Compute how much is actually owed in a clearing safe box.
+    """Compute how much is actually pending in a clearing safe box.
 
-    due = ip_in + net_transfer_in - net_voucher_out
+    Uses SettlementLine-based calculation (primary) plus transfer-in
+    adjustment (secondary) to avoid false zeros caused by accounting gaps.
 
-    Where:
-      net_voucher_out  = voucher OUT − reversal IN
-                         (reversal IN undoes a previously counted OUT)
-      net_transfer_in  = voucher IN (no IP) − reversal OUT (no IP)
-                         (reversal OUT undoes a previously counted transfer IN)
+    The previous cash-flow formula (ip_in - voucher_out) broke when
+    voucher_out exceeded SL coverage due to historical allocation gaps
+    (e.g. AV-2026-00133: voucher=19,710 but SL=13,660, gap=6,050).
+    That 6,050 inflated voucher_out until it equalled ip_in, making
+    due=0 and hiding all genuinely-pending IPs via the FIFO mechanism.
 
-    This correctly handles the cancel-and-redo workflow where a transfer
-    voucher was issued then reversed (voucher_reversal), so the cancelled
-    amount is no longer double-counted in either direction.
+    New formula:
+        pending_sl = sum(IP.amount - SL_settled) for all IPs with SL_settled < IP.amount
+        due = pending_sl + net_transfer_in
     """
-    # Inflow: authoritative IP total via PaymentMethod routing
-    ip_in = (
-        db.session.query(func.coalesce(func.sum(InvoicePayment.amount), 0.0))
-        .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
-        .filter(PaymentMethod.default_safe_box_id == safe_box_id)
-        .scalar()
-    ) or 0.0
+    # ── Primary: SL-based pending ────────────────────────────────────────────
+    # All IPs for this safe box
+    all_ip_ids: list[int] = [
+        r[0]
+        for r in (
+            db.session.query(InvoicePayment.id)
+            .join(PaymentMethod, PaymentMethod.id == InvoicePayment.payment_method_id)
+            .filter(PaymentMethod.default_safe_box_id == safe_box_id)
+            .all()
+        )
+    ]
 
-    # Inflow: safe-box transfers arriving (routing corrections, no IP link)
+    if not all_ip_ids:
+        return 0.0
+
+    # Settled per IP (approved vouchers only — excludes cancelled/phantom SLs)
+    sl_rows = (
+        db.session.query(
+            SettlementLine.invoice_payment_id,
+            func.coalesce(func.sum(SettlementLine.amount_settled), 0.0),
+        )
+        .join(Voucher, Voucher.id == SettlementLine.voucher_id)
+        .filter(
+            SettlementLine.invoice_payment_id.in_(all_ip_ids),
+            Voucher.status == 'approved',
+        )
+        .group_by(SettlementLine.invoice_payment_id)
+        .all()
+    )
+    sl_settled: dict[int, float] = {r[0]: round(float(r[1]), 2) for r in sl_rows}
+
+    ip_amounts: dict[int, float] = {
+        r[0]: round(float(r[1]), 2)
+        for r in (
+            db.session.query(InvoicePayment.id, InvoicePayment.amount)
+            .filter(InvoicePayment.id.in_(all_ip_ids))
+            .all()
+        )
+    }
+
+    pending_sl = round(sum(
+        max(0.0, ip_amounts[ip_id] - sl_settled.get(ip_id, 0.0))
+        for ip_id in all_ip_ids
+    ), 2)
+
+    # ── Secondary: safe-box transfers without IP (routing corrections) ────────
     transfer_in = (
         db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
         .filter(
@@ -30684,7 +30722,6 @@ def _compute_clearing_due_amount(safe_box_id):
         .scalar()
     ) or 0.0
 
-    # Offset: reversal-outs negate previously-counted transfer-ins
     reversal_out = (
         db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
         .filter(
@@ -30696,32 +30733,9 @@ def _compute_clearing_due_amount(safe_box_id):
         .scalar()
     ) or 0.0
 
-    # Outflow: settlement / transfer vouchers
-    voucher_out = (
-        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-        .filter(
-            SafeBoxTransaction.safe_box_id == safe_box_id,
-            SafeBoxTransaction.ref_type == 'voucher',
-            SafeBoxTransaction.direction == 'out',
-        )
-        .scalar()
-    ) or 0.0
-
-    # Offset: reversal-ins negate previously-counted voucher-outs
-    reversal_in = (
-        db.session.query(func.coalesce(func.sum(SafeBoxTransaction.amount_cash), 0.0))
-        .filter(
-            SafeBoxTransaction.safe_box_id == safe_box_id,
-            SafeBoxTransaction.ref_type == 'voucher_reversal',
-            SafeBoxTransaction.direction == 'in',
-        )
-        .scalar()
-    ) or 0.0
-
     net_transfer_in = max(0.0, float(transfer_in) - float(reversal_out))
-    net_voucher_out = max(0.0, float(voucher_out) - float(reversal_in))
 
-    return round(float(ip_in) + net_transfer_in - net_voucher_out, 2)
+    return round(pending_sl + net_transfer_in, 2)
 
 
 def _create_clearing_settlement_voucher(
