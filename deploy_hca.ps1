@@ -16,10 +16,10 @@ Write-Host "✅ الكونتينر يعمل: $running" -ForegroundColor Green
 # ── 2) نسخ الملفات المُحدَّثة ──────────────────────────────────────────────
 Write-Host "`nنسخ الملفات..."
 
-docker cp "backend/models.py"                            "${CONTAINER}:/app/backend/models.py"
-docker cp "backend/routes.py"                            "${CONTAINER}:/app/backend/routes.py"
-docker cp "backend/historical_clearing_adjustment_service.py" `
-          "${CONTAINER}:/app/backend/historical_clearing_adjustment_service.py"
+docker cp "backend/models.py"                                    "${CONTAINER}:/app/backend/models.py"
+docker cp "backend/routes.py"                                    "${CONTAINER}:/app/backend/routes.py"
+docker cp "backend/historical_clearing_adjustment_service.py"    "${CONTAINER}:/app/backend/historical_clearing_adjustment_service.py"
+docker cp "backend/tests/test_historical_clearing_adjustment.py" "${CONTAINER}:/app/backend/tests/test_historical_clearing_adjustment.py"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "❌ فشل نسخ الملفات" -ForegroundColor Red
@@ -44,20 +44,17 @@ docker exec $CONTAINER bash -c "kill -HUP \$(cat /tmp/gunicorn.pid 2>/dev/null |
 Start-Sleep -Seconds 3
 
 # ── 5) تحقق من الـ API ──────────────────────────────────────────────────────
-Write-Host "`nاختبار GET /api/admin/historical-clearing-adjustment ..."
-@'
-import sys
-sys.path.insert(0, "backend")
-from app import app
-from models import db, HistoricalClearingAdjustment
+Write-Host "`n=== تشغيل اختبارات التكامل ===" -ForegroundColor Cyan
+$testResult = docker exec $CONTAINER bash -c "
+    cd /app && python -m pytest backend/tests/test_historical_clearing_adjustment.py -v 2>&1
+" | Select-String -NotMatch "schema_guard|Auto-migration|Startup bootstrap|psycopg2|Background on this error|FullyQualified"
+$testResult | Write-Host
 
-with app.app_context():
-    try:
-        count = HistoricalClearingAdjustment.query.count()
-        print(f"✅ جدول historical_clearing_adjustment موجود — عدد السجلات: {count}")
-    except Exception as e:
-        print(f"❌ خطأ: {e}")
-'@ | docker exec -i $CONTAINER python 2>&1 | Select-String -NotMatch "schema_guard|Auto-migration|Startup bootstrap|psycopg2|Background on this error|FullyQualified"
+if ($testResult -match "FAILED|ERROR") {
+    Write-Host "`n❌ اختبارات فشلت — لا تُطبق الـ adjustment على الإنتاج" -ForegroundColor Red
+    exit 1
+}
+Write-Host "`n✅ جميع الاختبارات اجتازت" -ForegroundColor Green
 
 Write-Host "`n=== اكتمل النشر ===" -ForegroundColor Green
 Write-Host @"

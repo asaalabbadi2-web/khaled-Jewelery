@@ -37079,18 +37079,22 @@ def apply_historical_clearing_adjustment(adj_id):
         return jsonify({'error': 'clearing_account_id and contra_account_id required'}), 400
 
     actor = getattr(g, 'current_user', None)
-    approved_by = actor.username if actor else 'admin'
+    applied_by = actor.username if actor else 'admin'
 
     try:
+        from historical_clearing_adjustment_service import AlreadyAppliedError
         svc = HistoricalClearingAdjustmentService()
         adj = svc.apply(
             adjustment_id=adj_id,
-            approved_by=approved_by,
+            applied_by=applied_by,
             clearing_account_id=int(clearing_account_id),
             contra_account_id=int(contra_account_id),
         )
         db.session.commit()
         return jsonify({'adjustment': adj.to_dict()}), 200
+    except AlreadyAppliedError as exc:
+        db.session.rollback()
+        return jsonify({'error': str(exc), 'code': 'already_applied'}), 409
     except ValueError as exc:
         db.session.rollback()
         return jsonify({'error': str(exc)}), 400
