@@ -87,3 +87,27 @@ with app.app_context():
     print(f"  {'─'*65}")
     for r in sbt_by_type:
         print(f"  {str(r[0] or 'NULL'):<40}  {str(r[1]):<4}  {r[2]:>5}  {float(r[3]):>12,.2f}")
+
+    # ── 6. تفصيل SBTs المسببة لـ net_transfer_in ──────────────────────────
+    transfer_rows = db.session.execute(text("""
+        SELECT sbt.id, sbt.ref_id, sbt.amount_cash, sbt.created_at,
+               v.voucher_number, v.reference_type, v.status
+        FROM safe_box_transaction sbt
+        LEFT JOIN voucher v ON v.id = sbt.ref_id
+        WHERE sbt.safe_box_id = :sb
+          AND sbt.ref_type = 'voucher'
+          AND sbt.direction = 'in'
+          AND sbt.invoice_payment_id IS NULL
+        ORDER BY sbt.id
+    """), {'sb': SAFE_BOX_ID}).fetchall()
+
+    print(f"\n── SBTs المسببة لـ net_transfer_in (ref_type=voucher, dir=in, no IP) ─")
+    if not transfer_rows:
+        print("  لا يوجد")
+    else:
+        print(f"  {'sbt_id':>8}  {'voucher':>20}  {'ref_type':>25}  {'v_status':>10}  {'amount':>12}")
+        print(f"  {'─'*85}")
+        for r in transfer_rows:
+            sbt_id, ref_id, amount, created_at, v_num, v_ref_type, v_status = r
+            print(f"  {sbt_id:>8}  {str(v_num or '—'):>20}  {str(v_ref_type or '—'):>25}  "
+                  f"{str(v_status or '—'):>10}  {float(amount):>12,.2f}")
