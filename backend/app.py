@@ -49,6 +49,7 @@ try:
 	from models import db
 	from routes import api, ensure_weight_closing_support_accounts
 	from routes import public_api
+	from routes.pricing import pricing_bp
 except ImportError as exc:
 	import traceback as _tb
 	print(
@@ -361,6 +362,7 @@ app.register_blueprint(offices_bp)  # 🆕 تسجيل offices routes (has its ow
 app.register_blueprint(branches_bp)  # 🆕 تسجيل branches routes (has its own prefix /api/branches)
 app.register_blueprint(public_api, url_prefix='/api')  # 🆕 Public (unauthenticated) API
 app.register_blueprint(inventory_bp)               # Inventory Engine (/api/inventory/*)
+app.register_blueprint(pricing_bp, url_prefix='/api')  # Pricing domain (gold price + costing)
 app.register_blueprint(api, url_prefix='/api')  # ✅ API الرئيسي (أخيراً)
 # recurring_journal_routes تستخدم نفس api blueprint، لذا لا حاجة لتسجيلها
 
