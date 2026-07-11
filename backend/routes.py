@@ -1044,40 +1044,8 @@ def validate_bridge_account_balance(bridge_account_id, tolerance=0.01):
 
 
 def get_current_gold_price():
-    """
-    Return latest gold price snapshot as SAR per gram.
-    
-    Returns:
-        dict: Contains price_per_gram_24k, price_per_gram_main_karat, main_karat, source, updated_at
-    """
-    price_per_gram_24k = 0.0
-    source = 'database'
-    updated_at = None
-
-    latest = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
-    if latest and latest.price:
-        try:
-            price_per_gram_24k = (latest.price / 31.1035) * 3.75
-            updated_at = latest.date.isoformat() if latest.date else None
-        except Exception as exc:
-            print(f"⚠️ Failed to normalize gold price: {exc}")
-            price_per_gram_24k = 0.0
-
-    if price_per_gram_24k <= 0:
-        source = 'fallback'
-        price_per_gram_24k = 400.0
-    
-    # 🆕 حساب سعر العيار الرئيسي
-    main_karat = get_main_karat()
-    price_per_gram_main_karat = (price_per_gram_24k * main_karat) / 24.0
-
-    return {
-        'price_per_gram_24k': round(price_per_gram_24k, 4),
-        'price_per_gram_main_karat': round(price_per_gram_main_karat, 4),  # 🆕 سعر العيار الرئيسي
-        'main_karat': main_karat,  # 🆕 العيار الرئيسي
-        'source': source,
-        'updated_at': updated_at,
-    }
+    from pricing.gold_price_service import get_current_gold_price as _impl
+    return _impl()
 
 
 def _repair_inventory_wage_memo_links():
@@ -1431,83 +1399,8 @@ def _generate_reservation_code(prefix='RES'):
 
 
 def _generate_journal_entry_number(prefix='JE', entry_date=None):
-    """Generate a unique, sequential journal entry number.
-
-    Format: `{prefix}-{year}-{seq:05d}`.
-
-    Important:
-    - Uses the *entry_date year* (not always current year) so backdated entries
-      don't break numbering.
-    - Uses MAX(entry_number) rather than COUNT() to avoid duplicates when some
-      entries are deleted or when multiple entries are created in one request.
-    - Keeps an app-context cache so multiple calls in the same request/app-context
-      remain unique even before commit.
-
-    Backward compatibility:
-    - Some code historically called `_generate_journal_entry_number(date)`.
-      If `prefix` is a datetime, we treat it as `entry_date`.
-    """
-    # Back-compat: allow calling with a datetime as first argument.
-    if isinstance(prefix, datetime):
-        entry_date = prefix
-        prefix = 'JE'
-
-    dt = entry_date or datetime.now()
-    year = int(getattr(dt, 'year', datetime.now().year))
-    prefix_str = str(prefix)
-    number_prefix = f"{prefix_str}-{year}-"
-
-    # Cache: prefer session.info (works everywhere), fallback to flask.g.
-    cache = None
-    try:
-        cache = db.session.info.setdefault('_entry_number_seq_cache', {})
-    except Exception:
-        cache = None
-
-    if cache is None:
-        try:
-            from flask import g
-
-            cache = getattr(g, '_entry_number_seq_cache', None)
-            if cache is None:
-                cache = {}
-                setattr(g, '_entry_number_seq_cache', cache)
-        except Exception:
-            cache = {}
-
-    cache_key = (prefix_str, year)
-    last_seq = cache.get(cache_key)
-
-    if last_seq is None:
-        row = (
-            db.session.query(JournalEntry.entry_number)
-            .filter(JournalEntry.entry_number.like(f"{number_prefix}%"))
-            .order_by(JournalEntry.entry_number.desc())
-            .first()
-        )
-        if row and row[0]:
-            try:
-                last_seq = int(str(row[0]).split('-')[-1])
-            except Exception:
-                last_seq = 0
-        else:
-            last_seq = 0
-
-    next_seq = int(last_seq) + 1
-
-    # Guard against collisions (DBs without the unique index may already have duplicates)
-    while True:
-        candidate = f"{number_prefix}{next_seq:05d}"
-        exists = (
-            db.session.query(JournalEntry.id)
-            .filter(JournalEntry.entry_number == candidate)
-            .first()
-            is not None
-        )
-        if not exists:
-            cache[cache_key] = next_seq
-            return candidate
-        next_seq += 1
+    from accounting.reference_number_service import generate_journal_entry_number
+    return generate_journal_entry_number(prefix, entry_date)
 
 
 def _next_invoice_type_id(invoice_types):
@@ -18914,8 +18807,8 @@ def get_journal_entries():
     })
 
 def get_main_karat():
-    settings = Settings.query.first()
-    return settings.main_karat if settings else 21
+    from pricing.gold_price_service import get_main_karat as _impl
+    return _impl()
 
 def convert_to_main_karat(weight, karat):
     """
@@ -35536,15 +35429,15 @@ def get_admin_dashboard():
         # Get suppliers with credit balances (we owe them)
         suppliers = Customer.query.filter(Customer.customer_type == 'مورد').all()
         for supplier in suppliers:
-            balance = float(getattr(supplier, 'balance', 0) or 0)
-            if balance < 0:  # Negative balance means we owe them
+            balance = float(supplier.balance_cash or 0)
+            if balance < 0:
                 payables_due_7_days += abs(balance)
-        
+
         # Get customers with debit balances (they owe us)
         customers = Customer.query.filter(Customer.customer_type == 'عميل').all()
         for customer in customers:
-            balance = float(getattr(customer, 'balance', 0) or 0)
-            if balance > 0:  # Positive balance means they owe us
+            balance = float(customer.balance_cash or 0)
+            if balance > 0:
                 receivables_due_7_days += balance
     except Exception:
         payables_due_7_days = 0.0

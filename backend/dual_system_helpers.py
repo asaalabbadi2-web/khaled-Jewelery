@@ -627,7 +627,7 @@ def get_live_gold_price_helper():
     """
     try:
         # محاولة الحصول على السعر من API الذهب
-        from routes import get_current_gold_price
+        from pricing.gold_price_service import get_current_gold_price
         price_data = get_current_gold_price()
         # 🔧 تم التصليح: استخدام سعر العيار الرئيسي بدلاً من 24k
         return price_data.get('price_per_gram_main_karat', 350.0)
@@ -681,8 +681,8 @@ def create_dual_entry_with_memo(
         gold_price = get_live_gold_price_helper()
     
     # إنشاء القيد الرئيسي
-    from routes import _generate_journal_entry_number
-    entry_number = _generate_journal_entry_number('JE')
+    from accounting.reference_number_service import generate_journal_entry_number
+    entry_number = generate_journal_entry_number('JE')
     
     journal_entry = JournalEntry(
         entry_number=entry_number,
@@ -1047,8 +1047,8 @@ def create_complete_golden_entry(
         gold_price = get_live_gold_price_helper()
     
     # إنشاء القيد الرئيسي
-    from routes import _generate_journal_entry_number
-    entry_number = _generate_journal_entry_number('JE')
+    from accounting.reference_number_service import generate_journal_entry_number
+    entry_number = generate_journal_entry_number('JE')
     
     journal_entry = JournalEntry(
         entry_number=entry_number,

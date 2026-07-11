@@ -27,6 +27,9 @@ backend/instance/
 # Test coverage artifacts (regenerated locally by pytest/coverage)
 backend/.coverage
 backend/htmlcov/
+
+# Script output reports (generated at runtime, not source code)
+backend/reports/
 frontend/backend/
 backend/*.pid
 backend/*.log
