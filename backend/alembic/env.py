@@ -19,9 +19,15 @@ if config.config_file_name is not None:
 # Add project root to Python path
 sys.path.insert(0, os.path.realpath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-# Import the Flask app and its config to use the same database connection
-from backend.app import app
-config.set_main_option('sqlalchemy.url', app.config['SQLALCHEMY_DATABASE_URI'])
+# Resolve DATABASE_URL from environment (avoids importing the full Flask app,
+# which pulls in all routes and can fail if any route has an import error).
+_db_url = os.environ.get('DATABASE_URL')
+if _db_url:
+    config.set_main_option('sqlalchemy.url', _db_url)
+else:
+    # Fallback: import Flask app only when no env var is set (local SQLite dev)
+    from backend.app import app
+    config.set_main_option('sqlalchemy.url', app.config['SQLALCHEMY_DATABASE_URI'])
 
 # add your model's MetaData object here
 # for 'autogenerate' support

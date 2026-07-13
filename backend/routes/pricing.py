@@ -16,10 +16,9 @@ from sqlalchemy.orm import joinedload
 from gold_costing_service import GoldCostingService, ScrapCostingService
 from gold_price import fetch_gold_price, save_gold_price
 from models import GoldPrice, InventoryCostingConfig, Invoice, db
-from pricing.gold_price_service import get_main_karat
+from utils import get_main_karat
 
 pricing_bp = Blueprint('pricing', __name__)
-
 
 # ---------------------------------------------------------------------------
 # Gold Price
@@ -107,12 +106,10 @@ def get_gold_price():
     return jsonify({'price_24k': 0, 'price_usd_per_oz': 0, 'currency': 'ر.س', 'date': None,
                     'error': 'لا يوجد سعر ذهب متاح'}), 404
 
-
 @pricing_bp.route('/public/gold_price', methods=['GET'])
 def get_gold_price_public():
     """Public endpoint for login screen — no auth required."""
     return get_gold_price()
-
 
 @pricing_bp.route('/gold_price/24h', methods=['GET'])
 def get_gold_price_24h():
@@ -132,7 +129,6 @@ def get_gold_price_24h():
         current_app.logger.error(f'Error fetching 24h gold price: {e}')
         return jsonify({'points': [], 'count': 0, 'error': str(e)}), 500
 
-
 @pricing_bp.route('/gold_price/update', methods=['POST'])
 def update_gold_price():
     try:
@@ -147,14 +143,12 @@ def update_gold_price():
         traceback.print_exc()
         return jsonify({'success': False, 'error': str(e), 'trace': traceback.format_exc()}), 500
 
-
 # ---------------------------------------------------------------------------
 # Gold Costing — Moving Average
 # ---------------------------------------------------------------------------
 
 def _costing_snapshot_payload() -> dict:
     return {'snapshot': GoldCostingService.snapshot().to_dict(), 'config': GoldCostingService.config_dict()}
-
 
 def _costing_zero_config() -> dict:
     config = InventoryCostingConfig.query.first()
@@ -173,7 +167,6 @@ def _costing_zero_config() -> dict:
     config.last_purchase_weight = None
     db.session.commit()
     return config.to_dict()
-
 
 def _rebuild_costing_from_invoices(limit: int | None = None) -> dict:
     """Rebuild moving average by replaying invoices chronologically."""
@@ -236,11 +229,9 @@ def _rebuild_costing_from_invoices(limit: int | None = None) -> dict:
     db.session.commit()
     return {'processed_invoices': processed, **_costing_snapshot_payload()}
 
-
 @pricing_bp.route('/gold-costing', methods=['GET'])
 def get_gold_costing():
     return jsonify(_costing_snapshot_payload())
-
 
 @pricing_bp.route('/gold-costing', methods=['PUT'])
 def update_gold_costing():
@@ -248,18 +239,15 @@ def update_gold_costing():
     config = GoldCostingService.update_config(costing_method=data.get('costing_method'))
     return jsonify({'snapshot': GoldCostingService.snapshot().to_dict(), 'config': config})
 
-
 @pricing_bp.route('/gold-costing/cogs', methods=['POST'])
 def calculate_gold_costing_cogs():
     data = request.get_json(silent=True) or {}
     return jsonify(GoldCostingService.calculate_cogs(float(data.get('weight_grams') or 0.0)))
 
-
 @pricing_bp.route('/gold-costing/recompute', methods=['POST'])
 def recompute_gold_costing():
     result = _rebuild_costing_from_invoices(limit=request.args.get('limit', type=int))
     return jsonify({'status': 'success', 'result': result})
-
 
 @pricing_bp.route('/gold-costing/reset', methods=['POST'])
 def reset_gold_costing():
@@ -277,7 +265,6 @@ def reset_gold_costing():
         return jsonify({'status': 'success', 'result': {'processed_invoices': 0,
                         'snapshot': GoldCostingService.snapshot().to_dict(), 'config': config}})
     return jsonify({'status': 'error', 'message': 'وضع غير معروف. استخدم mode=zero أو mode=rebuild'}), 400
-
 
 # ---------------------------------------------------------------------------
 # Scrap / Settlement Costing
@@ -298,7 +285,6 @@ def _scrap_costing_snapshot_payload() -> dict:
         'last_updated': config.last_updated.isoformat() if config.last_updated else None,
         'snapshot': snapshot.to_dict(),
     }
-
 
 def _rebuild_scrap_costing_from_invoices(limit: int | None = None) -> dict:
     ScrapCostingService.reset(auto_commit=True)
@@ -345,17 +331,14 @@ def _rebuild_scrap_costing_from_invoices(limit: int | None = None) -> dict:
     db.session.commit()
     return {'processed_invoices': processed, **_scrap_costing_snapshot_payload()}
 
-
 @pricing_bp.route('/gold-costing/scrap', methods=['GET'])
 def get_scrap_costing():
     return jsonify(_scrap_costing_snapshot_payload())
-
 
 @pricing_bp.route('/gold-costing/scrap/recompute', methods=['POST'])
 def recompute_scrap_costing():
     result = _rebuild_scrap_costing_from_invoices(limit=request.args.get('limit', type=int))
     return jsonify({'status': 'success', 'result': result})
-
 
 @pricing_bp.route('/gold-costing/scrap/reset', methods=['POST'])
 def reset_scrap_costing():

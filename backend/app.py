@@ -50,6 +50,20 @@ try:
 	from routes import api, ensure_weight_closing_support_accounts
 	from routes import public_api
 	from routes.pricing import pricing_bp
+	from routes.customers import customers_bp
+	from routes.suppliers import suppliers_bp
+	from routes.accounts import accounts_bp
+	from routes.invoices import invoices_bp
+	from routes.employees import employees_bp
+	from routes.reports import reports_bp
+	from routes.catalog import catalog_bp
+	from routes.safe_boxes import safe_boxes_bp
+	from routes.journals import journals_bp
+	from routes.vouchers import vouchers_bp
+	from routes.clearing import clearing_bp
+	from routes.office_reservations import office_reservations_bp
+	from routes.admin import admin_bp
+	from routes.system import system_bp
 except ImportError as exc:
 	import traceback as _tb
 	print(
@@ -362,7 +376,21 @@ app.register_blueprint(offices_bp)  # 🆕 تسجيل offices routes (has its ow
 app.register_blueprint(branches_bp)  # 🆕 تسجيل branches routes (has its own prefix /api/branches)
 app.register_blueprint(public_api, url_prefix='/api')  # 🆕 Public (unauthenticated) API
 app.register_blueprint(inventory_bp)               # Inventory Engine (/api/inventory/*)
-app.register_blueprint(pricing_bp, url_prefix='/api')  # Pricing domain (gold price + costing)
+app.register_blueprint(pricing_bp, url_prefix='/api')    # Pricing domain (gold price + costing)
+app.register_blueprint(customers_bp, url_prefix='/api')  # Customers domain
+app.register_blueprint(suppliers_bp, url_prefix='/api')  # Suppliers domain
+app.register_blueprint(accounts_bp, url_prefix='/api')   # Accounts domain
+app.register_blueprint(invoices_bp, url_prefix='/api')   # Invoices domain
+app.register_blueprint(employees_bp, url_prefix='/api')  # Employees domain
+app.register_blueprint(reports_bp, url_prefix='/api')    # Reports domain
+app.register_blueprint(catalog_bp, url_prefix='/api')    # Catalog domain (items, categories)
+app.register_blueprint(safe_boxes_bp, url_prefix='/api') # Safe-boxes domain
+app.register_blueprint(journals_bp, url_prefix='/api')  # Journal-entries domain
+app.register_blueprint(vouchers_bp, url_prefix='/api')  # Vouchers domain
+app.register_blueprint(clearing_bp, url_prefix='/api')  # Clearing & weight-closing domain
+app.register_blueprint(office_reservations_bp, url_prefix='/api')  # Office reservations domain
+app.register_blueprint(admin_bp, url_prefix='/api')     # Admin & temp-pdf domain
+app.register_blueprint(system_bp, url_prefix='/api')    # System domain (debug, settings, reset, backup)
 app.register_blueprint(api, url_prefix='/api')  # ✅ API الرئيسي (أخيراً)
 # recurring_journal_routes تستخدم نفس api blueprint، لذا لا حاجة لتسجيلها
 
