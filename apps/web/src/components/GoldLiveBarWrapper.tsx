@@ -1,24 +1,26 @@
 'use client'
 
-import { useState, useEffect } from 'react'
 import { GoldLiveBar } from './GoldLiveBar'
-import type { GoldLiveBarRates } from './GoldLiveBar'
+import { useGoldPrice } from '@/lib/gold-price-context'
+import { GoldPriceStatus } from '@/lib/domain-states'
+import { COPY } from '@/lib/contract-copy'
 
-export interface GoldLiveBarWrapperProps {
-  rates: GoldLiveBarRates | null
-  /** Age in seconds at SSR time — client timer increments from here */
-  initialAge: number
-  halted?: boolean
-}
+/** Reads from GoldPriceContext (single source). Renders bar + HALTED banner when active. */
+export function GoldLiveBarWrapper() {
+  const { rates, age, status } = useGoldPrice()
+  const halted = status === GoldPriceStatus.HALTED
 
-/** Client-side tick wrapper. Age starts at initialAge and increments every second. */
-export function GoldLiveBarWrapper({ rates, initialAge, halted = false }: GoldLiveBarWrapperProps) {
-  const [age, setAge] = useState(initialAge)
-
-  useEffect(() => {
-    const id = window.setInterval(() => setAge(a => a + 1), 1_000)
-    return () => window.clearInterval(id)
-  }, [])
-
-  return <GoldLiveBar age={age} halted={halted} rates={rates} />
+  return (
+    <>
+      <GoldLiveBar age={age} halted={halted} rates={rates} />
+      {halted && (
+        <div
+          role="alert"
+          className="fixed top-10 inset-x-0 h-10 z-40 bg-warning/[0.08] border-b border-warning/20 flex items-center justify-center px-4"
+        >
+          <span className="text-warning text-xs text-center">{COPY.banners.halted}</span>
+        </div>
+      )}
+    </>
+  )
 }

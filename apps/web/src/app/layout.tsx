@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { IBM_Plex_Sans_Arabic } from 'next/font/google'
 import { BRAND_NAME } from '@/lib/brand'
+import { MockProvider } from '@/mocks/MockProvider'
 import './globals.css'
 
 const ibmPlexArabic = IBM_Plex_Sans_Arabic({
@@ -15,15 +16,11 @@ export const metadata: Metadata = {
   description: 'متجر المجوهرات الذهبية',
 }
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ar" dir="rtl" className={ibmPlexArabic.variable}>
       <body className="bg-ivory font-sans antialiased min-h-screen">
-        {children}
+        <MockProvider>{children}</MockProvider>
       </body>
     </html>
   )

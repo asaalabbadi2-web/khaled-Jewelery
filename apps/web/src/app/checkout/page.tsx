@@ -1,25 +1,16 @@
+import { GoldPriceProvider } from '@/lib/gold-price-context'
 import { GoldLiveBarWrapper } from '@/components/GoldLiveBarWrapper'
 import { ReservationStrip } from '@/components/checkout/ReservationStrip'
 import { PricingCard } from '@/components/pricing'
 import { RESERVATION_MS } from '@/lib/server-clock'
-import { goldApi } from '@/lib/api'
 
 // Checkout lives outside (site) layout — has its own minimal chrome.
-export default async function CheckoutPage() {
-  let rates = null
-  let initialAge = 0
-
-  try {
-    const data = await goldApi.getRates()
-    rates = { karat24: data.karat24, karat21: data.karat21 }
-    initialAge = Math.max(0, Math.floor((Date.now() - new Date(data.updatedAt).getTime()) / 1_000))
-  } catch { /* graceful degradation */ }
-
+export default function CheckoutPage() {
   const mockMs = 7 * 60_000 + 30_000
 
   return (
-    <>
-      <GoldLiveBarWrapper rates={rates} initialAge={initialAge} />
+    <GoldPriceProvider initialRates={null} initialAge={0}>
+      <GoldLiveBarWrapper />
       <ReservationStrip ms={mockMs} reservationMs={RESERVATION_MS} />
 
       {/* pt-48: GoldLiveBar (h-10) + ReservationStrip (~h-12) + SiteHeader (h-16) */}
@@ -30,6 +21,6 @@ export default async function CheckoutPage() {
           ms={mockMs}
         />
       </main>
-    </>
+    </GoldPriceProvider>
   )
 }
