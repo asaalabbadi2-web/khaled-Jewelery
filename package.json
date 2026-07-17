@@ -1,0 +1,15 @@
+{
+  "name": "yasargold-workspace",
+  "private": true,
+  "packageManager": "pnpm@9.0.0",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "test": "pnpm --filter web test",
+    "storybook": "pnpm --filter web storybook",
+    "brand-guard": "node apps/web/scripts/brand-guard.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
