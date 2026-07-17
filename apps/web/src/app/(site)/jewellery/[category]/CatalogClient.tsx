@@ -4,20 +4,10 @@ import { useState, useMemo, useCallback } from 'react'
 import { X, SlidersHorizontal } from 'lucide-react'
 import { ProductCard } from '@/components/product'
 import { COPY } from '@/lib/contract-copy'
-import type { ItemAvailability } from '@/lib/domain-states'
-
-export interface CatalogItem {
-  id:           string
-  name:         string
-  karat:        21 | 24 | 18
-  weight:       number
-  price:        number
-  availability: ItemAvailability
-  img:          string
-}
+import type { MockCatalogItem } from '@/mocks/catalog-data'
 
 interface Props {
-  items:       CatalogItem[]
+  items:       MockCatalogItem[]
   categoryName:string
 }
 
@@ -53,7 +43,7 @@ const PRICE_OPTIONS: { key: PriceRng; label: string }[] = [
 
 const PAGE_SIZE = 6
 
-function matchesWeight(item: CatalogItem, sel: Weight[]): boolean {
+function matchesWeight(item: MockCatalogItem, sel: Weight[]): boolean {
   if (sel.length === 0) return true
   return sel.some(w =>
     w === 'lt5'    ? item.weight < 5  :
@@ -62,7 +52,7 @@ function matchesWeight(item: CatalogItem, sel: Weight[]): boolean {
   )
 }
 
-function matchesPrice(item: CatalogItem, sel: PriceRng[]): boolean {
+function matchesPrice(item: MockCatalogItem, sel: PriceRng[]): boolean {
   if (sel.length === 0) return true
   return sel.some(p =>
     p === 'lt1k'  ? item.price < 1_000 :
@@ -71,7 +61,7 @@ function matchesPrice(item: CatalogItem, sel: PriceRng[]): boolean {
   )
 }
 
-function applySorting(items: CatalogItem[], sort: SortKey): CatalogItem[] {
+function applySorting(items: MockCatalogItem[], sort: SortKey): MockCatalogItem[] {
   const copy = [...items]
   if (sort === 'priceAsc')  return copy.sort((a, b) => a.price - b.price)
   if (sort === 'priceDesc') return copy.sort((a, b) => b.price - a.price)
