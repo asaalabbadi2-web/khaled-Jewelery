@@ -162,6 +162,7 @@ export const COPY = {
     pageTitle:        'تتبع طلبك',
     orderNumberLabel: 'رقم الطلب',
     sendOtpCta:       'إرسال رمز التحقق',
+    otpDigitLabel:    (n: number) => `الرقم ${n} من رمز التحقق`,
     otpHint:          'سنرسل رمزًا إلى رقم الجوال المستخدم في الطلب',
     otpVerify:        'تحقق',
     otpResend:        'إعادة الإرسال',
