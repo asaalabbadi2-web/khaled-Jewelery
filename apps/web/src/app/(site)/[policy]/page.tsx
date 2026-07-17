@@ -24,8 +24,9 @@ const STATIC_PAGES: Record<string, { title: string; body: string }> = {
   },
 }
 
-export default function StaticPage({ params }: { params: { policy: string } }) {
-  const page = STATIC_PAGES[params.policy]
+export default async function StaticPage({ params }: { params: Promise<{ policy: string }> }) {
+  const { policy } = await params
+  const page = STATIC_PAGES[policy]
   if (!page) notFound()
 
   return (

@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "typeRoots": [
+      "../node_modules/.pnpm/playwright@1.61.1/node_modules/playwright/types",
+      "../node_modules/@types"
+    ]
+  },
+  "include": ["./**/*.ts"],
+  "exclude": []
+}

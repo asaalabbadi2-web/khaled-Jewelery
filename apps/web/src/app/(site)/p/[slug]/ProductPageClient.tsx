@@ -8,8 +8,10 @@
  *   - STALE  → button disabled, stale copy shown
  *   - HALTED → button disabled, halted copy shown
  * No state in which the button looks active and does nothing (P0.1).
+ * RESERVED «إتمام الدفع» navigates to /checkout with reservation params (P0.5).
  */
 import { useState, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { useGoldPrice } from '@/lib/gold-price-context'
 import { GoldPriceStatus } from '@/lib/domain-states'
 import { reservationApi } from '@/lib/api'
@@ -24,10 +26,11 @@ interface Props {
 
 type ReservationSlot =
   | { phase: 'idle' }
-  | { phase: 'reserved'; lockedPrice: number; expiresAt: string }
+  | { phase: 'reserved'; reservationId: string; lockedPrice: number; expiresAt: string }
   | { phase: 'expired' }
 
 export function ProductPageClient({ itemId, price, breakdownItems }: Props) {
+  const router = useRouter()
   const { age, status } = useGoldPrice()
   const [slot, setSlot] = useState<ReservationSlot>({ phase: 'idle' })
 
@@ -42,7 +45,12 @@ export function ProductPageClient({ itemId, price, breakdownItems }: Props) {
     if (status !== GoldPriceStatus.FRESH) return
     try {
       const res = await reservationApi.create(itemId)
-      setSlot({ phase: 'reserved', lockedPrice: res.lockedPrice, expiresAt: res.expiresAt })
+      setSlot({
+        phase: 'reserved',
+        reservationId: res.reservationId,
+        lockedPrice: res.lockedPrice,
+        expiresAt: res.expiresAt,
+      })
     } catch {
       // Race conflict or item unavailable — stay on DEFAULT so user sees fresh state
     }
@@ -51,6 +59,16 @@ export function ProductPageClient({ itemId, price, breakdownItems }: Props) {
   const handleCancel = useCallback(() => {
     setSlot({ phase: 'idle' })
   }, [])
+
+  const handleCheckout = useCallback(() => {
+    if (slot.phase !== 'reserved') return
+    const params = new URLSearchParams({
+      rid:       slot.reservationId,
+      price:     String(slot.lockedPrice),
+      expiresAt: slot.expiresAt,
+    })
+    router.push(`/checkout?${params.toString()}`)
+  }, [slot, router])
 
   const displayPrice = slot.phase === 'reserved' ? slot.lockedPrice : price
   const ms = slot.phase === 'reserved'
@@ -67,6 +85,7 @@ export function ProductPageClient({ itemId, price, breakdownItems }: Props) {
       breakdownItems={breakdownItems}
       onReserve={handleReserve}
       onCancel={handleCancel}
+      onCheckout={handleCheckout}
       onReserveNew={() => setSlot({ phase: 'idle' })}
     />
   )
