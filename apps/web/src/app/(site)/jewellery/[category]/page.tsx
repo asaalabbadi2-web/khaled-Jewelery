@@ -1,8 +1,8 @@
-import { ProductCard } from '@/components/product'
+import { CatalogClient } from './CatalogClient'
 import { ItemAvailability } from '@/lib/domain-states'
+import { COPY } from '@/lib/contract-copy'
 
-// Mock catalog data — MSW handler replaces this in dev; real API in prod.
-const CATALOG = [
+const CATALOG_DATA = [
   { id: 'R-21-0342', name: 'خاتم سوليتير',  karat: 21 as const, weight: 8.45,  price: 1_215, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=600&h=600&fit=crop&auto=format' },
   { id: 'R-21-0418', name: 'خاتم تريلوجي',  karat: 21 as const, weight: 9.30,  price: 2_340, availability: ItemAvailability.RESERVED,  img: 'https://images.unsplash.com/photo-1589128777073-263566ae5e4d?w=600&h=600&fit=crop&auto=format' },
   { id: 'R-18-0314', name: 'خاتم هالو',      karat: 18 as const, weight: 5.60,  price: 1_480, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1598560917807-1bae44bd2be8?w=600&h=600&fit=crop&auto=format' },
@@ -13,18 +13,24 @@ const CATALOG = [
   { id: 'N-21-0202', name: 'عقد سوليتير',    karat: 21 as const, weight: 4.30,  price: 990,   availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=600&h=600&fit=crop&auto=format' },
 ]
 
-export default function CatalogPage() {
+const CATEGORY_NAMES: Record<string, string> = {
+  rings:     COPY.home.colRings,
+  bracelets: COPY.home.colBracelets,
+  necklaces: COPY.home.colNecklaces,
+  sets:      COPY.home.colSets,
+}
+
+export default async function CatalogPage({
+  params,
+}: {
+  params: Promise<{ category: string }>
+}) {
+  const { category } = await params
+  const name = CATEGORY_NAMES[category] ?? COPY.nav.jewellery
+
   return (
-    <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16">
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-5">
-        {CATALOG.map((product) => (
-          <ProductCard
-            key={product.id}
-            product={product}
-            onView={() => {}}
-          />
-        ))}
-      </div>
+    <main>
+      <CatalogClient items={CATALOG_DATA} categoryName={name} />
     </main>
   )
 }

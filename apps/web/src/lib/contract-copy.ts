@@ -215,6 +215,18 @@ export const COPY = {
     weight5to10:        '5–10غ',
     weightGt10:         'أكثر من 10غ',
     paginationAria:     'صفحات النتائج',
+    paginationPrev:     'السابق',
+    paginationNext:     'التالي',
+    paginationOf:       (curr: number, total: number) => `${curr} من ${total}`,
+    karat24:            '24K',
+    karat21:            '21K',
+    karat18:            '18K',
+    priceRangeLt1000:   'أقل من 1,000',
+    priceRange1to2k:    '1,000 – 2,000',
+    priceRangeGt2k:     'أكثر من 2,000',
+    resultsCount:       (n: number) => `${n} قطعة`,
+    sortLabel:          'الترتيب',
+    filterCta:          (n: number) => `الفلاتر${n > 0 ? ` (${n})` : ''}`,
   },
 
   // ─── HomePage ────────────────────────────────────────────────
