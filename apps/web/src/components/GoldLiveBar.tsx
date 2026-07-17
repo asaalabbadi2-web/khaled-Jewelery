@@ -1,54 +1,80 @@
 'use client'
 
-import { GoldPriceStatus } from '@/lib/domain-states'
-import { goldLiveBar } from '@/lib/contract-copy'
-import { Badge, Inline, Text } from '@/components/ui'
+import { goldStatusFromAge, GoldPriceStatus } from '@/lib/domain-states'
+import { COPY } from '@/lib/contract-copy'
+import { pr } from '@/lib/format'
+
+export interface GoldLiveBarRates {
+  karat24: number
+  karat21: number
+}
 
 export interface GoldLiveBarProps {
-  /** null = rates fetch failed → HALTED */
-  ageSeconds: number | null
+  /** Seconds elapsed since the last successful rate update. */
+  age: number
+  /** Provider explicitly signalled halt (no fetch possible). */
+  halted?: boolean
+  /** Live rates from API; omit or pass null to hide price columns. */
+  rates?: GoldLiveBarRates | null
 }
 
-function deriveStatus(ageSeconds: number | null): GoldPriceStatus {
-  if (ageSeconds === null) return GoldPriceStatus.HALTED
-  if (ageSeconds > 120) return GoldPriceStatus.STALE
-  return GoldPriceStatus.FRESH
-}
-
-function statusBadge(status: GoldPriceStatus, ageSeconds: number | null) {
-  switch (status) {
-    case GoldPriceStatus.FRESH:
-      return (
-        <Badge variant="success">
-          {goldLiveBar.fresh(ageSeconds!)}
-        </Badge>
-      )
-    case GoldPriceStatus.STALE:
-      return <Badge variant="warning">{goldLiveBar.stale}</Badge>
-    case GoldPriceStatus.HALTED:
-      return <Badge variant="muted">{goldLiveBar.halted}</Badge>
-  }
-}
-
-export function GoldLiveBar({ ageSeconds }: GoldLiveBarProps) {
-  const status = deriveStatus(ageSeconds)
+// R1: status derived exclusively from domain function — not recomputed here.
+export function GoldLiveBar({ age, halted = false, rates = null }: GoldLiveBarProps) {
+  const status = goldStatusFromAge(age, halted)
+  const stale  = status !== GoldPriceStatus.FRESH
 
   return (
     <div
-      role="status"
-      aria-live="polite"
-      aria-label="حالة تحديث أسعار الذهب"
-      className="h-10 w-full bg-surface border-b border-charcoal/10 flex items-center px-4"
+      className="fixed top-0 inset-x-0 h-10 z-50 bg-charcoal flex items-center justify-center gap-5 px-4 text-xs"
+      role="banner"
+      aria-label={COPY.goldBar.ariaLabel}
     >
-      <Inline gap={2} align="center">
-        <span className="w-2 h-2 rounded-full bg-gold shrink-0" aria-hidden="true" />
-        {statusBadge(status, ageSeconds)}
-        {status === GoldPriceStatus.STALE && (
-          <Text variant="caption" as="span" className="animate-pulse">
-            ●
-          </Text>
-        )}
-      </Inline>
+      {/* 24K price — always shown (uses mock until rates arrive) */}
+      {rates && (
+        <>
+          <span className="flex items-center gap-1.5">
+            <span className="text-muted">24K</span>
+            <span dir="ltr" className="tabular-nums text-ivory/90 font-medium">
+              {pr(rates.karat24)}
+            </span>
+            <span className="text-muted">{COPY.goldBar.perGram}</span>
+          </span>
+
+          <span className="text-gold/30 hidden sm:inline" aria-hidden="true">·</span>
+
+          {/* 21K — hidden on small screens */}
+          <span className="hidden sm:flex items-center gap-1.5">
+            <span className="text-muted">21K</span>
+            <span dir="ltr" className="tabular-nums text-ivory/90 font-medium">
+              {pr(rates.karat21)}
+            </span>
+            <span className="text-muted">{COPY.goldBar.perGram}</span>
+          </span>
+
+          <span className="text-gold/30 hidden md:inline" aria-hidden="true">·</span>
+        </>
+      )}
+
+      {/* Freshness indicator — hidden on small screens */}
+      {stale ? (
+        <span className="hidden md:flex items-center gap-1.5" aria-live="polite">
+          <span
+            className="w-1.5 h-1.5 rounded-full bg-warning animate-pulse inline-block shrink-0"
+            aria-hidden="true"
+          />
+          <span className="text-warning">{COPY.goldBar.updating}</span>
+        </span>
+      ) : (
+        <span className="hidden md:flex items-center gap-1.5">
+          <span
+            className="w-1.5 h-1.5 rounded-full bg-success animate-pulse inline-block shrink-0"
+            aria-hidden="true"
+          />
+          <span className="text-muted">{COPY.goldBar.lastUpdatedPrefix}</span>
+          <span dir="ltr" className="tabular-nums text-muted-2">{age}</span>
+          <span className="text-muted">{COPY.goldBar.lastUpdatedSuffix}</span>
+        </span>
+      )}
     </div>
   )
 }
