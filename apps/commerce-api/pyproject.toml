@@ -1,0 +1,48 @@
+[project]
+name = "yasargold-commerce-api"
+version = "0.1.0"
+description = "Commerce API — public FastAPI layer for the gold store"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "python-dotenv>=1.0",
+    "pyjwt>=2.8",
+    "redis>=5.0",
+    "yasargold-domain",
+    "yasargold-platform",
+    "prometheus-client>=0.21",
+    "httpx>=0.28",
+]
+
+[tool.uv.sources]
+yasargold-domain = { workspace = true }
+yasargold-platform = { workspace = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/yasargold_commerce"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# xfail_strict: any open-surface witness that unexpectedly PASSES (XPASS)
+# means the gap was closed without updating the documentation.
+# CI treats XPASS as a failure — the fix PR must also update this file
+# and docs/security/security-overview.md §8.
+xfail_strict = true
+
+[tool.importlinter]
+root_packages = ["yasargold_commerce", "yasargold_domain", "yasargold_platform"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "domain must not import framework code"
+type = "forbidden"
+source_modules = ["yasargold_domain", "yasargold_platform"]
+forbidden_modules = ["flask", "fastapi", "redis", "uvicorn", "starlette"]

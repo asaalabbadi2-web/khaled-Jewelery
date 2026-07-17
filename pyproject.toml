@@ -1,0 +1,13 @@
+[tool.uv.workspace]
+members = [
+    "packages/platform",
+    "packages/domain",
+    "apps/commerce-api",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "import-linter>=2.13",
+    "pytest>=9.1.1",
+]
