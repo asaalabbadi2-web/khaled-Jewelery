@@ -241,6 +241,18 @@ export const COPY = {
     whyCert:        'شهادة أصالة مع كل قطعة',
     whyShipping:    'شحن مؤمَّن حتى باب المنزل',
     heroImgAlt:     'خاتم سوليتير ذهب أصفر عيار 21 — القطعة الرئيسية',
+    colRings:       'الخواتم',
+    colBracelets:   'الأساور',
+    colNecklaces:   'العقود',
+    colSets:        'الطقم',
+    colRingsSub:    'عيار 21K · 18K',
+    colBraceletsSub:'عيار 21K',
+    colNecklacesSub:'عيار 21K',
+    colSetsSub:     'طقم ذهبي متناسق',
+    whyLivePriceSub: 'مشتق من سعر الصرف اللحظي',
+    whyUniqueSub:    'لا إنتاج تسلسلي — كل قطعة فردية',
+    whyCertSub:      'ضمان الأصالة والعيار',
+    whyShippingSub:  'تغطية تأمينية كاملة حتى باب منزلك',
   },
 
   // ─── ProductCard ────────────────────────────────────────────
