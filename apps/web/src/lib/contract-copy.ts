@@ -255,6 +255,21 @@ export const COPY = {
     whyShippingSub:  'تغطية تأمينية كاملة حتى باب منزلك',
   },
 
+  // ─── ProductPage ────────────────────────────────────────────
+  product: {
+    pieceNumberLabel: 'رقم القطعة',
+    specKarat:        'العيار',
+    specWeight:       'الوزن',
+    specMaterial:     'المعدن',
+    specStone:        'الأحجار',
+    specValue:        { karat: (k: number) => `${k}K ذهب أصفر`, weight: (w: number) => `${w.toFixed(2)}غ`, material: 'ذهب أصفر', stone: 'زركون' },
+    trustCert:        'شهادة أصالة',
+    trustUnique:      'قطعة فريدة لا تتكرر',
+    trustShipping:    'شحن مؤمَّن',
+    similarTitle:     'قطع مشابهة',
+    thumbnailAlt:     (n: number) => `زاوية ${n}`,
+  },
+
   // ─── ProductCard ────────────────────────────────────────────
   productCard: {
     viewOverlay:    'عرض',
