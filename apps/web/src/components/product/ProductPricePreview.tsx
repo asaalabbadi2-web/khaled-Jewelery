@@ -1,4 +1,4 @@
-import { pr } from '@/lib/format'
+import { prCard } from '@/lib/format'
 
 export interface ProductPricePreviewProps {
   price: number
@@ -10,7 +10,7 @@ export function ProductPricePreview({ price, stalePriceLabel }: ProductPricePrev
   return (
     <div className="flex items-baseline justify-between mt-1.5">
       <span className="text-charcoal text-sm font-semibold">
-        <span dir="ltr" className="tabular-nums">{pr(price)}</span>
+        <span dir="ltr" className="tabular-nums">{prCard(price)}</span>
         {' '}
         <span className="text-muted font-normal text-xs">ر.س</span>
       </span>
