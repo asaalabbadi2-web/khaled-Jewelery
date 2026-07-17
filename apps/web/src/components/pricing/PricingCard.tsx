@@ -33,6 +33,8 @@ export interface PricingCardProps {
   onReserveNew?(): void
   onCheckout?(): void
   onBrowse?(): void
+  /** Live gold price status from context — feeds LiveStatus in DEFAULT branch (FC-6) */
+  goldStatus?: GoldPriceStatus
 }
 
 type CardBorder = 'active' | 'expired' | 'stale' | 'default'
@@ -57,6 +59,7 @@ export function PricingCard({
   onReserveNew,
   onCheckout,
   onBrowse,
+  goldStatus = GoldPriceStatus.FRESH,
 }: PricingCardProps) {
   const border: CardBorder =
     state === 'RESERVED' || state === 'OFFLINE' ? 'active'  :
@@ -101,7 +104,7 @@ export function PricingCard({
         {badge}
         <PriceHeader price={price} />
         {breakdownItems.length > 0 && <GoldBreakdown items={breakdownItems} />}
-        <LiveStatus status={GoldPriceStatus.FRESH} ageSeconds={ageSeconds} />
+        <LiveStatus status={goldStatus} ageSeconds={ageSeconds} />
         <PriceActions variant="reserve" onReserve={onReserve} />
       </div>
     )

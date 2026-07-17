@@ -34,3 +34,17 @@ export interface GoldRates {
 export const goldApi = {
   getRates: () => apiFetch<GoldRates>('/catalog/gold-price'),
 }
+
+export interface ReservationResponse {
+  reservationId: string
+  lockedPrice:   number
+  expiresAt:     string
+}
+
+export const reservationApi = {
+  create: (itemId: string) =>
+    apiFetch<ReservationResponse>('/reservations', {
+      method: 'POST',
+      body:   JSON.stringify({ itemId }),
+    }),
+}

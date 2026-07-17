@@ -1,20 +1,19 @@
-import { PricingCard } from '@/components/pricing'
-import { Skeleton } from '@/components/ui'
+import { ProductPageClient } from './ProductPageClient'
 
-// Mock product data — wired to MSW in dev; real Commerce API in prod.
 const MOCK_PRODUCT = {
-  name: 'خاتم سوليتير',
-  karat: 21,
+  id:     'R-21-0342',
+  name:   'خاتم سوليتير',
+  karat:  21,
   weight: 8.45,
-  price: 1_214.69,
-  img: 'https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=800&h=1000&fit=crop&auto=format',
+  price:  1_214.69,
+  img:    'https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=800&h=1000&fit=crop&auto=format',
 }
 
 const BREAKDOWN = [
   { label: 'مكوّن الذهب (8.450غ × 289.40)', value: '2,445.43' },
-  { label: 'المصنعية',                        value: '350.00' },
-  { label: 'الأحجار',                         value: '220.00' },
-  { label: 'الضريبة (15%)',                   value: '452.31' },
+  { label: 'المصنعية',                        value: '350.00'   },
+  { label: 'الأحجار',                         value: '220.00'   },
+  { label: 'الضريبة (15%)',                   value: '452.31'   },
 ]
 
 export default function ProductPage() {
@@ -34,7 +33,7 @@ export default function ProductPage() {
           />
         </div>
 
-        {/* Right column: name + specs + pricing card */}
+        {/* Right column: name + specs + interactive pricing card */}
         <div className="flex flex-col gap-4">
           <h1 className="text-2xl font-semibold text-charcoal tracking-[-0.02em]">
             {MOCK_PRODUCT.name}
@@ -46,10 +45,9 @@ export default function ProductPage() {
             {'غ'}
           </p>
 
-          <PricingCard
-            state="DEFAULT"
+          <ProductPageClient
+            itemId={MOCK_PRODUCT.id}
             price={MOCK_PRODUCT.price}
-            ageSeconds={18}
             breakdownItems={BREAKDOWN}
           />
         </div>
