@@ -1144,6 +1144,10 @@ class Invoice(db.Model):
     # 🆕 Link a customer scrap-purchase invoice back to the originating sale invoice (barter flow)
     barter_sale_invoice_id = db.Column(db.Integer, db.ForeignKey('invoice.id'), nullable=True)
 
+    # Commerce API link — set for online orders synced via ERPSyncWorker.
+    # Unique per order; NULL for POS invoices.
+    commerce_order_id = db.Column(db.String(100), nullable=True, unique=True)
+
     items = db.relationship('InvoiceItem', backref='invoice', lazy=True)
     
     # 🆕 علاقة مع دفعات متعددة (One-to-Many)

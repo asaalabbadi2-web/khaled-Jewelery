@@ -1177,3 +1177,39 @@ def ensure_account_memo_pair_constraints(engine: Engine) -> None:
         "Account memo pair constraints:\n  %s\n  %s\nProtection level: %s%s",
         check_line, unique_line, protection_level, suffix,
     )
+
+
+def ensure_invoice_online_sale_columns(engine: Engine) -> None:
+    """Add commerce_order_id to invoice table for ERP Sync (Sprint 8)."""
+    columns_added: list[str] = []
+    try:
+        columns_added.extend(
+            _ensure_columns(
+                engine,
+                "invoice",
+                [("commerce_order_id", "VARCHAR(100)", "NULL")],
+            )
+        )
+    except SQLAlchemyError as exc:
+        LOGGER.error("ensure_invoice_online_sale_columns failed: %s", exc)
+        return
+
+    _log_added(columns_added)
+
+    # Add unique index on commerce_order_id (partial: only for non-NULL rows).
+    # Safe to call on every startup — CREATE UNIQUE INDEX IF NOT EXISTS is idempotent.
+    if not columns_added:
+        return
+    try:
+        with engine.connect() as conn:
+            dialect = _dialect_name(engine, conn)
+            if dialect in ('postgresql', 'postgres'):
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "idx_invoice_commerce_order_id "
+                    "ON invoice(commerce_order_id) "
+                    "WHERE commerce_order_id IS NOT NULL"
+                ))
+                conn.commit()
+    except Exception as exc:
+        LOGGER.warning("ensure_invoice_online_sale_columns index failed: %s", exc)

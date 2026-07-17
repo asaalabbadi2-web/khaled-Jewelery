@@ -106,6 +106,7 @@ from setup_routes import setup_bp  # 🆕 Setup wizard routes
 if _log_startup_imports:
 	print("DEBUG: Imported setup_bp blueprint")
 from inventory_routes import inventory_bp  # Inventory Engine API
+from internal_routes import internal_bp   # ERP Sync internal API (machine-to-machine only)
 if _log_startup_imports:
 	print("DEBUG: Imported inventory_bp blueprint")
 bonus_bp = None
@@ -150,6 +151,7 @@ from schema_guard import (
 	ensure_dashboard_performance_indexes,
 	ensure_account_memo_pair_constraints,
 	ensure_all_model_columns,
+	ensure_invoice_online_sale_columns,
 )
 
 import os
@@ -363,6 +365,7 @@ with app.app_context():
 	ensure_invoice_karat_diff_columns(db.engine)
 	ensure_dashboard_performance_indexes(db.engine)
 	ensure_account_memo_pair_constraints(db.engine)
+	ensure_invoice_online_sale_columns(db.engine)
 	# ensure_weight_closing_support_accounts()  # Moved to after create_tables()
 # ⚠️ ترتيب التسجيل مهم: auth_bp يجب أن يُسجل قبل api لأن auth_bp.login له أولوية
 app.register_blueprint(auth_bp, url_prefix='/api')  # 🆕 تسجيل auth & permissions routes (أولاً!)
@@ -391,6 +394,7 @@ app.register_blueprint(clearing_bp, url_prefix='/api')  # Clearing & weight-clos
 app.register_blueprint(office_reservations_bp, url_prefix='/api')  # Office reservations domain
 app.register_blueprint(admin_bp, url_prefix='/api')     # Admin & temp-pdf domain
 app.register_blueprint(system_bp, url_prefix='/api')    # System domain (debug, settings, reset, backup)
+app.register_blueprint(internal_bp)             # ERP Sync internal API (/api/internal/*)
 app.register_blueprint(api, url_prefix='/api')  # ✅ API الرئيسي (أخيراً)
 # recurring_journal_routes تستخدم نفس api blueprint، لذا لا حاجة لتسجيلها
 
