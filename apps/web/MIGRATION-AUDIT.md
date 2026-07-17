@@ -26,7 +26,7 @@
 | ReservationStatus | CANCELLED | PricingCard | `Default` | ✅ (maps to DEFAULT) |
 | PaymentStatus | PENDING | PricingCard | `PaymentVerifying` | ✅ (via PricingState) |
 | PaymentStatus | PAID | PricingCard | `Default` | ✅ (post-payment → DEFAULT) |
-| PaymentStatus | FAILED | — | — | ⚠️ page-level banner (deferred to CheckoutPage stories) |
+| PaymentStatus | FAILED | CheckoutPage | `PaymentFailed` | 🚫 **MERGE GATE** — blocks checkout integration session (see §5) |
 | PaymentStatus | REFUND_PENDING | PricingCard | `LatePayment` | ✅ (via PricingState) |
 | PaymentStatus | REFUNDED | PricingCard | `Refunded` | ✅ (via PricingState) |
 | OrderStatus | PAID | OrderTimeline | `Active` | ✅ (payment done, preparing starts) |
@@ -69,7 +69,7 @@
 ### STATE_STORY_REGISTRY summary
 
 **34 / 34 registered states have stories.**  
-One intentional deferral: `PaymentStatus.FAILED` → page-level error banner rendered by CheckoutPage; no standalone component to story yet.
+One open gate: `PaymentStatus.FAILED` → `CheckoutPage / PaymentFailed` story. Not a marginal case — card declines are a daily event; this screen is the difference between a customer who retries and one who leaves thinking their reservation is gone. Blocked on `CheckoutPage.stories.tsx`, which does not exist yet. **Must merge before the checkout integration session** (see §5 open gate).
 
 ### Red → Green evidence (coverage gate)
 
@@ -260,7 +260,7 @@ Every page-level composition below maps to the component stories that cover its 
 | `OTP_RESEND_COOLDOWN` | OtpInput `Default` (resend timer — same component) | — |
 | `OTP_SUBMITTING` | — | Playwright: money-path submit step |
 | `PAYMENT_PROCESSING` | PricingCard `PaymentVerifying` + ReservationStrip `Normal` | — |
-| `PAYMENT_FAILED` | PricingCard component renders; page-level banner deferred | CheckoutPage stories (v1.2) |
+| `PAYMENT_FAILED` | PricingCard component renders; **page-level banner = open gate** | 🚫 `CheckoutPage / PaymentFailed` story — merge blocker (see below) |
 | `RESERVATION_EXPIRED` | PricingCard `Expired` (ReservationStrip disappears) | Playwright: timer-expiry path |
 | `OFFLINE` | PricingCard `Offline` + ReservationStrip `Frozen` | — |
 | `RACE_CONFLICT` | PricingCard `RaceConflict` | — |
@@ -305,14 +305,25 @@ All 5 routes are the same `[policy]/page.tsx` template; the per-route difference
 | Category | Count | Coverage |
 |---|---|---|
 | Component-level states | 34 | Stories ✅ |
-| Checkout page compositions | 11 | Atoms storied; 1 deferred (PAYMENT_FAILED banner) |
+| Checkout page compositions | 11 | Atoms storied; 1 open gate (see below) |
 | Track page compositions | 4 | 2 atoms storied; 2 static/Playwright |
 | Home/Catalog compositions | 3 | Atoms storied ✅ |
 | Policy template states | 1 | Static copy, FC-5 compliant ✅ |
 | Transitions | ~5 | Playwright money-path suite |
 | **Real gaps (maps to nothing)** | **0** | ✅ |
+| **Open merge gates** | **1** | `checkout/PAYMENT_FAILED` — see below |
 
-The single acknowledged deferral — `PAYMENT_FAILED` banner on CheckoutPage — was already flagged in §1 of this audit. It requires a `CheckoutPage.stories.tsx` file that does not exist yet; it belongs to the v1.2 CheckoutPage milestone, not the S1–S7 migration closure.
+### Open gate — must close before checkout integration session
+
+> **Gate: `CheckoutPage / PaymentFailed` story**
+>
+> Card declines are not an edge case. In the Saudi market, decline rates are material — every store encounters them daily. This screen is the operational difference between a customer who retries with their reservation timer still running and one who concludes their reservation is lost and leaves.
+>
+> The checkout integration session (جلسة الوصل) has as its explicit goal: **failure states are the goal** — a real card decline on staging will need somewhere to land. Without `checkout/PAYMENT_FAILED` storied and rendered, a live decline produces a blank or broken screen, which is precisely the scenario the session is designed to surface.
+>
+> **Merge prerequisite:** `CheckoutPage.stories.tsx` must include a `PaymentFailed` export and pass the STATE_STORY_REGISTRY gate before the checkout integration session PR can merge. This gate is owned by the same session it guards — not by a future milestone with no fixed date.
+>
+> Status: 🚫 **OPEN** — `CheckoutPage.stories.tsx` does not exist yet.
 
 ---
 
