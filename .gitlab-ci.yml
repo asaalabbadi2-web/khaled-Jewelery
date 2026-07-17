@@ -1,6 +1,42 @@
 stages:
+  - test
   - build
   - deploy
+
+# ─────────────────────────────────────────────
+# Web (Next.js storefront) — 7 CI gates
+# Runs only when apps/web/** or packages/contracts/** change.
+# DO NOT modify Python/backend jobs above or below.
+# ─────────────────────────────────────────────
+web-test:
+  stage: test
+  image: node:22-alpine
+  before_script:
+    - corepack enable
+    - corepack prepare pnpm@latest --activate
+    - pnpm install --frozen-lockfile
+  script:
+    # Gate 1: TypeScript
+    - pnpm --filter web typecheck
+    # Gate 2: ESLint (covers no-hex-color + jsx-a11y)
+    - pnpm --filter web lint
+    # Gate 3: State coverage + server-clock unit tests (red→green demo for HALTED)
+    - pnpm --filter web test --run
+    # Gate 4: Brand guard
+    - node apps/web/scripts/brand-guard.mjs
+    # Gate 5: Import direction
+    - pnpm --filter web depcruise src
+    # Gate 6: Build (catches missing server components / import errors)
+    - pnpm --filter web build
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - apps/web/**/*
+        - packages/contracts/**/*
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - apps/web/**/*
+        - packages/contracts/**/*
 
 # ─────────────────────────────────────────────
 # Shared Docker build config

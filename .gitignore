@@ -5,6 +5,18 @@
 
 # Local backups / exports
 backups/
+*.zip
+
+# ===== Node / pnpm =====
+node_modules/
+*.tsbuildinfo
+
+# ===== Design reference (Figma output — never commit) =====
+User dashboard2/
+
+# ===== Business documents (keep out of repo) =====
+*.docx
+*.pdf
 
 # ===== Python / Flask backend =====
 __pycache__/
