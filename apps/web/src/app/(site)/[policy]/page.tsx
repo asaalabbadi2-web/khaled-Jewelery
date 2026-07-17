@@ -4,23 +4,23 @@ import { COPY } from '@/lib/contract-copy'
 const STATIC_PAGES: Record<string, { title: string; body: string }> = {
   about: {
     title: COPY.nav.about,
-    body: 'معلومات عن متجرنا ستظهر هنا.',
+    body: COPY.staticPages.about.body,
   },
   faq: {
     title: COPY.footer.links.faq,
-    body: 'الأسئلة الشائعة ستظهر هنا.',
+    body: COPY.staticPages.faq.body,
   },
   returns: {
     title: COPY.footer.links.returns,
-    body: 'سياسة الاسترجاع ستظهر هنا.',
+    body: COPY.staticPages.returns.body,
   },
   terms: {
     title: COPY.footer.links.terms,
-    body: 'الشروط والأحكام ستظهر هنا.',
+    body: COPY.staticPages.terms.body,
   },
   privacy: {
     title: COPY.footer.links.privacy,
-    body: 'سياسة الخصوصية ستظهر هنا.',
+    body: COPY.staticPages.privacy.body,
   },
 }
 

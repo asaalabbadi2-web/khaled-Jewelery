@@ -27,10 +27,16 @@ module.exports = {
     {
       name: 'components-no-direct-fetch',
       severity: 'error',
-      comment: 'Components must not call fetch() directly — route through src/lib/api/',
+      comment: 'Components must not import fetch polyfills — use src/lib/api/ instead. Global fetch enforced by ESLint no-restricted-globals.',
       from: { path: '^src/components/' },
-      to: { path: 'node_modules/.*' },
-      // Specifically no global fetch — enforced via ESLint no-restricted-globals in .eslintrc
+      to: { path: 'node_modules/(node-fetch|cross-fetch|isomorphic-fetch|whatwg-fetch)' },
+    },
+    {
+      name: 'components-no-lib-api',
+      severity: 'error',
+      comment: 'Components must not call lib/api/ directly — data flows in via props from Server Components',
+      from: { path: '^src/components/' },
+      to: { path: '^src/lib/api' },
     },
   ],
   options: {

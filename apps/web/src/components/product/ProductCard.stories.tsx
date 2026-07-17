@@ -6,6 +6,7 @@ import { ItemAvailability } from '@/lib/domain-states'
 // STATE_STORY_REGISTRY: ProductCard
 // AVAILABLE       → covered (live product, available)
 // RESERVED        → covered (reserved-by-other, opacity-70, amber badge)
+// SOLD            → covered (sold, fully greyed, red dot)
 // IMAGE_FALLBACK  → covered (no img → diamond ◇ fallback)
 
 const BASE_PRODUCT = {
@@ -45,6 +46,12 @@ export const Available: Story = {
 export const Reserved: Story = {
   args: {
     product: { ...BASE_PRODUCT, availability: ItemAvailability.RESERVED },
+  },
+}
+
+export const Sold: Story = {
+  args: {
+    product: { ...BASE_PRODUCT, availability: ItemAvailability.SOLD },
   },
 }
 

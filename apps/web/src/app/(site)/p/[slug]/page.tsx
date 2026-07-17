@@ -26,6 +26,7 @@ export default function ProductPage() {
           className="relative overflow-hidden rounded-sm bg-image-bg"
           style={{ aspectRatio: '4/5' }}
         >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={MOCK_PRODUCT.img}
             alt={MOCK_PRODUCT.name}

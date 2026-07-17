@@ -3,8 +3,6 @@
  * Every Arabic string in the UI lives here. Components and tests import from
  * this file ONLY — never inline Arabic strings in JSX.
  * Changing any string here is a contract-level change requiring review.
- *
- * TODO remaining: strings marked TODO below need review against final UX spec.
  */
 
 export const COPY = {
@@ -255,6 +253,17 @@ export const COPY = {
     ariaLabel:      (name: string, k: number, w: number, p: string) =>
       `${name}، ${k}K، ${w}غ، ${p} ريال`,
     browseCategory: (cat: string) => `تصفح فئة ${cat}`,
+  },
+
+  // ─── Static pages (CMS placeholder bodies) ──────────────────
+  // These are UI strings used until production CMS copy is delivered.
+  staticPages: {
+    about:   { title: 'عن الشركة',        body: 'مجوهرات خالد — نُقدّم قطعًا ذهبية فريدة بسعر مباشر من سوق الذهب.' },
+    faq:     { title: 'الأسئلة الشائعة',  body: 'أسئلة عامة وإجابات عن كيفية الشراء والحجز والتوصيل.' },
+    returns: { title: 'سياسة الاسترجاع', body: 'يحق للعميل إرجاع القطعة خلال 7 أيام من الاستلام بشرط عدم الاستخدام.' },
+    terms:   { title: 'الشروط والأحكام', body: 'باستخدام المنصة توافق على الشروط والأحكام المنظِّمة للبيع والشراء.' },
+    privacy: { title: 'سياسة الخصوصية', body: 'نحافظ على بيانات عملائنا ولا نشاركها مع أي طرف ثالث.' },
+    orderPlaceholder: 'ORD-5511',
   },
 
   // ─── NotFound / static fallbacks ────────────────────────────

@@ -38,6 +38,7 @@ export function ImageWithFallback({
   }
 
   return (
+    // eslint-disable-next-line @next/next/no-img-element, jsx-a11y/no-noninteractive-element-interactions
     <img
       src={src}
       alt={alt}

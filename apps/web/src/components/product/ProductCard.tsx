@@ -27,9 +27,10 @@ export function ProductCard({ product, onView, stalePriceLabel }: ProductCardPro
   const sold     = product.availability === ItemAvailability.SOLD
 
   return (
-    <article
+    <button
+      type="button"
       onClick={onView}
-      className={`group cursor-pointer transition-opacity duration-200 ${reserved || sold ? 'opacity-[0.70]' : ''}`}
+      className={`group cursor-pointer text-right w-full transition-opacity duration-200 ${reserved || sold ? 'opacity-[0.70]' : ''}`}
       aria-label={`${product.name}، ${product.karat}K، ${product.weight}غ، ${pr(product.price)} ريال`}
     >
       <ProductImage
@@ -41,6 +42,6 @@ export function ProductCard({ product, onView, stalePriceLabel }: ProductCardPro
       <ProductSpecs karat={product.karat} weight={product.weight} />
       <ProductPricePreview price={product.price} stalePriceLabel={stalePriceLabel} />
       <ProductAvailabilityBadge availability={product.availability} />
-    </article>
+    </button>
   )
 }
