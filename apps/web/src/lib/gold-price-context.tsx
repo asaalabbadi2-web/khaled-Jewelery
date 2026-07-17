@@ -52,20 +52,28 @@ export function GoldPriceProvider({
   const [age, setAge]     = useState(initialAge)
 
   // Client-side fetch so MSW intercepts in dev (SSR fetch bypasses service worker).
-  // On success, resets age to server-reported staleness.
+  // Wait for service worker ready before fetching — avoids race where fetch fires
+  // before MSW's worker.start() resolves and the SW is active.
   useEffect(() => {
     let cancelled = false
-    goldApi.getRates()
-      .then(data => {
-        if (cancelled) return
-        setRates({ karat24: data.karat24, karat21: data.karat21 })
-        const serverAge = Math.max(
-          0,
-          Math.floor((Date.now() - new Date(data.updatedAt).getTime()) / 1_000),
-        )
-        setAge(serverAge)
-      })
-      .catch(() => { /* keep initial values — bar stays visible with no prices */ })
+    const doFetch = () => {
+      goldApi.getRates()
+        .then(data => {
+          if (cancelled) return
+          setRates({ karat24: data.karat24, karat21: data.karat21 })
+          const serverAge = Math.max(
+            0,
+            Math.floor((Date.now() - new Date(data.updatedAt).getTime()) / 1_000),
+          )
+          setAge(serverAge)
+        })
+        .catch(() => { /* keep initial values — bar stays visible with no prices */ })
+    }
+    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then(() => { if (!cancelled) doFetch() })
+    } else {
+      doFetch()
+    }
     return () => { cancelled = true }
   }, [])
 
