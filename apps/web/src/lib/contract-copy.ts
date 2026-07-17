@@ -153,6 +153,11 @@ export const COPY = {
     refundDone:        'تم استرداد المبلغ كاملًا',
     rebookCta:         'احجز من جديد',
     paymentMethods:    'وسائل الدفع المقبولة',
+    errorRequired:     'هذا الحقل مطلوب',
+    errorPhone:        'أدخل رقم جوال سعودي (05xxxxxxxx)',
+    addressSectionTitle: 'تفاصيل التوصيل',
+    orderIdLabel:      'رقم طلبك',
+    successOrderId:    'ORD-5511',
   },
 
   // ─── Tracking ────────────────────────────────────────────────
@@ -181,6 +186,7 @@ export const COPY = {
     refundedDate:     (d: string) => `تاريخ الاسترداد: ${d}`,
     supportLine:      'سؤال عن طلبك؟',
     offlineNote:      (n: string) => `انقطع الاتصال — آخر حالة معروفة قبل ${n} دقيقة`,
+    otpSentNote:    (tail: string) => `أرسلنا رمز التحقق إلى +966 ****${tail}`,
     ariaAnnounce: {
       entry:        'صفحة تتبع الطلب',
       otpSent:      'تم إرسال رمز التحقق',

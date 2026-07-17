@@ -1,16 +1,11 @@
 import { Suspense } from 'react'
-import { GoldPriceProvider } from '@/lib/gold-price-context'
-import { GoldLiveBarWrapper } from '@/components/GoldLiveBarWrapper'
 import { CheckoutPageClient } from './CheckoutPageClient'
 
-// Checkout lives outside (site) layout — has its own minimal chrome.
+// Checkout has focused chrome (no live bar, no nav) — see CheckoutPageClient.
 export default function CheckoutPage() {
   return (
-    <GoldPriceProvider initialRates={null} initialAge={0}>
-      <GoldLiveBarWrapper />
-      <Suspense>
-        <CheckoutPageClient />
-      </Suspense>
-    </GoldPriceProvider>
+    <Suspense>
+      <CheckoutPageClient />
+    </Suspense>
   )
 }

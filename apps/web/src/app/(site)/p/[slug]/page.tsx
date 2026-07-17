@@ -87,6 +87,7 @@ export default function ProductPage() {
           {/* Interactive pricing card */}
           <ProductPageClient
             itemId={MOCK_PRODUCT.id}
+            itemName={MOCK_PRODUCT.name}
             price={MOCK_PRODUCT.price}
             breakdownItems={BREAKDOWN}
           />

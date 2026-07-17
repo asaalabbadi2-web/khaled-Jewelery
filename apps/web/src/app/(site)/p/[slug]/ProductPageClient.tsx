@@ -20,6 +20,7 @@ import type { BreakdownLine } from '@/components/pricing/GoldBreakdown'
 
 interface Props {
   itemId:         string
+  itemName:       string
   price:          number
   breakdownItems: BreakdownLine[]
 }
@@ -29,7 +30,7 @@ type ReservationSlot =
   | { phase: 'reserved'; reservationId: string; lockedPrice: number; expiresAt: string }
   | { phase: 'expired' }
 
-export function ProductPageClient({ itemId, price, breakdownItems }: Props) {
+export function ProductPageClient({ itemId, itemName, price, breakdownItems }: Props) {
   const router = useRouter()
   const { age, status } = useGoldPrice()
   const [slot, setSlot] = useState<ReservationSlot>({ phase: 'idle' })
@@ -66,9 +67,10 @@ export function ProductPageClient({ itemId, price, breakdownItems }: Props) {
       rid:       slot.reservationId,
       price:     String(slot.lockedPrice),
       expiresAt: slot.expiresAt,
+      name:      itemName,
     })
     router.push(`/checkout?${params.toString()}`)
-  }, [slot, router])
+  }, [slot, router, itemName])
 
   const displayPrice = slot.phase === 'reserved' ? slot.lockedPrice : price
   const ms = slot.phase === 'reserved'
