@@ -75,6 +75,24 @@ export function GoldPriceProvider({
     return () => window.clearInterval(id)
   }, [])
 
+  // Poll every 60s so age resets to ~0 — prevents bar going STALE on idle pages.
+  // MSW always returns updatedAt: new Date() so age resets to ~0 on each poll.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      goldApi.getRates()
+        .then(data => {
+          setRates({ karat24: data.karat24, karat21: data.karat21 })
+          const serverAge = Math.max(
+            0,
+            Math.floor((Date.now() - new Date(data.updatedAt).getTime()) / 1_000),
+          )
+          setAge(serverAge)
+        })
+        .catch(() => { /* keep current values — tick continues accumulating */ })
+    }, 60_000)
+    return () => window.clearInterval(id)
+  }, [])
+
   const status    = goldStatusFromAge(age)
   const hasBanner = status === GoldPriceStatus.HALTED
 
