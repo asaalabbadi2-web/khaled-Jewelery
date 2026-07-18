@@ -20,8 +20,9 @@ export interface GoldLiveBarProps {
 
 // R1: status derived exclusively from domain function — not recomputed here.
 export function GoldLiveBar({ age, halted = false, rates = null }: GoldLiveBarProps) {
-  const status = goldStatusFromAge(age, halted)
-  const stale  = status !== GoldPriceStatus.FRESH
+  const status  = goldStatusFromAge(age, halted)
+  const stale   = status !== GoldPriceStatus.FRESH
+  const loading = rates === null
 
   return (
     <div
@@ -29,31 +30,27 @@ export function GoldLiveBar({ age, halted = false, rates = null }: GoldLiveBarPr
       role="banner"
       aria-label={COPY.goldBar.ariaLabel}
     >
-      {/* 24K price — always shown (uses mock until rates arrive) */}
-      {rates && (
-        <>
-          <span className="flex items-center gap-1.5">
-            <span className="text-muted">24K</span>
-            <span dir="ltr" className="tabular-nums text-ivory/90 font-medium">
-              {pr(rates.karat24)}
-            </span>
-            <span className="text-muted">{COPY.goldBar.perGram}</span>
-          </span>
+      {/* 24K price — always rendered; shows placeholder dash while loading */}
+      <span className="flex items-center gap-1.5">
+        <span className="text-muted">24K</span>
+        <span dir="ltr" className={`tabular-nums font-medium ${loading ? 'text-muted-2' : 'text-ivory/90'}`}>
+          {loading ? '—' : pr(rates!.karat24)}
+        </span>
+        <span className="text-muted">{COPY.goldBar.perGram}</span>
+      </span>
 
-          <span className="text-gold/30 hidden sm:inline" aria-hidden="true">·</span>
+      <span className="text-gold/30 hidden sm:inline" aria-hidden="true">·</span>
 
-          {/* 21K — hidden on small screens */}
-          <span className="hidden sm:flex items-center gap-1.5">
-            <span className="text-muted">21K</span>
-            <span dir="ltr" className="tabular-nums text-ivory/90 font-medium">
-              {pr(rates.karat21)}
-            </span>
-            <span className="text-muted">{COPY.goldBar.perGram}</span>
-          </span>
+      {/* 21K — hidden on mobile */}
+      <span className="hidden sm:flex items-center gap-1.5">
+        <span className="text-muted">21K</span>
+        <span dir="ltr" className={`tabular-nums font-medium ${loading ? 'text-muted-2' : 'text-ivory/90'}`}>
+          {loading ? '—' : pr(rates!.karat21)}
+        </span>
+        <span className="text-muted">{COPY.goldBar.perGram}</span>
+      </span>
 
-          <span className="text-gold/30 hidden md:inline" aria-hidden="true">·</span>
-        </>
-      )}
+      <span className="text-gold/30 hidden md:inline" aria-hidden="true">·</span>
 
       {/* Freshness indicator — hidden on small screens */}
       {stale ? (
