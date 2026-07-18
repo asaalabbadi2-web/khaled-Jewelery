@@ -1,17 +1,10 @@
 import Link from 'next/link'
 import { TrendingUp, Gem, Award, Package } from 'lucide-react'
 import { ProductCard } from '@/components/product'
-import { ItemAvailability } from '@/lib/domain-states'
 import { COPY } from '@/lib/contract-copy'
+import { MOCK_CATALOG } from '@/mocks/catalog-data'
 
-const FEATURED = [
-  { id: 'R-21-0342', name: 'خاتم سوليتير',  karat: 21 as const, weight: 8.45,  price: 1_215, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=600&h=600&fit=crop&auto=format' },
-  { id: 'R-21-0418', name: 'خاتم تريلوجي',  karat: 21 as const, weight: 9.30,  price: 2_340, availability: ItemAvailability.RESERVED,  img: 'https://images.unsplash.com/photo-1589128777073-263566ae5e4d?w=600&h=600&fit=crop&auto=format' },
-  { id: 'R-18-0314', name: 'خاتم هالو',      karat: 18 as const, weight: 5.60,  price: 1_480, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1598560917807-1bae44bd2be8?w=600&h=600&fit=crop&auto=format' },
-  { id: 'R-21-0385', name: 'خاتم بافلي',     karat: 21 as const, weight: 7.20,  price: 1_651, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1611955167811-4711904bb9f8?w=600&h=600&fit=crop&auto=format' },
-  { id: 'R-21-0466', name: 'خاتم فينيتاج',   karat: 21 as const, weight: 11.80, price: 3_050, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1602173574767-37ac01994b2a?w=600&h=600&fit=crop&auto=format' },
-  { id: 'R-21-0399', name: 'خاتم كلاسيك',    karat: 21 as const, weight: 7.80,  price: 1_790, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=600&h=600&fit=crop&auto=format' },
-]
+const FEATURED = MOCK_CATALOG.slice(0, 6)
 
 const COLLECTIONS = [
   {
@@ -151,26 +144,6 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ── HOW IT WORKS ── */}
-      <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16 border-t border-gold/15 pt-10">
-        <h2 className="text-xl font-semibold text-charcoal tracking-[-0.02em] mb-8">
-          {COPY.home.howItWorksH2}
-        </h2>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
-          {HOW_IT_WORKS.map((step, i) => (
-            <div key={step} className="flex flex-col gap-2">
-              <span
-                className="w-7 h-7 rounded-full border border-gold/40 grid place-items-center text-gold text-xs font-semibold"
-                aria-hidden="true"
-              >
-                {i + 1}
-              </span>
-              <p className="text-charcoal text-sm font-medium leading-snug">{step}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
       {/* ── FEATURED ── */}
       <section
         className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16"
@@ -190,6 +163,26 @@ export default function HomePage() {
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 sm:gap-5">
           {FEATURED.map(product => (
             <ProductCard key={product.id} product={product} />
+          ))}
+        </div>
+      </section>
+
+      {/* ── HOW IT WORKS ── */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16 border-t border-gold/15 pt-10">
+        <h2 className="text-xl font-semibold text-charcoal tracking-[-0.02em] mb-8">
+          {COPY.home.howItWorksH2}
+        </h2>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6">
+          {HOW_IT_WORKS.map((step, i) => (
+            <div key={step} className="flex flex-col gap-2">
+              <span
+                className="w-7 h-7 rounded-full border border-gold/40 grid place-items-center text-gold text-xs font-semibold"
+                aria-hidden="true"
+              >
+                {i + 1}
+              </span>
+              <p className="text-charcoal text-sm font-medium leading-snug">{step}</p>
+            </div>
           ))}
         </div>
       </section>
