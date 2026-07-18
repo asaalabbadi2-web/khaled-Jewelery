@@ -9,7 +9,7 @@ import { OrderTimeline } from '@/components/checkout/OrderTimeline'
 import { COPY } from '@/lib/contract-copy'
 import { BRAND_NAME } from '@/lib/brand'
 import { pr } from '@/lib/format'
-import { RESERVATION_MS } from '@/lib/server-clock'
+import { RESERVATION_MS, serverNow } from '@/lib/server-clock'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -107,11 +107,11 @@ export function CheckoutPageClient() {
 
   // Local countdown — no GoldPriceProvider needed (price is locked)
   const [ms, setMs] = useState(() =>
-    expiresAt ? Math.max(0, new Date(expiresAt).getTime() - Date.now()) : 0
+    expiresAt ? Math.max(0, new Date(expiresAt).getTime() - serverNow()) : 0
   )
   useEffect(() => {
     const id = window.setInterval(
-      () => setMs(expiresAt ? Math.max(0, new Date(expiresAt).getTime() - Date.now()) : 0),
+      () => setMs(expiresAt ? Math.max(0, new Date(expiresAt).getTime() - serverNow()) : 0),
       500,
     )
     return () => window.clearInterval(id)

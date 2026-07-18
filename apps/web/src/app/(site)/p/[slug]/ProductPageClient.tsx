@@ -15,6 +15,7 @@ import { useRouter } from 'next/navigation'
 import { useGoldPrice } from '@/lib/gold-price-context'
 import { GoldPriceStatus } from '@/lib/domain-states'
 import { reservationApi } from '@/lib/api'
+import { serverNow } from '@/lib/server-clock'
 import { PricingCard, type PricingState } from '@/components/pricing'
 import type { BreakdownLine } from '@/components/pricing/GoldBreakdown'
 
@@ -74,7 +75,7 @@ export function ProductPageClient({ itemId, itemName, price, breakdownItems }: P
 
   const displayPrice = slot.phase === 'reserved' ? slot.lockedPrice : price
   const ms = slot.phase === 'reserved'
-    ? Math.max(0, new Date(slot.expiresAt).getTime() - Date.now())
+    ? Math.max(0, new Date(slot.expiresAt).getTime() - serverNow())
     : 0
 
   return (
