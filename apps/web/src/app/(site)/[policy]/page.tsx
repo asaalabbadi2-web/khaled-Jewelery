@@ -1,10 +1,6 @@
-'use client'
-
 import { notFound } from 'next/navigation'
-import { useState } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { COPY } from '@/lib/contract-copy'
-import { use } from 'react'
 
 // ── Per-page renderer helpers ────────────────────────────────────────────────
 
@@ -30,8 +26,6 @@ function SectionedPage({ title, sections }: {
 }
 
 function FaqPage() {
-  const [open, setOpen] = useState<number | null>(null)
-
   return (
     <article className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 pb-16">
       <h1 className="text-2xl font-semibold text-charcoal tracking-[-0.02em] mb-8 border-b border-gold/15 pb-5">
@@ -39,27 +33,21 @@ function FaqPage() {
       </h1>
       <div className="flex flex-col divide-y divide-gold/10">
         {COPY.staticPages.faq.items.map((item, i) => (
-          <div key={i}>
-            <button
-              onClick={() => setOpen(open === i ? null : i)}
-              aria-expanded={open === i}
-              className="w-full flex items-center justify-between gap-4 py-4 text-right"
-            >
+          <details key={i} className="group">
+            <summary className="flex items-center justify-between gap-4 py-4 cursor-pointer list-none">
               <span className="text-sm font-medium text-charcoal leading-snug">
                 {item.q}
               </span>
               <ChevronDown
                 size={16}
                 aria-hidden="true"
-                className={`text-gold shrink-0 transition-transform duration-200 ${open === i ? 'rotate-180' : ''}`}
+                className="text-gold shrink-0 transition-transform duration-200 group-open:rotate-180"
               />
-            </button>
-            {open === i && (
-              <p className="text-muted text-sm leading-relaxed pb-4 pr-1">
-                {item.a}
-              </p>
-            )}
-          </div>
+            </summary>
+            <p className="text-muted text-sm leading-relaxed pb-4 pr-1">
+              {item.a}
+            </p>
+          </details>
         ))}
       </div>
     </article>
@@ -101,8 +89,8 @@ function AboutPage() {
 
 // ── Route ────────────────────────────────────────────────────────────────────
 
-export default function StaticPage({ params }: { params: Promise<{ policy: string }> }) {
-  const { policy } = use(params)
+export default async function StaticPage({ params }: { params: Promise<{ policy: string }> }) {
+  const { policy } = await params
 
   if (policy === 'faq')   return <FaqPage />
   if (policy === 'about') return <AboutPage />
