@@ -176,6 +176,25 @@ export function CatalogClient({ items, categoryName }: Props) {
     </div>
   )
 
+  // Build removable chip list for active filters
+  const activeChips: Array<{ label: string; onRemove: () => void }> = [
+    ...karats.map(k => ({
+      label:    KARAT_OPTIONS.find(o => o.key === k)!.label,
+      onRemove: () => { setKarats(prev => prev.filter(x => x !== k)); setPage(1) },
+    })),
+    ...weights.map(w => ({
+      label:    WEIGHT_OPTIONS.find(o => o.key === w)!.label,
+      onRemove: () => { setWeights(prev => prev.filter(x => x !== w)); setPage(1) },
+    })),
+    ...prices.map(p => ({
+      label:    PRICE_OPTIONS.find(o => o.key === p)!.label,
+      onRemove: () => { setPrices(prev => prev.filter(x => x !== p)); setPage(1) },
+    })),
+  ]
+
+  // Page numbers for numbered pagination (show all when ≤7 pages)
+  const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1)
+
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16">
       {/* Title + count + controls row */}
@@ -219,6 +238,23 @@ export function CatalogClient({ items, categoryName }: Props) {
         </div>
       </div>
 
+      {/* Active filter chips — removable tags */}
+      {activeChips.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-5" aria-label="الفلاتر النشطة">
+          {activeChips.map(chip => (
+            <button
+              key={chip.label}
+              onClick={chip.onRemove}
+              className="flex items-center gap-1 bg-gold/10 border border-gold/30 text-charcoal text-xs px-2.5 py-1 rounded-sm hover:bg-gold/20 transition-colors"
+              aria-label={`إزالة فلتر: ${chip.label}`}
+            >
+              {chip.label}
+              <X size={10} aria-hidden="true" className="text-muted mt-px" />
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="flex gap-8">
         {/* Desktop sidebar */}
         <aside className="hidden lg:block w-44 shrink-0">
@@ -260,10 +296,10 @@ export function CatalogClient({ items, categoryName }: Props) {
             </div>
           )}
 
-          {/* Pagination */}
+          {/* Numbered pagination */}
           {totalPages > 1 && (
             <nav
-              className="flex items-center justify-center gap-4 mt-10"
+              className="flex items-center justify-center gap-1.5 mt-10"
               aria-label={COPY.catalog.paginationAria}
             >
               <button
@@ -273,9 +309,21 @@ export function CatalogClient({ items, categoryName }: Props) {
               >
                 {COPY.catalog.paginationPrev}
               </button>
-              <span className="text-xs text-muted tabular-nums">
-                {COPY.catalog.paginationOf(safePage, totalPages)}
-              </span>
+              {pageNumbers.map(n => (
+                <button
+                  key={n}
+                  onClick={() => setPage(n)}
+                  aria-current={n === safePage ? 'page' : undefined}
+                  className={[
+                    'w-8 h-8 rounded-sm text-xs tabular-nums transition-colors',
+                    n === safePage
+                      ? 'bg-charcoal text-ivory border border-charcoal'
+                      : 'border border-muted/30 text-muted hover:border-gold/30',
+                  ].join(' ')}
+                >
+                  {n}
+                </button>
+              ))}
               <button
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={safePage >= totalPages}
