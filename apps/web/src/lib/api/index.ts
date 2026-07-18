@@ -7,6 +7,13 @@
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000/api/v1'
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, path: string) {
+    super(`API ${status}: ${path}`)
+    this.name = 'ApiError'
+  }
+}
+
 async function apiFetch<T>(
   path: string,
   init?: RequestInit,
@@ -18,9 +25,7 @@ async function apiFetch<T>(
       ...init?.headers,
     },
   })
-  if (!res.ok) {
-    throw new Error(`API ${res.status}: ${path}`)
-  }
+  if (!res.ok) throw new ApiError(res.status, path)
   return res.json() as Promise<T>
 }
 
@@ -46,5 +51,30 @@ export const reservationApi = {
     apiFetch<ReservationResponse>('/reservations', {
       method: 'POST',
       body:   JSON.stringify({ itemId }),
+    }),
+}
+
+export interface SendOtpResponse {
+  sent:        boolean
+  maskedPhone: string
+}
+
+export interface VerifyOtpResponse {
+  orderId:        string
+  status:         string
+  steps:          Array<{ label: string; done: boolean; active: boolean }>
+  carrierTrackNo: string
+}
+
+export const trackingApi = {
+  sendOtp: (orderNumber: string) =>
+    apiFetch<SendOtpResponse>('/tracking/send-otp', {
+      method: 'POST',
+      body:   JSON.stringify({ orderNumber }),
+    }),
+  verifyOtp: (orderNumber: string, code: string) =>
+    apiFetch<VerifyOtpResponse>('/tracking/verify-otp', {
+      method: 'POST',
+      body:   JSON.stringify({ orderNumber, code }),
     }),
 }
