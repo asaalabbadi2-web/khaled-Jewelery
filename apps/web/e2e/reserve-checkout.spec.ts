@@ -25,13 +25,10 @@ test.describe('Reserve → Checkout flow', () => {
     await expect(checkoutBtn).toBeVisible()
     await checkoutBtn.click()
 
-    // 4. Checkout page: ReservationStrip must be visible
-    const strip = page.getByRole('region', { name: /الحجز|وقت|countdown/i })
-      .or(page.locator('[aria-label]').filter({ hasText: /ر\.س|وقت/ }))
-
-    // Simpler: just check the countdown text appears in the strip area
-    const stripCountdown = page.locator('div.fixed.bg-charcoal [dir="ltr"]')
-    await expect(stripCountdown).toBeVisible({ timeout: 5_000 })
+    // 4. Checkout page: wait for reservation to load (loading spinner → strip visible)
+    // Use .first() — the strip renders multiple [dir="ltr"] spans (MM, :, SS)
+    const stripCountdown = page.locator('div.fixed.bg-charcoal [dir="ltr"]').first()
+    await expect(stripCountdown).toBeVisible({ timeout: 10_000 })
 
     // 5. Countdown must be continuous — within 5s of where it was before navigation
     const afterText = await stripCountdown.textContent()

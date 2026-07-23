@@ -51,15 +51,8 @@ test('snapshot: product page (R-21-0342)', async ({ page }) => {
 })
 
 test('snapshot: checkout (EXPIRED state — stable, no countdown)', async ({ page }) => {
-  // Navigate directly with an already-expired timestamp so the page lands in EXPIRED
-  const expiredAt = new Date(Date.now() - 1_000).toISOString()
-  const params = new URLSearchParams({
-    rid:       'RSV-SNAP',
-    price:     '1215',
-    expiresAt: expiredAt,
-    name:      'خاتم سوليتير',
-  })
-  await page.goto(`/checkout?${params.toString()}`)
+  // RSV-SNAP is pre-seeded in the MSW store with an epoch timestamp — always expired
+  await page.goto('/checkout?rid=RSV-SNAP')
   await waitReady(page)
   await expect(page).toHaveScreenshot('checkout-expired.png', { maxDiffPixels: 200 })
 })

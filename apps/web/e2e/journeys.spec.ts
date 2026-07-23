@@ -63,8 +63,16 @@ test.describe('Money path: reserve → checkout → success', () => {
     await expect(checkoutBtn).toBeVisible({ timeout: 5_000 })
     await checkoutBtn.click()
 
-    // Step 2 — On /checkout: ReservationStrip is visible (contains countdown)
+    // Step 2 — On /checkout: reservation loads, ReservationStrip is visible
     await page.waitForURL('**/checkout**')
+    await waitForMsw(page)  // let MSW respond to GET /reservations/:rid
+
+    // Price chain: card price == product page price == LOCKED price == checkout summary total
+    // The summary aside shows the locked total (1,215.00 ر.س) after the breakdown rows.
+    // pr(1215) = '1,215.00' — look for that exact string inside the aside.
+    const summaryTotal = page.locator('aside').getByText('1,215.00')
+    await expect(summaryTotal).toBeVisible({ timeout: 8_000 })
+
     const strip = page.locator('[dir="ltr"].tabular-nums').first()
     await expect(strip).toBeVisible({ timeout: 8_000 })
 
@@ -94,8 +102,8 @@ test.describe('Money path: reserve → checkout → success', () => {
     const orderIdRow = page.getByText(/ORD-5511/)
     await expect(orderIdRow).toBeVisible()
 
-    // Track CTA is present
-    const trackCta = page.getByRole('link', { name: /تتبع الطلب/ })
+    // Track CTA is present (button navigates to /track)
+    const trackCta = page.getByRole('button', { name: /تتبع الطلب/ })
     await expect(trackCta).toBeVisible()
   })
 })
@@ -158,7 +166,40 @@ test.describe('Track OTP flow', () => {
   })
 })
 
-// ── 4. 404 recovery ──────────────────────────────────────────────────────────
+// ── 4. Persistent reservation strip: reserve → browse away → strip persists ──
+
+test.describe('Persistent browsing strip (G1)', () => {
+  test('strip persists with countdown after reserving and browsing to catalog', async ({ page }) => {
+    // Reserve on product page
+    await page.goto('/p/R-21-0342')
+    await waitForMsw(page)
+
+    const reserveBtn = page.getByRole('button', { name: /احجز القطعة والسعر/ })
+    await expect(reserveBtn).toBeEnabled({ timeout: 15_000 })
+    await reserveBtn.click()
+
+    // RESERVED state visible
+    await expect(page.getByRole('button', { name: /إتمام الدفع/ })).toBeVisible({ timeout: 5_000 })
+
+    // Client-side navigate to catalog (router.push → context preserved)
+    await page.getByRole('button', { name: /المجوهرات/ }).click()
+    await page.waitForURL('**/jewellery/rings**')
+    await waitForMsw(page)
+
+    // BrowsingReservationStrip: countdown visible
+    const countdown = page.locator('[aria-label="شريط الحجز أثناء التصفح"]')
+      .locator('[dir="ltr"].tabular-nums')
+    await expect(countdown).toBeVisible({ timeout: 8_000 })
+
+    // «إتمام الدفع» link navigates to checkout
+    const checkoutLink = page.getByRole('link', { name: /إتمام الدفع/ })
+    await expect(checkoutLink).toBeVisible()
+    await checkoutLink.click()
+    await page.waitForURL('**/checkout**')
+  })
+})
+
+// ── 6. 404 recovery ──────────────────────────────────────────────────────────
 
 test.describe('404 recovery', () => {
   test('unknown route shows diamond glyph and secondary CTAs', async ({ page }) => {
