@@ -111,9 +111,9 @@ Permissions are granted on **capabilities**, not on routes. The RBAC check answe
 - **Admin-side proof** — `tests/security/test_admin_scope_enforcement.py` (13 tests): customer JWT → 403 on all admin-scoped endpoints.
 - **Customer-side proof** — `tests/security/test_law4_customer_scope.py` (16 tests): no JWT → 401 on all customer-scoped endpoints; valid customer JWT → passes auth; admin JWT → also passes (admin ⊇ customer). A structural scan verifies `_CUSTOMER_ENDPOINTS` in the test matches the count of `scope="customer"` entries in ROUTE_SECURITY — adding a new customer endpoint without adding it to the test breaks CI.
 
-**Bug found and fixed (v1.4.6-dev):** `GET /api/v1/orders/{order_id}/shipments` was classified `scope="customer"` in ROUTE_SECURITY but had no `Depends(get_customer_ref)` in the route handler. The Law 4 proof test caught it. Fix: added `_customer_ref: str = Depends(get_customer_ref)` to `get_shipment_by_order()` in `routers/shipments.py`.
+**Bug found and fixed (v1.4.6-dev):** `GET /api/v1/orders/{order_id}/shipments` was classified `scope="customer"` in ROUTE_SECURITY but had no `Depends(get_customer_ref)` in the route handler. The Law 4 proof test caught it. Fix: added `customer_ref: str = Depends(get_customer_ref)` to `get_shipment_by_order()` in `routers/shipments.py`.
 
-**Remaining open BOLA surface:** `GET /api/v1/orders/{order_id}/shipments` — any authenticated customer can read any order's shipment (not just their own). Documented and accepted for v1.4; fix deferred to Gate B alongside `GET /api/v1/orders/{order_id}`.
+**BOLA-shipments closed (Sprint 10):** `GET /api/v1/orders/{order_id}/shipments` now enforces ownership via `OrderService.find_order_for_customer()` before any shipment query. Non-owner and non-existent orders return identical 404 responses — no resource enumeration. Proof: `tests/security/test_shipment_bola.py` (4 tests). All open BOLA surfaces are now closed.
 
 **SEC-001 withdrawal condition** remains:
 1. Runtime scope enforcement live (✅ — JWT middleware enforces `get_customer_ref` and `require_admin` on all classified routes)
@@ -146,14 +146,20 @@ BOLA (Broken Object Level Authorization, OWASP #1) in commerce contexts: a custo
 
 **v1.4 implementation:** `customer_ref` = verified JWT `sub` claim injected by middleware before domain call.
 
-**Closed BOLA surfaces (v1.4):**
-- `POST /api/v1/payments` — fixed in v1.4.3: ownership check moved from router to `ReservationService.find_reservation_for_customer()`. Proof: `tests/security/test_payment_bola.py`.
+**Closed BOLA surfaces (all surfaces now closed):**
+- `POST /api/v1/payments` — fixed v1.4.3: ownership via `ReservationService.find_reservation_for_customer()`. Proof: `tests/security/test_payment_bola.py`.
+- `GET /api/v1/orders/{order_id}` — `find_order_for_customer()` in `OrderService`. Proof: `tests/security/test_bola.py` (domain) + orders router.
+- `GET /api/v1/orders/{order_id}/shipments` — fixed Sprint 10: ownership via `OrderService.find_order_for_customer()` before shipment query; identical 404 for all rejection cases (no enumeration). Proof: `tests/security/test_shipment_bola.py` (4 tests).
 
-**Remaining open BOLA surfaces:**
-- `GET /api/v1/orders/{order_id}/shipments` — auth enforced (v1.4.6: `Depends(get_customer_ref)`); ownership check (caller owns the order) not yet applied. Deferred to Gate B.
+**No remaining open BOLA surfaces.** The open-surface witness file (`tests/security/test_open_surfaces.py`) is now empty of xfail tests.
 
-**Previously listed as open — confirmed closed:**
-- `GET /api/v1/orders/{order_id}` — `find_order_for_customer(order_id, customer_ref, uow)` in `OrderService` checks ownership at the domain layer; router maps `None → 404`. Already live. (Stale "open surface" entry now removed.)
+§5 — Transitional implementation note:
+`find_shipment_for_customer()` was not added to `ShipmentService` because `Shipment`
+aggregates do not carry `customer_ref` — that field lives on `Order`. Introducing it
+in `ShipmentService` would require cross-context access to `OrderRepository`, creating
+bounded-context coupling. The ownership rule is composed at the router level using two
+existing domain primitives. This is the accepted transitional form until ADR-023 M2.x
+consolidates the shipping and order bounded contexts.
 
 ---
 

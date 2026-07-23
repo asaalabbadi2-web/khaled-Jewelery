@@ -12,11 +12,12 @@ from __future__ import annotations
 import logging
 
 from yasargold_domain.payment.intent import PaymentIntent
+from yasargold_commerce.infra.financial_adapter import NonProductionFinancialAdapter
 
 log = logging.getLogger(__name__)
 
 
-class LogRefundGateway:
+class LogRefundGateway(NonProductionFinancialAdapter):
     """Logs the refund call; never actually contacts a payment provider."""
 
     def refund(self, intent: PaymentIntent) -> None:

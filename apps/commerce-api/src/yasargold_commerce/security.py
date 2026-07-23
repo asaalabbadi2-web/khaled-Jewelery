@@ -49,6 +49,7 @@ VALID_RATE_CLASSES = frozenset({
     "order-read",
     "webhook",
     "admin-write",
+    "pos-write",
     "ops",
 })
 
@@ -117,6 +118,7 @@ ROUTE_SECURITY: dict[tuple[str, str], RouteSecurityClass] = {
     ),
     ("GET", "/api/v1/orders/{order_id}/shipments"): RouteSecurityClass(
         scope="customer", rate_class="order-read",
+        note="Sprint 10: BOLA closed — ownership via OrderService.find_order_for_customer(); identical 404 for non-owner and not-found",
     ),
     ("POST", "/api/v1/shipments/{shipment_id}/void"): RouteSecurityClass(
         scope="admin", rate_class="admin-write",
@@ -125,6 +127,23 @@ ROUTE_SECURITY: dict[tuple[str, str], RouteSecurityClass] = {
     ("POST", "/api/v1/shipments/{shipment_id}/deliver"): RouteSecurityClass(
         scope="admin", rate_class="admin-write",
         note="v1.4: JWT required with scope=admin (require_admin); SEC-001 closed",
+    ),
+
+    # ------------------------------------------------------------------
+    # POS Claims — machine-to-machine ERP → Commerce (ADR-016 §H1 terminal fix)
+    # ------------------------------------------------------------------
+    ("POST", "/api/v1/items/{item_id}/pos-claim"): RouteSecurityClass(
+        scope="admin", rate_class="pos-write",
+        note="Auth: X-POS-Secret header (require_pos_auth); scope=admin because this is "
+             "an ERP-to-Commerce internal write, not a customer-facing endpoint.",
+    ),
+    ("POST", "/api/v1/items/{item_id}/pos-claim/{claim_id}/confirm"): RouteSecurityClass(
+        scope="admin", rate_class="pos-write",
+        note="Auth: X-POS-Secret header (require_pos_auth); ERP calls after invoice commit.",
+    ),
+    ("DELETE", "/api/v1/items/{item_id}/pos-claim/{claim_id}"): RouteSecurityClass(
+        scope="admin", rate_class="pos-write",
+        note="Auth: X-POS-Secret header (require_pos_auth); ERP calls on invoice rollback.",
     ),
 
     # ------------------------------------------------------------------
@@ -145,6 +164,7 @@ SENSITIVE_FIELD_PATTERNS: tuple[re.Pattern, ...] = (
     re.compile(r"authorization", re.IGNORECASE),
     re.compile(r"x-admin-secret", re.IGNORECASE),
     re.compile(r"x-internal-secret", re.IGNORECASE),
+    re.compile(r"x-pos-secret", re.IGNORECASE),
     re.compile(r"x-moyasar-signature", re.IGNORECASE),
     re.compile(r"api[_\-]?key", re.IGNORECASE),
     re.compile(r"secret[_\-]?key", re.IGNORECASE),

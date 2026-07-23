@@ -62,9 +62,80 @@ def _build_redis():
 # Module-level singleton so tests can call _RATE_REDIS.reset() between runs.
 _RATE_REDIS = _build_redis()
 
+
+def _build_refund_gateway():
+    """Return the configured RefundGateway. No try/except — no silent fallback.
+
+    Production: MoyasarRefundGateway when MOYASAR_SECRET_KEY is set.
+    Dev/test:   LogRefundGateway with a loud WARNING.
+
+    The absence of a try/except is deliberate: if MoyasarRefundGateway() raises
+    (malformed key, config error), the error propagates and the app refuses to
+    start. Silent downgrade to LogRefundGateway is more dangerous than a boot
+    failure — a refund silently dropped is invisible; a boot failure is not.
+
+    Set COMMERCE_ENV=production to enforce this at startup via
+    _check_production_refund_gateway_config().
+    """
+    from yasargold_commerce.infra.log_refund_gateway import LogRefundGateway
+    from yasargold_commerce.infra.moyasar_refund_gateway import MoyasarRefundGateway
+
+    key = os.environ.get("MOYASAR_SECRET_KEY", "")
+    if key:
+        return MoyasarRefundGateway(api_key=key)
+
+    _log.warning(
+        "refund_gateway: MOYASAR_SECRET_KEY not set — using LogRefundGateway. "
+        "Refunds will be LOGGED ONLY, not actually issued to Moyasar. "
+        "Acceptable in development/test. NOT acceptable in production "
+        "(set COMMERCE_ENV=production to enforce this at startup)."
+    )
+    return LogRefundGateway()
+
+
+def _check_production_refund_gateway_config(gateway: object) -> None:
+    """Raise if the refund gateway is unsafe for production.
+
+    Law 7 — Financial Adapter Law: No Financial Adapter may silently downgrade
+    in Production. Any NonProductionFinancialAdapter subclass logs or stubs
+    financial operations — real transactions are silently skipped.
+    Misconfiguration must fail at boot, not at the first customer refund.
+
+    Covers all NonProductionFinancialAdapter subclasses — not just LogRefundGateway:
+      • MOYASAR_SECRET_KEY absent → _build_refund_gateway() returns LogRefundGateway
+      • Any future LogPaymentGateway / LogPayoutAdapter inheriting the marker
+      • Any NonProductionFinancialAdapter wired explicitly in the call graph
+
+    The isinstance check on the marker is the sole enforcement mechanism —
+    no class-name whack-a-mole.
+    """
+    from yasargold_commerce.infra.financial_adapter import NonProductionFinancialAdapter
+
+    if os.environ.get("COMMERCE_ENV") != "production":
+        return
+
+    if isinstance(gateway, NonProductionFinancialAdapter):
+        raise RuntimeError(
+            f"{type(gateway).__name__} is a NonProductionFinancialAdapter — "
+            "not permitted when COMMERCE_ENV=production. "
+            "This class of adapter logs or stubs financial operations; real transactions "
+            "are silently skipped. "
+            "Fix: configure a production-ready gateway (e.g. set MOYASAR_SECRET_KEY). "
+            "Law 7 (security-overview.md): No Financial Adapter may silently downgrade "
+            "in Production."
+        )
+
+
+# Module-level singleton — built once at import time; validated in lifespan.
+# Tests that need a specific gateway bypass this by calling _build_refund_gateway()
+# directly with monkeypatched env vars.
+_REFUND_GATEWAY = _build_refund_gateway()
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     _check_production_redis_config()
+    _check_production_refund_gateway_config(_REFUND_GATEWAY)
     yield
 
 

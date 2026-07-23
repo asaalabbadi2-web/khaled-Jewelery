@@ -77,6 +77,10 @@ RATE_LIMITS: dict[str, tuple[int, int]] = {
     "order-read":        (60,   60),
     "webhook":           (100,  60),
     "admin-write":       (20,   60),
+    # pos-write: ERP → Commerce machine-to-machine; one claim per sale.
+    # A single showroom terminal makes at most a handful of claims per minute.
+    # 60/min is generous; deliberate burst limit keeps the window tight.
+    "pos-write":         (60,   60),
     "ops":               (0,     1),   # 0 = unlimited sentinel
 }
 

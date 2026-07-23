@@ -4,6 +4,54 @@ stages:
   - deploy
 
 # ─────────────────────────────────────────────
+# Clock Guard — ADR-015 §Clock Discipline enforcement
+# Scans decision-path dirs for bare datetime.now() calls.
+# Runs when domain, workers, or backend services change.
+# ─────────────────────────────────────────────
+clock-guard:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - python scripts/clock_guard.py
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - packages/domain/**/*
+        - apps/commerce-api/src/yasargold_commerce/workers/**/*
+        - backend/services/**/*
+        - scripts/clock_guard.py
+        - docs/architecture/.clock-debt-baseline
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - packages/domain/**/*
+        - apps/commerce-api/src/yasargold_commerce/workers/**/*
+        - backend/services/**/*
+        - scripts/clock_guard.py
+        - docs/architecture/.clock-debt-baseline
+
+# ─────────────────────────────────────────────
+# ERP Seam Ratchet — ADR-023 M1 enforcement
+# Runs when ERP code or the seam ledger changes.
+# Fails if contract-test coverage ratio drops.
+# ─────────────────────────────────────────────
+erp-seam-ratchet:
+  stage: test
+  image: python:3.12-slim
+  script:
+    - python scripts/erp_seam_ratchet.py
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      changes:
+        - backend/**/*
+        - docs/architecture/erp-seam-ledger.md
+        - scripts/erp_seam_ratchet.py
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - backend/**/*
+        - docs/architecture/erp-seam-ledger.md
+        - scripts/erp_seam_ratchet.py
+
+# ─────────────────────────────────────────────
 # Web (Next.js storefront) — 7 CI gates
 # Runs only when apps/web/** or packages/contracts/** change.
 # DO NOT modify Python/backend jobs above or below.

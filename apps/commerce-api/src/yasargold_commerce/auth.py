@@ -11,6 +11,11 @@ FastAPI dependencies exported from this module:
         Require a valid JWT with scope="admin". Raises 401 if missing or
         invalid; 403 if scope != "admin"; 503 if not configured.
 
+    require_pos_auth(x_pos_secret) -> None
+        Machine-to-machine auth for ERP → Commerce pos-claim endpoints.
+        Checks X-POS-Secret header against POS_API_SECRET env var.
+        Raises 401 if header is missing or wrong; 503 if not configured.
+
 SEC-001 withdrawal: require_admin_secret (X-Admin-Secret) is withdrawn
 once require_admin is wired on every admin-scoped endpoint AND the test
 in test_admin_scope_enforcement.py passes. See ADR-017 §Consequences.
@@ -23,10 +28,11 @@ JWT claims required:
 from __future__ import annotations
 
 import os
+import secrets as _secrets
 from dataclasses import dataclass
 
 import jwt as _jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 _ALGORITHM = "HS256"
@@ -127,4 +133,31 @@ def require_admin(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin scope required",
+        )
+
+
+def require_pos_auth(
+    x_pos_secret: str | None = Header(None, alias="X-POS-Secret"),
+) -> None:
+    """Machine-to-machine auth for ERP → Commerce pos-claim endpoints.
+
+    The ERP sends X-POS-Secret: <value>. Commerce verifies against POS_API_SECRET
+    env var using constant-time comparison (timing-safe).
+
+    Raises:
+        503 — POS_API_SECRET not configured on the Commerce side
+        401 — header missing or value does not match
+    """
+    configured = os.environ.get("POS_API_SECRET", "")
+    if not configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="POS authentication not configured — set POS_API_SECRET",
+        )
+    if not x_pos_secret or not _secrets.compare_digest(
+        x_pos_secret.encode(), configured.encode()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-POS-Secret header",
         )

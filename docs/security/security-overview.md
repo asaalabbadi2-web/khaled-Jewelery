@@ -9,7 +9,7 @@ single security reference for external review. On any conflict with the constitu
 **Derived from:** ADR-017 · architecture-v1.md §5.0–§5.1 · threat table §4.6  
 **Derivatives:** Payment-gateway compliance brief · CTO brief (exported on demand; each carries
 `last reconciled: YYYY-MM-DD` and cites this document as the source)  
-**Test suite at reconciliation:** 765 tests · 0 failures
+**Test suite at reconciliation:** 778 tests · 0 failures
 
 > Every security claim below names its proof test and enforcement status.
 > A claim with no test reference does not appear in this document.
@@ -272,6 +272,46 @@ after a forged payload hits the handler.
 
 ---
 
+### Law 7 — No Financial Adapter may silently downgrade in Production
+
+Any adapter that handles a financial operation (refund, payment, settlement) must fail at boot
+if it is not production-ready. A stub that logs and returns is more dangerous than a boot
+failure: a boot failure is immediately visible; a silently dropped refund is invisible until a
+customer reports it or a reconciliation run finds the gap.
+
+**Rule:** If `COMMERCE_ENV=production` and the wired gateway is `LogRefundGateway` (or any
+log-only stub), the app must refuse to start with a `RuntimeError` that names the fix.
+
+**Two failure modes — both caught:**
+1. `MOYASAR_SECRET_KEY` absent → `_build_refund_gateway()` returns `LogRefundGateway` → type check catches it.
+2. `LogRefundGateway` wired explicitly in code → same type check catches it.
+
+**No silent fallback:** `_build_refund_gateway()` has no `try/except`. If `MoyasarRefundGateway()`
+raises (malformed key, bad config), the error propagates — the app refuses to start. Falling back
+to `LogRefundGateway` on a construction error would be a silent downgrade.
+
+**Permitted environments for `LogRefundGateway`:** `development`, `test`, and any env where
+`COMMERCE_ENV != "production"`. The absence of production enforcement is by design — dev and test
+need to operate without live credentials. A loud `WARNING` is emitted at build time so the state
+is explicit in logs.
+
+**Proof test:** `apps/commerce-api/tests/security/test_refund_gateway_boot.py` — 13 tests (GW1–GW6):
+
+| Case | Env | Key | Expected |
+|------|-----|-----|----------|
+| GW1 | production | set | `MoyasarRefundGateway` built; check passes |
+| GW2 | production | absent | `RuntimeError` naming `LogRefundGateway` and `MOYASAR_SECRET_KEY` |
+| GW3 | production | any | `RuntimeError` if `LogRefundGateway` wired explicitly; cites Law 7 |
+| GW4 | development | absent | `LogRefundGateway` allowed; `WARNING` logged |
+| GW5 | test / unset | absent | `LogRefundGateway` allowed; no error |
+| GW6 | development | set | `MoyasarRefundGateway` built; check passes |
+
+**Scope:** this law currently covers `RefundGateway`. Gate B (E4 — POS availability) extends
+the fail-closed principle to the ERP→Commerce availability check. Every new financial adapter
+added in future must register a GW-series test or the Law 0 requirement is not met.
+
+---
+
 ## 5. Authentication and Authorization
 
 **Token model:** JWT (HS256, `pyjwt`). Claims: `sub` (E.164 phone), `scope`, `exp`.
@@ -322,6 +362,7 @@ gap-injection tests (12 tests against real SQLite, not stubs).
 | Property | Proof |
 |----------|-------|
 | Fail-closed: `COMMERCE_ENV=production` without `REDIS_URL` → boot failure | `TestProductionRedisConfig` (4 tests) |
+| Fail-closed: `COMMERCE_ENV=production` with `LogRefundGateway` → boot failure | `test_refund_gateway_boot.py` (13 tests, GW1–GW6) |
 | XFF forge: forged prefix accumulates on real IP, not bypassed | `TestXFFForgeResistance` (3 tests) |
 | Zero-hops mode: `TRUSTED_PROXY_HOPS=0` ignores XFF entirely | `TestXFFForgeResistance` |
 | 429 responses carry `Retry-After` header | `test_rate_limiting.py` |
@@ -332,9 +373,9 @@ gap-injection tests (12 tests against real SQLite, not stubs).
 
 | ID | Surface | Exposure | Interim control | Terminal fix |
 |----|---------|----------|----------------|-------------|
-| BOLA-shipments | `GET /orders/{id}/shipments` — ownership not checked | caller sees shipment for any order they know the ID of | auth enforced (v1.4.6); IDs are UUIDs | `find_shipment_for_customer()` pattern; Gate B |
 | SEC-002 | Real-provider field semantics unverified — 98 adapter tests use MockTransport | field-mapping error vs Aramex/Moyasar/Twilio possible | merge gate: sandbox assertions defined per provider (`declared_value` in insurance field; duplicate idempotency key = one AWB / one refund / one SMS) | sandbox E2E test; blocked on account provisioning (OPEN-1) |
 | SEC-003 | ERP internal endpoints trust shared secret + network co-location | compromise of private subnet affects ERP trust | `secrets.compare_digest` live from day one; fail-closed (`ERP_INTERNAL_SECRET` unset → 503) | mTLS or service-mesh token |
+| SEC-004 | ERP → Commerce pos-claim endpoints trust shared `X-POS-Secret` | shared secret: if ERP host is compromised, attacker can claim items on behalf of POS | `secrets.compare_digest` (constant-time); fail-closed (`POS_API_SECRET` unset → 503); `X-POS-Secret` in `RedactingFilter` | mTLS or service-mesh mutual authentication between ERP and Commerce; sunset trigger: first multi-host ERP deployment or SOC-2 readiness review |
 | CGNAT | Per-IP rate limits may throttle legitimate users behind carrier NAT | false-positive 429s under load | monitor 429 rate before tightening limits | v1.5: key = IP + JWT `sub` |
 | INV-4 | Showroom / online same-piece race — managed, not closed | window = ERP sync lag, SLO P95 ≤ 30 s | `reservation_gaps_total` + `erp_sync_lag` metrics; auto-refund compensation path; only non-showroom items online until Gate B | POS UI consuming availability endpoint (Gate B) |
 
@@ -343,6 +384,12 @@ gap-injection tests (12 tests against real SQLite, not stubs).
 **BOLA-orders** ✅ Previously listed as open — confirmed closed (v1.4):
 `GET /orders/{order_id}` enforces ownership via `OrderService.find_order_for_customer()` at
 the domain layer. Stale entry removed.
+
+**BOLA-shipments** ✅ Closed (Sprint 10) — `GET /orders/{id}/shipments` now enforces
+ownership via `OrderService.find_order_for_customer()` before any shipment query.
+Non-owner, non-existent order, and no-shipment-yet all return identical 404 responses —
+no resource enumeration. Proof: `tests/security/test_shipment_bola.py` (4 tests).
+All BOLA surfaces are now closed. `test_open_surfaces.py` xfail witness removed.
 
 ---
 
@@ -355,6 +402,7 @@ the domain layer. Stale entry removed.
 | Return 403 on non-owned resources | 403 confirms existence (oracle attack). Always 404 (Law 5). |
 | Let secrets reach the domain package or the logs | Law 2 — both faces, both tested |
 | Fall back silently when Redis is absent in production | Fail-closed at boot (Law 3) |
+| Use a log-only stub for refunds in production | `LogRefundGateway` caught by type check at lifespan (Law 7) |
 | Merge an unclassified route | Laws 1/3 registry scan — CI-fatal |
 | Call the ERP from request path | Events via Outbox; internal endpoints are worker-to-ERP only |
 | Issue long-lived API keys to customers | Short-lived JWTs; refresh token in v1.5 |
@@ -390,9 +438,10 @@ the domain layer. Stale entry removed.
 | Law 5 BOLA (domain) | `packages/domain/tests/reservation/test_bola.py` | 6 | Ownership in service layer; `None → 404`; `customer_ref=None` denied |
 | Law 5 BOLA (API) | `tests/security/test_payment_bola.py` | 4 | Payment respects reservation ownership |
 | Law 6 (sig before domain) | `tests/security/test_webhook_signature.py` | 4 | Forged payload does not reach domain service |
-| Open surfaces (xfail witnesses) | `tests/security/test_open_surfaces.py` | 1 | Known gaps — `XPASS` = gap closed without updating docs → CI fails |
+| Law 7 (financial adapter boot guard) | `tests/security/test_refund_gateway_boot.py` | 15 | GW1–GW7: production rejects any NonProductionFinancialAdapter; dev/test permits with WARNING |
+| Law 5 BOLA (shipments) | `tests/security/test_shipment_bola.py` | 4 | Wrong customer → 404; unauthenticated → 404; ownership delegates to domain; owner proceeds past check |
 
-**Total: 104 security tests across 10 files.**  
+**Total: 123 security tests across 12 files.**  
 All run in the standard CI pipeline.
 No mocking of auth or signature verification — only business-layer dependencies are stubbed.
 
