@@ -9,6 +9,7 @@ export interface SiteHeaderProps {
   onCatalog?(): void
   onAbout?(): void
   onTrack?(): void
+  onSearch?(): void
   active?: ActivePage
   /** true when GoldLiveBar is visible; shifts header down from top-10 to top-20 */
   hasBanner?: boolean
@@ -47,6 +48,7 @@ export function SiteHeader({
   onCatalog,
   onAbout,
   onTrack,
+  onSearch,
   active,
   hasBanner = false,
 }: SiteHeaderProps) {
@@ -70,7 +72,7 @@ export function SiteHeader({
         </nav>
 
         <div className="mr-auto md:mr-0 flex items-center gap-3">
-          <button className="hidden md:flex text-muted p-1" aria-label={COPY.nav.search}>
+          <button className="hidden md:flex text-muted p-1" aria-label={COPY.nav.search} onClick={onSearch}>
             <Search size={17} />
           </button>
           <button className="flex md:hidden text-muted p-1" aria-label={COPY.nav.menu}>

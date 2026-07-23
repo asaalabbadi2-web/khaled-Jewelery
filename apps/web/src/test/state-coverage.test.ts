@@ -6,8 +6,10 @@
 import { describe, it, expect } from 'vitest'
 
 // Registry: [component, state, storyExportName]
-// 34 entries covering GoldPriceStatus(3) + ItemAvailability(3) + PricingState(13)
-// + OrderStatus(5) + ReservationStrip timer states(3) + SiteHeader nav(4) + SiteFooter(1) + OtpInput(1) + ProductCard skeleton(1)
+// 44 entries covering GoldPriceStatus(3) + ItemAvailability(3) + PricingState(14)
+// + OrderStatus(5) + ReservationStrip timer states(3) + BrowsingReservationStrip(2)
+// + SiteHeader nav(4) + SiteFooter(1) + OtpInput(1) + ProductCard skeleton(1)
+// + PosAvailabilityGate Gate B states(6)
 const STATE_STORY_REGISTRY: Array<[string, string, string]> = [
   // GoldPriceStatus (3/3)
   ['GoldLiveBar', 'FRESH',  'Fresh'],
@@ -20,8 +22,9 @@ const STATE_STORY_REGISTRY: Array<[string, string, string]> = [
   ['ProductCard', 'SOLD',      'Sold'],
   ['ProductCard', 'SKELETON',  'Skeleton'],
 
-  // PricingState (13/13 — composite of ItemAvailability + ReservationStatus + PaymentStatus + GoldPriceStatus)
+  // PricingState (14/14 — composite of ItemAvailability + ReservationStatus + PaymentStatus + GoldPriceStatus)
   ['PricingCard', 'DEFAULT',           'Default'],
+  ['PricingCard', 'RESERVE_CAP',       'ReserveCap'],
   ['PricingCard', 'RESERVED',          'Reserved'],
   ['PricingCard', 'EXPIRED',           'Expired'],
   ['PricingCard', 'STALE',             'Stale'],
@@ -43,9 +46,13 @@ const STATE_STORY_REGISTRY: Array<[string, string, string]> = [
   ['OrderTimeline', 'CANCELLED',        'Cancelled'],
 
   // ReservationStrip timer states (maps to ReservationStatus.ACTIVE + CONFIRMED)
-  ['ReservationStrip', 'ACTIVE',     'Normal'],
-  ['ReservationStrip', 'URGENT',     'Urgent'],
-  ['ReservationStrip', 'CONFIRMED',  'Frozen'],
+  ['ReservationStrip',         'ACTIVE',    'Normal'],
+  ['ReservationStrip',         'URGENT',    'Urgent'],
+  ['ReservationStrip',         'CONFIRMED', 'Frozen'],
+
+  // BrowsingReservationStrip — Phase-2-ready strip shown on all browsing pages
+  ['BrowsingReservationStrip', 'ACTIVE',    'Active'],
+  ['BrowsingReservationStrip', 'URGENT',    'Urgent'],
 
   // SiteHeader navigation states (not domain-enum but observable UI states)
   ['SiteHeader', 'DEFAULT',        'Default'],
@@ -56,6 +63,14 @@ const STATE_STORY_REGISTRY: Array<[string, string, string]> = [
   // SiteFooter + OtpInput (static render, one state each)
   ['SiteFooter', 'DEFAULT', 'Default'],
   ['OtpInput',   'DEFAULT', 'Default'],
+
+  // PosAvailabilityGate — Gate B Frontend (6 states)
+  ['PosAvailabilityGate', 'IDLE',        'Idle'],
+  ['PosAvailabilityGate', 'CHECKING',    'Checking'],
+  ['PosAvailabilityGate', 'AVAILABLE',   'Available'],
+  ['PosAvailabilityGate', 'RESERVED',    'Reserved'],
+  ['PosAvailabilityGate', 'TIMEOUT',     'Timeout'],
+  ['PosAvailabilityGate', 'UNREACHABLE', 'Unreachable'],
 ]
 
 describe('State coverage', () => {
@@ -66,29 +81,35 @@ describe('State coverage', () => {
       pricingCardStories,
       orderTimelineStories,
       reservationStripStories,
+      browsingReservationStripStories,
       siteHeaderStories,
       siteFooterStories,
       otpInputStories,
+      posAvailabilityGateStories,
     ] = await Promise.all([
       import('../components/GoldLiveBar.stories'),
       import('../components/product/ProductCard.stories'),
       import('../components/pricing/PricingCard.stories'),
       import('../components/checkout/OrderTimeline.stories'),
       import('../components/checkout/ReservationStrip.stories'),
+      import('../components/checkout/BrowsingReservationStrip.stories'),
       import('../components/SiteHeader.stories'),
       import('../components/SiteFooter.stories'),
       import('../components/tracking/OtpInput.stories'),
+      import('../components/pos/PosAvailabilityGate.stories'),
     ])
 
     const moduleMap: Record<string, Record<string, unknown>> = {
-      GoldLiveBar:      goldLiveBarStories,
-      ProductCard:      productCardStories,
-      PricingCard:      pricingCardStories,
-      OrderTimeline:    orderTimelineStories,
-      ReservationStrip: reservationStripStories,
-      SiteHeader:       siteHeaderStories,
-      SiteFooter:       siteFooterStories,
-      OtpInput:         otpInputStories,
+      GoldLiveBar:               goldLiveBarStories,
+      ProductCard:               productCardStories,
+      PricingCard:               pricingCardStories,
+      OrderTimeline:             orderTimelineStories,
+      ReservationStrip:          reservationStripStories,
+      BrowsingReservationStrip:  browsingReservationStripStories,
+      SiteHeader:                siteHeaderStories,
+      SiteFooter:                siteFooterStories,
+      OtpInput:                  otpInputStories,
+      PosAvailabilityGate:       posAvailabilityGateStories,
     }
 
     const missing: string[] = []

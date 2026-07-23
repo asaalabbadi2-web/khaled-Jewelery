@@ -30,14 +30,34 @@ async function apiFetch<T>(
 }
 
 export interface GoldRates {
-  karat24: number
-  karat21: number
-  karat18: number
+  karat24:   number
+  karat21:   number
+  karat18:   number
   updatedAt: string
+  /** Current server timestamp — use with syncServerClock() for FC-2 compliance. */
+  serverNow: string
 }
 
 export const goldApi = {
   getRates: () => apiFetch<GoldRates>('/catalog/gold-price'),
+}
+
+export interface CatalogItem {
+  id:           string
+  slug:         string
+  name:         string
+  karat:        18 | 21 | 24
+  weight:       number
+  price:        number
+  availability: string
+  img:          string
+}
+
+export const catalogApi = {
+  search: (q: string) =>
+    apiFetch<{ items: CatalogItem[]; total: number }>(
+      q ? `/catalog/items?q=${encodeURIComponent(q)}` : '/catalog/items',
+    ),
 }
 
 export interface ReservationResponse {
@@ -46,12 +66,24 @@ export interface ReservationResponse {
   expiresAt:     string
 }
 
+export interface ReservationRecord {
+  reservationId: string
+  itemId:        string
+  itemName:      string
+  lockedPrice:   number
+  expiresAt:     string
+  img:           string
+  breakdown:     Array<{ label: string; value: string }>
+}
+
 export const reservationApi = {
   create: (itemId: string) =>
     apiFetch<ReservationResponse>('/reservations', {
       method: 'POST',
       body:   JSON.stringify({ itemId }),
     }),
+  get: (rid: string) =>
+    apiFetch<ReservationRecord>(`/reservations/${rid}`),
 }
 
 export interface SendOtpResponse {
@@ -64,6 +96,8 @@ export interface VerifyOtpResponse {
   status:         string
   steps:          Array<{ label: string; done: boolean; active: boolean }>
   carrierTrackNo: string
+  itemName:       string
+  itemCode:       string
 }
 
 export const trackingApi = {
@@ -77,4 +111,20 @@ export const trackingApi = {
       method: 'POST',
       body:   JSON.stringify({ orderNumber, code }),
     }),
+}
+
+// ── Gate B: POS item availability ────────────────────────────────────────────
+// Consumed by PosAvailabilityGateConnected (Gate B Frontend) and by the ERP
+// backend (Gate B Backend, via services/commerce_availability.py).
+// Scope: public / catalog-read — no auth required.
+
+export interface ItemAvailabilityResponse {
+  available:      boolean
+  reserved_until: string | null
+  reservation_id: string | null
+}
+
+export const availabilityApi = {
+  check: (itemId: number) =>
+    apiFetch<ItemAvailabilityResponse>(`/catalog/items/${itemId}/availability`),
 }

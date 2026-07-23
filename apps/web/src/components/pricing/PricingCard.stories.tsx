@@ -3,6 +3,7 @@ import { PricingCard } from './PricingCard'
 
 // STATE_STORY_REGISTRY: PricingCard
 // DEFAULT           → covered (price visible, reserve CTA, gold breakdown)
+// RESERVE_CAP       → covered (cap-hit warning banner above DEFAULT reserve CTA — v1.2 single-cap)
 // RESERVED          → covered (lock badge, countdown, checkout CTA)
 // EXPIRED           → covered (old/new price comparison, reserve-new CTA)
 // STALE             → covered (dimmed price, amber pulse, disabled CTA)
@@ -55,6 +56,14 @@ type Story = StoryObj<typeof PricingCard>
 
 export const Default: Story = {
   args: { state: 'DEFAULT' },
+}
+
+export const ReserveCap: Story = {
+  name: 'ReserveCap',
+  args: {
+    state: 'DEFAULT',
+    reserveCapMsg: 'لديك قطعة محجوزة بالفعل — أكمل دفعها أو ألغِ حجزها أولًا',
+  },
 }
 
 export const Reserved: Story = {

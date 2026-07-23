@@ -1,3 +1,5 @@
+'use client'
+
 import { COPY } from '@/lib/contract-copy'
 import { Button } from '@/components/ui'
 
@@ -17,6 +19,8 @@ export interface PriceActionsProps {
   onReserveNew?(): void
   onCheckout?(): void
   onBrowse?(): void
+  /** v1.2: returns to catalog with strip visible; Phase 2: opens basket */
+  onAddAnother?(): void
 }
 
 export function PriceActions({
@@ -26,6 +30,7 @@ export function PriceActions({
   onReserveNew,
   onCheckout,
   onBrowse,
+  onAddAnother,
 }: PriceActionsProps) {
   if (variant === 'reserve') {
     return (
@@ -46,6 +51,16 @@ export function PriceActions({
         <Button variant="bronze" className="w-full mb-3" onClick={onCheckout}>
           {COPY.pricing.checkoutCta}
         </Button>
+        {onAddAnother && (
+          <div className="text-center mb-2">
+            <button
+              onClick={onAddAnother}
+              className="text-muted text-xs underline underline-offset-2 hover:text-charcoal transition-colors"
+            >
+              {COPY.product.addAnother}
+            </button>
+          </div>
+        )}
         <div className="text-center mb-3">
           <button
             onClick={onCancel}

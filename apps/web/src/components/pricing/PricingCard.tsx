@@ -33,6 +33,10 @@ export interface PricingCardProps {
   onReserveNew?(): void
   onCheckout?(): void
   onBrowse?(): void
+  /** v1.2 cap enforcement: shown above reserve button when another reservation is already active */
+  reserveCapMsg?: string
+  /** v1.2: returns to catalog with strip visible; Phase 2: opens basket */
+  onAddAnother?(): void
   /** Live gold price status from context — feeds LiveStatus in DEFAULT branch (FC-6) */
   goldStatus?: GoldPriceStatus
 }
@@ -59,6 +63,8 @@ export function PricingCard({
   onReserveNew,
   onCheckout,
   onBrowse,
+  reserveCapMsg,
+  onAddAnother,
   goldStatus = GoldPriceStatus.FRESH,
 }: PricingCardProps) {
   const border: CardBorder =
@@ -105,6 +111,14 @@ export function PricingCard({
         <PriceHeader price={price} />
         {breakdownItems.length > 0 && <GoldBreakdown items={breakdownItems} />}
         <LiveStatus status={goldStatus} ageSeconds={ageSeconds} />
+        {reserveCapMsg && (
+          <div
+            role="alert"
+            className="rounded-sm bg-warning/[0.07] border border-warning/25 px-3 py-2.5 mb-4 text-xs text-warning leading-relaxed"
+          >
+            {reserveCapMsg}
+          </div>
+        )}
         <PriceActions variant="reserve" onReserve={onReserve} />
       </div>
     )
@@ -128,7 +142,7 @@ export function PricingCard({
           <span className="text-muted text-xs">{COPY.pricing.priceLocked}</span>
         </div>
         <CountdownBlock ms={ms} reservationMs={RESERVATION_MS} />
-        <PriceActions variant="checkout" onCheckout={onCheckout} onCancel={onCancel} />
+        <PriceActions variant="checkout" onCheckout={onCheckout} onCancel={onCancel} onAddAnother={onAddAnother} />
       </div>
     )
   }

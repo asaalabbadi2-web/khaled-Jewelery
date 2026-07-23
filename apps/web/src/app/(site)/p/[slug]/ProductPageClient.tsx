@@ -3,19 +3,20 @@
 /**
  * Owns the PricingCard state machine for the product page.
  * Reads goldStatus + age from GoldPriceContext (single source, FC-6).
- * Contract:
- *   - FRESH  → reserve button active → POST /reservations → RESERVED
- *   - STALE  → button disabled, stale copy shown
- *   - HALTED → button disabled, halted copy shown
- * No state in which the button looks active and does nothing (P0.1).
- * RESERVED «إتمام الدفع» navigates to /checkout with reservation params (P0.5).
+ * Reads/writes ReservationContext so the BrowsingStripIsland knows when a
+ * reservation is active across client-side navigation.
+ *
+ * v1.2 cap: at most 1 active reservation per session (ADR-022 R4 with cap=1).
+ * Phase 2 will raise the cap to 3 via config — no code change here.
  */
 import { useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useGoldPrice } from '@/lib/gold-price-context'
+import { useReservation } from '@/lib/reservation-context'
 import { GoldPriceStatus } from '@/lib/domain-states'
 import { reservationApi } from '@/lib/api'
 import { serverNow } from '@/lib/server-clock'
+import { COPY } from '@/lib/contract-copy'
 import { PricingCard, type PricingState } from '@/components/pricing'
 import type { BreakdownLine } from '@/components/pricing/GoldBreakdown'
 
@@ -34,7 +35,9 @@ type ReservationSlot =
 export function ProductPageClient({ itemId, itemName, price, breakdownItems }: Props) {
   const router = useRouter()
   const { age, status } = useGoldPrice()
-  const [slot, setSlot] = useState<ReservationSlot>({ phase: 'idle' })
+  const { reservations, addReservation, removeReservation } = useReservation()
+  const [slot,   setSlot]   = useState<ReservationSlot>({ phase: 'idle' })
+  const [capHit, setCapHit] = useState(false)
 
   const pricingState: PricingState =
     slot.phase === 'reserved' ? 'RESERVED'  :
@@ -45,33 +48,46 @@ export function ProductPageClient({ itemId, itemName, price, breakdownItems }: P
 
   const handleReserve = useCallback(async () => {
     if (status !== GoldPriceStatus.FRESH) return
+    // v1.2 cap = 1 active reservation (ADR-022 R4)
+    if (reservations.length > 0) {
+      setCapHit(true)
+      return
+    }
+    setCapHit(false)
     try {
       const res = await reservationApi.create(itemId)
+      addReservation({ reservationId: res.reservationId, expiresAt: res.expiresAt })
       setSlot({
         phase: 'reserved',
         reservationId: res.reservationId,
-        lockedPrice: res.lockedPrice,
-        expiresAt: res.expiresAt,
+        lockedPrice:   res.lockedPrice,
+        expiresAt:     res.expiresAt,
       })
     } catch {
       // Race conflict or item unavailable — stay on DEFAULT so user sees fresh state
     }
-  }, [itemId, status])
+  }, [itemId, status, reservations, addReservation])
 
   const handleCancel = useCallback(() => {
+    if (slot.phase === 'reserved') removeReservation(slot.reservationId)
     setSlot({ phase: 'idle' })
-  }, [])
+    setCapHit(false)
+  }, [slot, removeReservation])
+
+  const handleReserveNew = useCallback(() => {
+    if (slot.phase === 'reserved') removeReservation(slot.reservationId)
+    setSlot({ phase: 'idle' })
+    setCapHit(false)
+  }, [slot, removeReservation])
 
   const handleCheckout = useCallback(() => {
     if (slot.phase !== 'reserved') return
-    const params = new URLSearchParams({
-      rid:       slot.reservationId,
-      price:     String(slot.lockedPrice),
-      expiresAt: slot.expiresAt,
-      name:      itemName,
-    })
-    router.push(`/checkout?${params.toString()}`)
-  }, [slot, router, itemName])
+    router.push(`/checkout?rid=${slot.reservationId}`)
+  }, [slot, router])
+
+  const handleAddAnother = useCallback(() => {
+    router.push('/jewellery/rings')
+  }, [router])
 
   const displayPrice = slot.phase === 'reserved' ? slot.lockedPrice : price
   const ms = slot.phase === 'reserved'
@@ -86,10 +102,12 @@ export function ProductPageClient({ itemId, itemName, price, breakdownItems }: P
       goldStatus={status}
       ageSeconds={age}
       breakdownItems={breakdownItems}
+      reserveCapMsg={capHit ? COPY.product.singleCapMsg : undefined}
       onReserve={handleReserve}
       onCancel={handleCancel}
+      onReserveNew={handleReserveNew}
       onCheckout={handleCheckout}
-      onReserveNew={() => setSlot({ phase: 'idle' })}
+      onAddAnother={handleAddAnother}
     />
   )
 }

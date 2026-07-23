@@ -12,7 +12,7 @@ type TrackPhase =
   | { step: 'ENTRY' }
   | { step: 'OTP_SENT';  maskedPhone: string; orderNumber: string }
   | { step: 'OTP_ERROR'; maskedPhone: string; orderNumber: string }
-  | { step: 'ORDER_ACTIVE'; orderId: string; steps: OrderTimelineStep[]; carrierTrackNo: string }
+  | { step: 'ORDER_ACTIVE'; orderId: string; steps: OrderTimelineStep[]; carrierTrackNo: string; itemName: string; itemCode: string }
 
 const COOLDOWN_SECS = 30
 
@@ -57,7 +57,7 @@ export function TrackPageClient() {
     setLoading(true)
     try {
       const res = await trackingApi.verifyOtp(ord, code)
-      setPhase({ step: 'ORDER_ACTIVE', orderId: res.orderId, steps: res.steps, carrierTrackNo: res.carrierTrackNo })
+      setPhase({ step: 'ORDER_ACTIVE', orderId: res.orderId, steps: res.steps, carrierTrackNo: res.carrierTrackNo, itemName: res.itemName, itemCode: res.itemCode })
     } catch (err) {
       if (err instanceof ApiError && err.status === 400) {
         setPhase({ step: 'OTP_ERROR', maskedPhone, orderNumber: ord })
@@ -93,6 +93,12 @@ export function TrackPageClient() {
     return (
       <div className="max-w-[40rem] mx-auto px-4 sm:px-6">
         <section className="border border-gold/20 bg-surface rounded-sm p-5 sm:p-6">
+          {/* Item identity — name + code from domain; never computed in UI */}
+          <div className="mb-5 pb-4 border-b border-gold/10">
+            <p className="text-charcoal font-semibold text-base leading-snug">{phase.itemName}</p>
+            <p className="text-muted text-xs tabular-nums mt-0.5" dir="ltr">{phase.itemCode}</p>
+          </div>
+
           <p className="text-muted text-xs mb-0.5">{COPY.tracking.orderNumberLabel}</p>
           <p className="text-charcoal font-semibold tabular-nums mb-6" dir="ltr">
             {phase.orderId}

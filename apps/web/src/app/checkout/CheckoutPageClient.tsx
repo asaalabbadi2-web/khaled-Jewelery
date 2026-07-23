@@ -4,12 +4,14 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useSearchParams } from 'next/navigation'
 import { Lock, CheckCircle } from 'lucide-react'
+import { ImageWithFallback } from '@/components/ui/ImageWithFallback'
 import { ReservationStrip } from '@/components/checkout/ReservationStrip'
 import { OrderTimeline } from '@/components/checkout/OrderTimeline'
 import { COPY } from '@/lib/contract-copy'
 import { BRAND_NAME } from '@/lib/brand'
 import { pr } from '@/lib/format'
 import { RESERVATION_MS, serverNow } from '@/lib/server-clock'
+import { reservationApi, type ReservationRecord } from '@/lib/api'
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -50,18 +52,47 @@ function validateAddress(data: AddressData): FormErrors {
 
 // ─── Summary column ────────────────────────────────────────────────────────
 
-function CheckoutSummary({ name, price }: { name: string; price: number }) {
+function CheckoutSummary({ reservation }: { reservation: ReservationRecord }) {
   return (
     <aside className="bg-surface border border-gold/20 rounded-sm p-5 flex flex-col gap-4">
-      <p className="text-charcoal font-semibold text-sm">{name}</p>
-      <div className="border-t border-gold/10 pt-4 flex flex-col gap-2">
+      {/* Item identity */}
+      <div className="flex items-start gap-3">
+        <div className="w-14 h-14 shrink-0 rounded-sm overflow-hidden bg-image-bg">
+          <ImageWithFallback
+            src={reservation.img}
+            alt={reservation.itemName}
+            className="w-full h-full object-cover"
+          />
+        </div>
+        <div className="flex flex-col gap-0.5 pt-0.5">
+          <p className="text-charcoal font-semibold text-sm leading-snug">{reservation.itemName}</p>
+          <p className="text-muted text-xs leading-snug">
+            {COPY.checkout.summaryItemTag(reservation.itemId)}
+          </p>
+        </div>
+      </div>
+
+      {/* Price breakdown */}
+      <div className="border-t border-gold/10 pt-3 flex flex-col gap-1.5">
+        {reservation.breakdown.map(({ label, value }) => (
+          <div key={label} className="flex items-center justify-between gap-2">
+            <span className="text-muted text-xs">{label}</span>
+            <span dir="ltr" className="tabular-nums text-muted text-xs shrink-0">{value}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Locked total */}
+      <div className="border-t border-gold/10 pt-3 flex flex-col gap-1.5">
         <div className="flex items-center justify-between gap-2">
-          <span className="flex items-center gap-1 text-muted text-xs">
+          <span className="flex items-center gap-1 text-charcoal text-xs font-medium">
             <Lock size={11} className="text-gold" aria-hidden="true" />
             {COPY.checkout.lockedTotal}
           </span>
-          <span className="flex items-baseline gap-1">
-            <span dir="ltr" className="tabular-nums text-charcoal font-semibold">{pr(price)}</span>
+          <span className="flex items-baseline gap-1 shrink-0">
+            <span dir="ltr" className="tabular-nums text-charcoal font-semibold">
+              {pr(reservation.lockedPrice)}
+            </span>
             <span className="text-muted text-xs">{COPY.pricing.priceUnit}</span>
           </span>
         </div>
@@ -101,17 +132,29 @@ export function CheckoutPageClient() {
   const router       = useRouter()
   const searchParams = useSearchParams()
 
-  const expiresAt = searchParams.get('expiresAt') ?? ''
-  const price     = parseFloat(searchParams.get('price') ?? '0')
-  const itemName  = searchParams.get('name') ?? 'القطعة المحجوزة'
+  const rid = searchParams.get('rid') ?? ''
+
+  // Fetch reservation by rid — checkout never reads price/expiresAt/name from URL (CRIT-2)
+  const [reservation, setReservation] = useState<ReservationRecord | null>(null)
+  const [loadError,   setLoadError]   = useState(false)
+  useEffect(() => {
+    if (!rid) { setLoadError(true); return }
+    reservationApi.get(rid)
+      .then(setReservation)
+      .catch(() => setLoadError(true))
+  }, [rid])
+
+  const expiresAt = reservation?.expiresAt   ?? ''
+  const price     = reservation?.lockedPrice ?? 0
+  const itemName  = reservation?.itemName    ?? ''
 
   // Local countdown — no GoldPriceProvider needed (price is locked)
-  const [ms, setMs] = useState(() =>
-    expiresAt ? Math.max(0, new Date(expiresAt).getTime() - serverNow()) : 0
-  )
+  const [ms, setMs] = useState(0)
   useEffect(() => {
+    if (!expiresAt) return
+    setMs(Math.max(0, new Date(expiresAt).getTime() - serverNow()))
     const id = window.setInterval(
-      () => setMs(expiresAt ? Math.max(0, new Date(expiresAt).getTime() - serverNow()) : 0),
+      () => setMs(Math.max(0, new Date(expiresAt).getTime() - serverNow())),
       500,
     )
     return () => window.clearInterval(id)
@@ -123,12 +166,24 @@ export function CheckoutPageClient() {
   const [touched, setTouched] = useState<Set<keyof AddressData>>(new Set())
   const formRef = useRef<HTMLFormElement>(null)
 
-  // EXPIRED transition — fires once when ms hits 0 during ADDRESS or PAYMENT steps
+  // EXPIRED transition — scheduled once when reservation loads; no dependency on ms state.
+  // Uses functional setPhase so the stale phase.step is never captured.
   useEffect(() => {
-    if (ms === 0 && (phase.step === 'ADDRESS' || phase.step === 'PAYMENT')) {
-      setPhase({ step: 'EXPIRED' })
+    if (!reservation) return
+    const remaining = new Date(reservation.expiresAt).getTime() - serverNow()
+    if (remaining <= 0) {
+      setPhase(prev =>
+        prev.step === 'ADDRESS' || prev.step === 'PAYMENT' ? { step: 'EXPIRED' } : prev,
+      )
+      return
     }
-  }, [ms, phase.step])
+    const id = setTimeout(() => {
+      setPhase(prev =>
+        prev.step === 'ADDRESS' || prev.step === 'PAYMENT' ? { step: 'EXPIRED' } : prev,
+      )
+    }, remaining)
+    return () => clearTimeout(id)
+  }, [reservation])
 
   const handleBlur = useCallback((field: keyof AddressData) => {
     setTouched(prev => new Set(prev).add(field))
@@ -192,6 +247,36 @@ export function CheckoutPageClient() {
 
   // Content top padding: header(40px) + strip(45px) = 85px when strip shows; 40px otherwise
   const ptClass = isActive ? 'pt-[85px]' : 'pt-[52px]'
+
+  // ─── LOADING / ERROR ─────────────────────────────────────────────────────
+
+  if (!reservation && !loadError) {
+    return (
+      <>
+        {header}
+        <div className="pt-[52px] min-h-screen flex items-center justify-center">
+          <div className="w-8 h-8 rounded-full border-2 border-gold/20 border-t-gold animate-spin" aria-hidden="true" />
+        </div>
+      </>
+    )
+  }
+
+  if (loadError) {
+    return (
+      <>
+        {header}
+        <div className="pt-[52px] min-h-screen flex flex-col items-center justify-center px-4 gap-4">
+          <p className="text-muted text-sm text-center">{COPY.checkout.reservationNotFound}</p>
+          <button
+            onClick={() => router.back()}
+            className="text-muted text-xs underline hover:text-charcoal"
+          >
+            {COPY.checkout.expiredBackCta}
+          </button>
+        </div>
+      </>
+    )
+  }
 
   // ─── REDIRECTING ─────────────────────────────────────────────────────────
 
@@ -513,9 +598,9 @@ export function CheckoutPageClient() {
           {phase.step === 'ADDRESS' && step1Content}
           {phase.step === 'PAYMENT' && step2Content}
 
-          {/* Right: summary (steps 1 + 2 only) */}
-          {showSummary && (
-            <CheckoutSummary name={itemName} price={price} />
+          {/* Right: summary (steps 1 + 2 only) — reservation is always non-null here */}
+          {showSummary && reservation && (
+            <CheckoutSummary reservation={reservation} />
           )}
         </div>
       </div>

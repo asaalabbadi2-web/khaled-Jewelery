@@ -29,9 +29,7 @@ const meta: Meta<typeof ProductCard> = {
       </div>
     ),
   ],
-  args: {
-    onView: () => {},
-  },
+  args: {},
 }
 export default meta
 

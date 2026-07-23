@@ -40,6 +40,16 @@ export const COPY = {
     menu:      'القائمة',
   },
 
+  // ─── Search overlay ──────────────────────────────────────────
+  search: {
+    overlayLabel:     'نافذة البحث',
+    inputPlaceholder: 'ابحث عن قطعة...',
+    closeLabel:       'إغلاق البحث',
+    resultsLabel:     'نتائج البحث',
+    noResults:        'لا نتائج مطابقة',
+    currencySuffix:   'ر.س',
+  },
+
   // ─── SiteFooter ─────────────────────────────────────────────
   footer: {
     priceNote: 'الأسعار تُحدَّث آليًا من سوق الذهب',
@@ -105,6 +115,14 @@ export const COPY = {
     frozen:  'مجمّد',
   },
 
+  // ─── BrowsingReservationStrip (browsing pages, Phase-2 ready) ─
+  browsingStrip: {
+    ariaLabel:    'شريط الحجز أثناء التصفح',
+    single:       'قطعتك محجوزة — الوقت المتبقي لإتمام الدفع',
+    multi:        (n: number) => `${n} قطع محجوزة — أقرب مهلة تنتهي خلال`,
+    checkoutLink: 'إتمام الدفع',
+  },
+
   // ─── Checkout ────────────────────────────────────────────────
   checkout: {
     securePayment:     'دفع آمن',
@@ -156,8 +174,10 @@ export const COPY = {
     errorRequired:     'هذا الحقل مطلوب',
     errorPhone:        'أدخل رقم جوال سعودي (05xxxxxxxx)',
     addressSectionTitle: 'تفاصيل التوصيل',
-    orderIdLabel:      'رقم طلبك',
-    successOrderId:    'ORD-5511',
+    orderIdLabel:         'رقم طلبك',
+    successOrderId:       'ORD-5511',
+    reservationNotFound:  'الحجز غير موجود أو انتهت صلاحيته',
+    summaryItemTag:       (id: string) => `${id} · قطعة واحدة فريدة`,
   },
 
   // ─── Tracking ────────────────────────────────────────────────
@@ -233,6 +253,11 @@ export const COPY = {
     resultsCount:       (n: number) => `${n} قطعة`,
     sortLabel:          'الترتيب',
     filterCta:          (n: number) => `الفلاتر${n > 0 ? ` (${n})` : ''}`,
+    priceMinEdge:       '500 ر.س',
+    priceMaxEdge:       '20,000 ر.س',
+    priceRangeChip:     (lo: number, hi: number) =>
+      `${lo.toLocaleString('en')} – ${hi.toLocaleString('en')} ر.س`,
+    categoryGroupHint:  'استخدم القائمة للتنقل بين الفئات',
   },
 
   // ─── HomePage ────────────────────────────────────────────────
@@ -286,6 +311,8 @@ export const COPY = {
     trustShipping:    'شحن مؤمَّن',
     similarTitle:     'قطع مشابهة',
     thumbnailAlt:     (n: number) => `زاوية ${n}`,
+    addAnother:       'أضف قطعة أخرى قبل الدفع',
+    singleCapMsg:     'لديك قطعة محجوزة بالفعل — أكمل دفعها أو ألغِ حجزها أولًا',
   },
 
   // ─── ProductCard ────────────────────────────────────────────
@@ -333,7 +360,11 @@ export const COPY = {
       ],
     },
     terms: {
-      title:    'الشروط والأحكام',
+      title:            'الشروط والأحكام',
+      lastUpdatedLabel: 'آخر تحديث:',
+      lastUpdated:      '١ يناير ٢٠٢٦',
+      tocLabel:         'محتويات الصفحة',
+      priceLockIndex:   0,
       sections: [
         { heading: 'آلية السعر الحي',
           body: 'الأسعار المعروضة مشتقة من سعر صرف الذهب اللحظي وتتغير بشكل مستمر. السعر المثبَّت عند الحجز هو السعر النهائي للبيع — لا يتغير بعد انتهاء عملية الدفع.' },
@@ -362,6 +393,23 @@ export const COPY = {
     trackCta:  'تتبع طلبك',
     homeCta:   'الصفحة الرئيسية',
     notFoundGlyph: '◇',
+  },
+
+  // ─── POS — Gate B availability check ───────────────────────
+  // Operator-facing copy for the PosAvailabilityGate component.
+  // FC-5: every Arabic string lives here. Changing any string is a contract change.
+  pos: {
+    idle:          'اضغط "تحقق" للتأكد من توفر القطعة قبل البيع',
+    checking:      'جارٍ التحقق من التوفر…',
+    available:     'متاح — يمكن إتمام البيع',
+    reserved:      'محجوز أونلاين — البيع غير مسموح حتى ينتهي الحجز',
+    reservedUntil: (until: string) => `محجوز حتى: ${until}`,
+    timeout:       'تعذّر الوصول للخدمة — المتابعة مسموحة (فشل مفتوح)',
+    unreachable:   'الخدمة غير متاحة — المتابعة مسموحة (فشل مفتوح)',
+    checkCta:      'تحقق من التوفر',
+    retryCta:      'إعادة التحقق',
+    confirmCta:    'تأكيد البيع',
+    proceedCta:    'متابعة على أي حال',
   },
 
   // ─── Milestones (countdown ARIA) ────────────────────────────
