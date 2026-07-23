@@ -55,6 +55,10 @@ class _StubSession:
     committed: bool = False
 
     def execute(self, stmt: Any) -> Any:
+        # Route pos-claim queries to empty — no zombie claims in order-contract tests.
+        # The orphaned-claim check is tested separately in test_reconciliation_gap_injection.py.
+        if "pos_claims" in str(stmt).lower():
+            return _StubScalar([])
         return _StubScalar(self.rows)
 
     def add(self, obj: Any) -> None:

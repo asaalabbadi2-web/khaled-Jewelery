@@ -32,6 +32,7 @@ from sqlalchemy.pool import StaticPool
 import yasargold_commerce.infra.notification_orm  # noqa: F401
 import yasargold_commerce.infra.order_orm  # noqa: F401
 import yasargold_commerce.infra.payment_orm  # noqa: F401
+import yasargold_commerce.infra.pos_claim_orm  # noqa: F401
 import yasargold_commerce.infra.reconciliation_orm  # noqa: F401
 import yasargold_commerce.infra.reservation_orm  # noqa: F401
 import yasargold_commerce.infra.shipment_orm  # noqa: F401
@@ -39,6 +40,7 @@ import yasargold_commerce.models  # noqa: F401
 
 from yasargold_commerce.db import Base
 from yasargold_commerce.infra.order_orm import OrderRow
+from yasargold_commerce.infra.pos_claim_orm import PosClaimRow
 from yasargold_commerce.infra.reconciliation_orm import ReconciliationFindingRow
 from yasargold_commerce.metrics import RECONCILIATION_GAPS
 from yasargold_commerce.workers.reconciliation_worker import ReconciliationWorker
@@ -320,3 +322,137 @@ class TestStepBMixedOrders:
         assert result[0].order_id == _ORDER_ID
         assert _count_findings(SessionLocal, _ORDER_ID) == 1
         assert _count_findings(SessionLocal, _ORDER_ID_2) == 0
+
+
+# ---------------------------------------------------------------------------
+# Step C — Orphaned pos-claim gap injection (F1)
+# ---------------------------------------------------------------------------
+
+_ZOMBIE_CLAIM_ID  = "CLM-orphan-reconcile-001"
+_ZOMBIE_ITEM_ID   = 77
+
+
+def _seed_zombie_claim(
+    session_factory,
+    claim_id: str = _ZOMBIE_CLAIM_ID,
+    item_id: int  = _ZOMBIE_ITEM_ID,
+) -> None:
+    """Seed a zombie ACTIVE pos_claim: TTL expired, never confirmed."""
+    now = datetime.now(timezone.utc)
+    session = session_factory()
+    try:
+        session.add(PosClaimRow(
+            id=claim_id,
+            item_id=item_id,
+            claimed_at=now - timedelta(minutes=10),
+            expires_at=now - timedelta(minutes=9),   # expired 9 min ago (> 5 min grace)
+            status="ACTIVE",
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+
+class TestStepCOrphanedClaimGap:
+    """F1 — orphaned-claim detection proves the confirm-fail residual window is caught.
+
+    Scenario: ERP sale commits, ERP calls confirm_pos_claim, Commerce is unreachable
+    (network blip). The claim's TTL expires still ACTIVE. Item appears available online
+    even though it was sold. The reconciliation worker must detect this.
+
+    ADR-016 §N4 names this as the bounded residual window for INV-4 = ENFORCED.
+    """
+
+    def test_zombie_claim_with_erp_sale_inserts_finding_row(self, SessionLocal):
+        _seed_zombie_claim(SessionLocal)
+        worker = _make_worker(SessionLocal)
+
+        def _erp(url, **kwargs):
+            if "item-sale" in url:
+                return MagicMock(
+                    status_code=200,
+                    json=lambda: {"invoice_id": 55, "total": 4500.0},
+                )
+            return MagicMock(status_code=404)
+
+        with patch.object(httpx, "get", side_effect=_erp):
+            result = worker.run_once()
+
+        assert len(result) == 1
+        assert result[0].kind == "ORPHANED_CLAIM"
+        assert _count_findings(SessionLocal, _ZOMBIE_CLAIM_ID) == 1
+
+    def test_orphaned_claim_finding_is_open(self, SessionLocal):
+        _seed_zombie_claim(SessionLocal)
+        worker = _make_worker(SessionLocal)
+
+        with patch.object(httpx, "get", side_effect=lambda url, **kw: (
+            MagicMock(status_code=200, json=lambda: {"invoice_id": 55, "total": 4500.0})
+            if "item-sale" in url else MagicMock(status_code=404)
+        )):
+            worker.run_once()
+
+        row = _get_finding(SessionLocal, _ZOMBIE_CLAIM_ID)
+        assert row is not None
+        assert row.resolved_at is None
+
+    def test_zombie_claim_increments_prometheus_counter(self, SessionLocal):
+        _seed_zombie_claim(SessionLocal)
+        worker = _make_worker(SessionLocal)
+
+        before = RECONCILIATION_GAPS.labels(kind="ORPHANED_CLAIM")._value.get()
+
+        with patch.object(httpx, "get", side_effect=lambda url, **kw: (
+            MagicMock(status_code=200, json=lambda: {"invoice_id": 55, "total": 4500.0})
+            if "item-sale" in url else MagicMock(status_code=404)
+        )):
+            worker.run_once()
+
+        after = RECONCILIATION_GAPS.labels(kind="ORPHANED_CLAIM")._value.get()
+        assert after == before + 1
+
+    def test_zombie_claim_no_erp_sale_is_not_a_gap(self, SessionLocal):
+        """Clean natural expiry: claim expired, ERP has no sale → NOT a discrepancy."""
+        _seed_zombie_claim(SessionLocal)
+        worker = _make_worker(SessionLocal)
+
+        with patch.object(httpx, "get", return_value=MagicMock(status_code=404)):
+            result = worker.run_once()
+
+        assert result == []
+        assert _count_findings(SessionLocal, _ZOMBIE_CLAIM_ID) == 0
+
+    def test_recent_active_claim_within_grace_is_not_detected(self, SessionLocal):
+        """Claim expired 2 min ago (within 5 min grace) → not yet orphaned."""
+        now = datetime.now(timezone.utc)
+        session = SessionLocal()
+        try:
+            session.add(PosClaimRow(
+                id="CLM-fresh-orphan",
+                item_id=_ZOMBIE_ITEM_ID + 1,
+                claimed_at=now - timedelta(minutes=3),
+                expires_at=now - timedelta(minutes=2),   # expired, but within grace
+                status="ACTIVE",
+            ))
+            session.commit()
+        finally:
+            session.close()
+
+        worker = _make_worker(SessionLocal)
+        with patch.object(httpx, "get", return_value=MagicMock(
+            status_code=200, json=lambda: {"invoice_id": 99, "total": 1000.0}
+        )):
+            result = worker.run_once()
+
+        assert result == [], "Claim within 5 min grace must not be reported as orphaned"
+
+    def test_erp_unreachable_for_claim_is_not_a_gap(self, SessionLocal):
+        """ERP unreachable when checking a zombie claim → not confirmed as a gap."""
+        _seed_zombie_claim(SessionLocal)
+        worker = _make_worker(SessionLocal)
+
+        with patch.object(httpx, "get", side_effect=httpx.ConnectError("down")):
+            result = worker.run_once()
+
+        assert result == []
+        assert _count_findings(SessionLocal, _ZOMBIE_CLAIM_ID) == 0

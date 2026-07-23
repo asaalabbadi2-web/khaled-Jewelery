@@ -96,14 +96,28 @@ sale against the same item could succeed.
 The window is bounded in normal operation by the `erp_sync_lag` SLO.
 It is theoretically unbounded if ERPSyncWorker is down.
 
-**INV-4 status: MANAGED BY COMPENSATION + MEASURED SYNC — NOT CLOSED.**
+**INV-4 status: ENFORCED AT POS WITH BOUNDED FAIL-OPEN WINDOW.**
 
-Compensation path (unchanged from ADR-013): if a double-sale occurs, the
+Gate B is now implemented as a **service-level check inside the ERP POS sale
+route** (`backend/routes/invoices.py`), not a screen-level UI hint:
+
+- The check runs **before any DB write** (E4.0 invariant: read → if blocked, return
+  409 with zero writes; only then enter the write path).
+- Commerce API call is synchronous with a 2 s timeout.
+- **Fail-open** on timeout or unreachable: the sale is allowed to proceed + WARNING
+  logged + `gate_b_fail_open_total` counter incremented (observable).
+- Blocked response: `{"error": "item_reserved_online", "item_id": …, "reserved_until": …}` (409).
+
+**Trade-off accepted (Sprint 9 E4):** Fail-open preserves showroom availability
+at the cost of a race window during Commerce API downtime. This is the same
+risk category as the original Option B race window, but now bounded to the
+duration of Commerce API unavailability (which is measured and alerted on) rather
+than the ERPSyncWorker lag. Compensation path is unchanged.
+
+Compensation path: if a double-sale occurs during the fail-open window, the
 online order enters `REFUND_PENDING` and `RefundWorker` triggers a refund.
 The customer is compensated; the item is not shipped. This is a business
-failure, not a system failure — it has a defined resolution path. The goal
-of the sync SLO is to make the window small enough that this path is never
-needed in practice.
+failure, not a system failure — it has a defined resolution path.
 
 ### erp_sync_lag SLO
 
@@ -115,19 +129,270 @@ needed in practice.
 | Defined in | `apps/commerce-api/src/yasargold_commerce/metrics.py` |
 | Recorded in | `ERPSyncWorker._sync_event()` on each successful sync |
 
-### Gate B is Now the Sole Preventive Mechanism on the Showroom Side
+### Gate B — Service-Level Enforcement (E4, Sprint 9)
 
-Under Option A, the POS would have made a real-time check into online
-reservation state before each sale — a hard block. Under Option B, no such
-block exists. Gate B (POS UI consumes `GET /api/v1/items/{id}/availability`)
-is no longer an optional UX improvement — it is **the only mechanism that
-gives POS staff visibility into active online reservations before committing
-a showroom sale**.
+Gate B is **implemented** as `backend/services/commerce_availability.py` + injection
+in `backend/routes/invoices.py`. It is no longer a future pre-condition.
 
-Gate B is therefore a mandatory pre-condition for listing showroom-displayed
-items online. Before Gate B: only publish items *not physically present in
-the showroom* — INV-4 exposure is zero by definition. After Gate B: the POS
-visibility check is the human backstop.
+**Transaction boundary:** The check happens before `commission_amount = 0.0`, the
+earliest line that begins downstream processing. All Invoice and stock writes happen
+later. The 409 path writes zero rows — proven by `test_b2_reserved_item_zero_writes`.
+
+**Fail-open contract:** Commerce timeout ≤ 2 s → allowed + WARNING. Designed for
+showroom uptime: the showroom must not freeze because the online service is slow.
+The observable proxy is `gate_b_fail_open_total` (in-process counter until Prometheus
+is wired in M2.x).
+
+**Seam Ledger row 7** tracks this integration (pending → confirmed when E4 tests merge).
+
+Gate B is the sole preventive mechanism on the showroom side. The pre-condition
+for publishing showroom items online remains: Gate B must be active and the fail-open
+window must be within the accepted risk tolerance.
+
+### Gate B — Frontend Layer (Priority 2, Sprint 10)
+
+Gate B is now **complete end-to-end**: the POS UI checks Commerce availability
+before the operator can confirm a sale, providing early feedback without waiting
+for the backend 409.
+
+**Component:** `apps/web/src/components/pos/PosAvailabilityGate.tsx`
+
+**Flow:**
+```
+Operator selects item
+    ↓
+PosAvailabilityGateConnected auto-fetches GET /api/v1/catalog/items/{id}/availability
+    ↓
+Commerce evaluates online reservation state (read-only, no writes)
+    ↓
+POS renders domain state (AVAILABLE / RESERVED / TIMEOUT / UNREACHABLE)
+    ↓
+canProceed=false → sale blocked at UI level (confirm button absent)
+canProceed=true  → operator may confirm; backend Gate B is the defence-in-depth layer
+```
+
+**State machine:**
+
+| State | canProceed | Operator action |
+|-------|-----------|-----------------|
+| `IDLE` | false | Must trigger check first |
+| `CHECKING` | false | Check in flight |
+| `AVAILABLE` | true | "تأكيد البيع" button enabled |
+| `RESERVED` | false | Blocked; retry button only; shows reservedUntil |
+| `TIMEOUT` | true (fail-open) | Warning shown; proceed allowed |
+| `UNREACHABLE` | true (fail-open) | Warning shown; proceed allowed |
+
+**Fail-open policy:** Matches backend — timeout / unreachable → proceed with warning.
+Both layers implement the same policy; the UI fail-open is covered by F4/F5 tests.
+
+**Proof tests:** `apps/web/src/test/pos-availability.test.ts` (F1–F8):
+- F1 available item, F2/F3 reserved item, F4 timeout, F5 unreachable, F6 retry,
+  F7 zero-writes gate (`posCheckCanProceed` exhaustive across all states),
+  F8 UX messages (STATE_STORY_REGISTRY + 6 stories)
+
+**No cached availability:** The connected component auto-re-checks when `itemId`
+changes. Operators have a manual retry button in all non-idle states. The backend
+Gate B remains the write-time guard regardless of frontend state.
+
+**Operator retry:** Available in all states after the initial check (AVAILABLE,
+RESERVED, TIMEOUT, UNREACHABLE). Re-check calls Commerce fresh — no local caching.
+
+---
+
+## H-series Hardening — Gate B Timing Contract
+
+Four hardening items applied to the Gate B layers (Sprint 10 brief).
+
+---
+
+### H1 — TOCTOU Status: ENFORCED (T2.2 — 2026-07-23)
+
+**Status change:** INV-4 moved from MITIGATED to **ENFORCED** by Sprint 11 Track 2.2.
+
+**What changed:** `add_invoice()` in `backend/routes/invoices.py` now calls
+`request_pos_claim(item_id)` — from `backend/services/commerce_availability.py` —
+**before any `db.session` write** (replacing the old `check_item_online_reservation`
+read). Commerce receives the claim request, locks the item inside its own transaction,
+and either grants or denies atomically. The ERP writes the invoice only after the grant.
+
+**Design inversion achieved:**
+> POS was: **asks then writes** (read Commerce state, then commit ERP).
+> POS is now: **requests then writes** (claim Commerce lock, then commit ERP).
+
+This is "Reserve, not Add-to-Cart" applied to the showroom POS. The availability
+decision AND the lock live inside Commerce's own transaction boundary — the only
+architecture that is correct, because Commerce owns the reservation state.
+
+**Three-step ERP flow (T2.2):**
+1. `request_pos_claim(item_id)` — BEFORE any write. DENY → return 409, zero writes.
+2. Invoice + journal entry write (ERP transaction).
+3. On success: `_confirm_pos_claims_best_effort(claims)`. On failure: `finally` block
+   calls `_release_pos_claims_best_effort(claims)` — item freed immediately.
+
+**Fail-open preserved (H2):** Commerce API timeout → `PosClaimResult(fail_open=True)`
+→ sale proceeds + WARNING. The same H2 ceiling/circuit-breaker that existed for the
+old check remains in effect. The fail-open window reintroduces a brief TOCTOU risk,
+identical to pre-T2.2. This is the documented H2 trade-off.
+
+**INV-4 status: ENFORCED.**
+- Commerce holds the row lock inside its transaction for the duration of the ERP write.
+- V3.b: concurrent online reservation while a pos-claim is ACTIVE is rejected by
+  Commerce with 409 `ITEM_POS_CLAIMED` (proved by `TestV3MutualExclusion` in
+  `apps/commerce-api/tests/e2e/test_pos_claims.py`).
+- The ~100 ms TOCTOU window that existed under MITIGATED is closed.
+
+**Remaining work (N3):** The `get_fail_open_count()` compat-shim in
+`backend/services/commerce_availability.py` was kept for backward compatibility with
+two tests. Terminal action: migrate those tests to `get_timeout_count() +
+get_unreachable_count()` directly, then delete the shim.
+
+**Known Gap witness closed:** `TestHSeriesHardening::test_h1_toctou_window_exists`
+was xfail-strict (the machine guarded the debt). With T2.2 landed, it became
+`test_h1_toctou_closed_by_pos_claim_protocol` — a positive assertion proving
+`request_pos_claim` is called for the item before the invoice write. The machine
+did its job: stayed RED until the debt was paid, then cleared on landing.
+
+#### Residual Window N4 — Confirm-Fail → Orphaned Claim
+
+"INV-4 is ENFORCED" is true **at point-of-sale**. There is a narrower, bounded
+residual failure mode introduced by the best-effort confirm call:
+
+```
+ERP sale commits
+    ↓
+_confirm_pos_claims_best_effort() called — Commerce is unreachable
+    ↓
+confirm call fails silently (best-effort never raises)
+    ↓
+pos_claim stays ACTIVE with expires_at in the past (zombie)
+    ↓
+item appears available online until TTL sweeps it or reconciliation catches it
+```
+
+**Exposure duration:** TTL (default 30 s) + reconciliation interval (daily) = **≤ 24 hours**.
+During this window, the sold item may accept an online reservation. The customer
+cannot complete payment (the item's ERP stock is 0), so the reservation expires,
+but the item appears available in the catalogue.
+
+**Catch mechanism (F1):** `ReconciliationWorker._check_orphaned_pos_claims()` runs
+in the daily pass. It finds pos_claims where `status='ACTIVE' AND expires_at < now - 5 min`
+(zombie claims), calls `GET /api/internal/item-sale/{item_id}?after={claimed_at}` on the
+ERP to confirm a sale was committed, and if so writes an `ORPHANED_CLAIM` finding row
+to `reconciliation_findings`. Alert rule: `reconciliation_gaps_total{kind="ORPHANED_CLAIM"} > 0`
+→ open incident. Ops confirms the item is marked correctly in Commerce; no customer refund
+needed (the reservation expires before payment).
+
+**Why this does not downgrade ENFORCED:** The prior MITIGATED window was open-ended —
+a concurrent reservation could succeed AND the customer could pay AND the item would
+ship. Under ENFORCED the window is bounded to the TTL (items cannot be double-confirmed
+because the pos_claim blocks a new online reservation while ACTIVE), and the failure
+mode is detected and corrected within 24 hours. "ENFORCED" names the point-of-sale
+guarantee; N4 names its bounded residual.
+
+**Witness test (F1):** `TestStepCOrphanedClaimGap::test_zombie_claim_with_erp_sale_inserts_finding_row`
+in `apps/commerce-api/tests/contract/reconciliation/test_reconciliation_gap_injection.py`.
+
+**Remaining N4 terminal fix:** Replace best-effort confirm with an outbox event
+(`ClaimConfirmRequested`) so it survives network transients via at-least-once delivery —
+same pattern as `ERPSyncWorker`. Until then, N4 is a Known Gap entry.
+
+---
+
+### H2 — Fail-Open Ceiling: Circuit-Breaker Observable
+
+**Both layers fail-open** when Commerce is unreachable → combined effect is zero
+barriers during a Commerce outage. The fail-open ceiling makes this condition
+**observable and pageable** without changing fail-open behaviour (a killswitch
+requires explicit operator consent).
+
+**Policy:**
+- Sliding window: `GATE_B_WINDOW_SECONDS` (default 600 s / 10 min), configurable.
+- Ceiling: `GATE_B_CEILING` (default 10 events in window), configurable.
+- Action: when `events_in_window > FAIL_OPEN_CEILING`, emit **`CRITICAL`** log once
+  per crossing (suppressed while tripped; resets when window drops below ceiling).
+- CRITICAL message text: "FAIL-OPEN CEILING BREACHED — zero barriers against selling
+  online-reserved items. ACTION REQUIRED: verify Commerce API health."
+- Behaviour: showroom POS continues uninterrupted. The CRITICAL is the signal for
+  the on-call operator to decide whether to manually halt the online sales channel.
+
+**Alert rule (to be wired in M2.x monitoring):**
+`gate_b_ceiling_breached > 0` → page on-call (P1).
+
+**On-call response SLA:** P90 acknowledgement within **15 minutes** of the CRITICAL
+alert firing. This is the decision window: the operator reviews Commerce API health
+dashboards and decides whether to manually halt the online sales channel.
+
+**Maximum exposure during the decision window:**
+
+```
+max_unverified_pieces = online_published_inventory × (sell_rate_per_day × 15 min / 1440 min)
+```
+
+With the current inventory ceiling policy (only **non-showroom items** published
+online until Gate B is ENFORCED — see §Gate B — Service-Level Enforcement):
+- `online_published_inventory = 0` today → `max_exposure = 0 pieces` while the
+  ceiling policy holds.
+
+When the policy relaxes (a controlled rollout begins):
+- Assume an initial batch of N ≤ 10 items online, sell rate R ≤ 2 items/day.
+- `max_exposure = 10 × (2 × 15/1440) ≈ 0.21` → **less than 1 piece at risk**
+  during a 15-minute response window.
+- This is a measurable, bounded number — not "accepted risk" but **measured risk**.
+
+**Review trigger:** if `online_published_inventory` grows beyond 50 items or
+`sell_rate_per_day` exceeds 5, re-derive this calculation and raise it in the
+next security review. The formula above is the canonical reference.
+
+**Tests:** `test_h2_ceiling_emits_critical_when_breached`,
+`test_h2_below_ceiling_no_critical`, `test_h2_ceiling_suppresses_repeated_critical`.
+
+---
+
+### H3 — Distinct TIMEOUT vs UNREACHABLE Metrics
+
+Both `TIMEOUT` (Commerce did not respond within 2 s) and `UNREACHABLE` (Commerce
+connection failed) map to `canProceed=true` in the UX — correct fail-open behaviour.
+Their **causes differ** and carry different signals:
+
+| Event | Log key | Signal |
+|-------|---------|--------|
+| `requests.Timeout` | `gate_b_timeout_total` | Early degradation — Commerce is responding but slowly |
+| Any other exception | `gate_b_unreachable_total` | Hard failure — Commerce is down or network is cut |
+
+A rising `gate_b_timeout_total` without a matching rise in `gate_b_unreachable_total`
+is an early degradation signal (Commerce under load) that can be acted on before
+UNREACHABLE spikes. Merging them into one counter would mask this early warning.
+
+**Backward compatibility:** `get_fail_open_count()` returns
+`_timeout_count + _unreachable_count` (unchanged for existing callers).
+
+**Compat shim ledger (N3):**
+
+| Item | Value |
+|------|-------|
+| Function | `get_fail_open_count()` in `backend/services/commerce_availability.py` |
+| Status | **Compat shim** — kept for existing test callers only; no production callers |
+| Current callers | `TestCommerceAvailabilityService::test_fail_open_increments_counter` (line ~166) and `TestHSeriesHardening::test_h3_mixed_events_tracked_separately` (line ~478) in `backend/tests/test_pos_availability_check.py` |
+| Deletion trigger | When both callers above are migrated to call `get_timeout_count()` and `get_unreachable_count()` (or their sum) directly — at which point `get_fail_open_count()` has zero callers and can be deleted without a deprecation period |
+| Owner | Gate B maintainer — the next Sprint that touches `commerce_availability.py` must migrate these two test calls and delete the shim |
+
+**Tests:** `test_h3_timeout_increments_timeout_counter`,
+`test_h3_unreachable_increments_unreachable_counter`, `test_h3_mixed_events_tracked_separately`,
+`test_h3_separate_log_keys`.
+
+---
+
+### H4 — Timeout Budget: 5 s (frontend) vs 2 s (backend)
+
+Two different budgets for the same Gate B availability check — documented here and in code.
+
+| Layer | File | Budget | Rationale |
+|-------|------|--------|-----------|
+| Frontend UI | `apps/web/src/components/pos/PosAvailabilityGate.tsx` | **5 s** | Not on the write path. The Flask DB session is not open. A longer wait increases the chance of a definitive answer before falling back to fail-open. Operator sees a spinner, not a locked DB. |
+| Backend ERP | `backend/services/commerce_availability.py` | **2 s** | On the write path. Flask-SQLAlchemy autobegin means the DB session is active during the HTTP call. A 2 s timeout keeps session idle time bounded and prevents POS terminal freezes. |
+
+**Decision:** keep distinct budgets. They are different stakes, different callers,
+different constraints. The comment in each file cross-references this table.
 
 ---
 
@@ -230,5 +495,6 @@ Do not advance the item catalogue to showroom stock until Gate B is resolved.
 - ADR-013 — Sunset Clause (this ADR closes and renegotiates it)
 - ADR-014 — Notifications (same worker + outbox cursor pattern)
 - ADR-015 — Clock Protocol (applied in RefundWorker)
+- **ADR-023 M2.1** — the transitional state under Option B ends through Inventory extraction; M2.1 is the mechanism that closes INV-4 fully and retires the fail-open window of Gate B's service check
 - §4.6 Known Gaps — INV-4, SEC-003 entries
 - §10 Roadmap — Gate A/B status table
