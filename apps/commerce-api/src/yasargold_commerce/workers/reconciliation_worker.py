@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from yasargold_commerce.infra.order_orm import OrderRow
+from yasargold_commerce.infra.pos_claim_orm import PosClaimRow
 from yasargold_commerce.infra.reconciliation_orm import ReconciliationFindingRow
 from yasargold_commerce.metrics import RECONCILIATION_GAPS, RECONCILIATION_ORDERS_CHECKED
 
@@ -39,7 +40,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class Discrepancy:
     order_id: str
-    kind: str        # "MISSING_ERP_INVOICE" | "AMOUNT_MISMATCH"
+    kind: str        # "MISSING_ERP_INVOICE" | "AMOUNT_MISMATCH" | "ORPHANED_CLAIM"
     detail: str
 
 
@@ -70,21 +71,18 @@ class ReconciliationWorker:
 
     def run_once(self) -> list[Discrepancy]:
         """Run one reconciliation pass. Returns list of discrepancies found."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(timezone.utc)  # clock-guard: boundary
         since = now - timedelta(days=self._lookback_days)
 
         session: Session = self._factory()
         try:
+            # ── Order vs ERP invoice check ────────────────────────────────────
             rows = session.execute(
                 select(OrderRow)
                 .where(OrderRow.status == "PAID")
                 .where(OrderRow.created_at >= since)
                 .order_by(OrderRow.created_at)
             ).scalars().all()
-
-            if not rows:
-                log.info("reconciliation_worker: no PAID orders in lookback window")
-                return []
 
             RECONCILIATION_ORDERS_CHECKED.inc(len(rows))
 
@@ -94,6 +92,14 @@ class ReconciliationWorker:
                 if d is not None:
                     discrepancies.append(d)
 
+            # ── Orphaned pos-claim check (F1) ─────────────────────────────────
+            # Detect ACTIVE claims past TTL where the ERP committed a sale but
+            # the best-effort confirm call failed. The item appears available
+            # online even though it is sold. Caught here; daily alert fires.
+            claim_discrepancies = self._check_orphaned_pos_claims(session, now)
+            discrepancies.extend(claim_discrepancies)
+
+            # ── Persist all discrepancies ─────────────────────────────────────
             for d in discrepancies:
                 log.error(
                     "reconciliation_worker: %s order=%s — %s",
@@ -171,4 +177,72 @@ class ReconciliationWorker:
                 ),
             )
 
+        return None
+
+    def _check_orphaned_pos_claims(
+        self, session: Session, now: datetime
+    ) -> list[Discrepancy]:
+        """Detect zombie pos-claims: ACTIVE past TTL where ERP committed a sale.
+
+        A zombie claim means `confirm_pos_claim()` failed after the ERP invoice
+        committed. The claim TTL-expired still ACTIVE; the item now appears
+        available online even though it was sold. This is the residual F1 window
+        named in ADR-016 §N4.
+
+        Grace period (5 min) absorbs confirm-call latency and retry attempts
+        before we declare a claim orphaned.
+        """
+        grace = timedelta(minutes=5)
+        zombies = session.execute(
+            select(PosClaimRow)
+            .where(PosClaimRow.status == "ACTIVE")
+            .where(PosClaimRow.expires_at < now - grace)
+        ).scalars().all()
+
+        found: list[Discrepancy] = []
+        for claim in zombies:
+            d = self._check_pos_claim(claim)
+            if d is not None:
+                found.append(d)
+        return found
+
+    def _check_pos_claim(self, claim: PosClaimRow) -> Discrepancy | None:
+        """Ask ERP if a sale was committed for this item after the claim was made."""
+        url = f"{self._erp_base_url}/api/internal/item-sale/{claim.item_id}"
+        try:
+            resp = httpx.get(
+                url,
+                params={"after": claim.claimed_at.isoformat()},
+                headers={"X-Internal-Secret": self._secret},
+                timeout=self._timeout,
+            )
+        except Exception as exc:
+            log.warning(
+                "reconciliation_worker: ERP unreachable for claim=%s item=%d — %s",
+                claim.id, claim.item_id, exc,
+            )
+            return None  # Network issue — not a confirmed discrepancy.
+
+        if resp.status_code == 200:
+            data = resp.json()
+            return Discrepancy(
+                order_id=claim.id,  # claim_id stored in the shared entity-id column
+                kind="ORPHANED_CLAIM",
+                detail=(
+                    f"pos-claim {claim.id} for item {claim.item_id} expired without "
+                    f"CONFIRMED but ERP has a committed sale "
+                    f"(invoice_id={data.get('invoice_id')}, total={data.get('total')}). "
+                    f"Item may appear available online until this gap is resolved. "
+                    f"claimed_at={claim.claimed_at.isoformat()} "
+                    f"expires_at={claim.expires_at.isoformat()}"
+                ),
+            )
+
+        if resp.status_code == 404:
+            return None  # No ERP sale — clean natural expiry, not a gap.
+
+        log.warning(
+            "reconciliation_worker: unexpected ERP status %d for claim=%s item=%d",
+            resp.status_code, claim.id, claim.item_id,
+        )
         return None

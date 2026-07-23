@@ -141,8 +141,19 @@ class _StubDbSession:
 
     def execute(self, stmt: Any) -> _StubResult:
         from yasargold_commerce.models import Item, GoldPrice
-        # Detect which table is being queried by the entity in the statement
+        # Route by table name in the compiled SQL.
+        #
+        # TECH DEBT — LEDGER: this routing is substring-based and fragile.
+        # Any new query in reservations.py whose compiled SQL happens to contain
+        # "item" and not "gold_price" and not "pos_claims" will accidentally
+        # return the stub Item, causing a false 409 or silent wrong answer.
+        # Fix trigger: a third unexpected match (two have already occurred —
+        # the original Item/GoldPrice split, and the pos_claims addition above).
+        # Terminal fix: replace with a proper SQLAlchemy statement-type inspector
+        # that routes by the ORM entity, not by substring.
         compiled = str(stmt)
+        if "pos_claims" in compiled.lower():
+            return _StubResult(None)  # no active pos-claim in contract tests
         if "item" in compiled.lower() and "gold_price" not in compiled.lower():
             return _StubResult(self._item)
         return _StubResult(self._gold_price)

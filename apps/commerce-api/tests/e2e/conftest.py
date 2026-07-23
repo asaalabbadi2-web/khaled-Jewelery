@@ -37,6 +37,7 @@ from sqlalchemy.pool import StaticPool
 import yasargold_commerce.infra.notification_orm  # noqa: F401
 import yasargold_commerce.infra.order_orm  # noqa: F401
 import yasargold_commerce.infra.payment_orm  # noqa: F401
+import yasargold_commerce.infra.pos_claim_orm  # noqa: F401
 import yasargold_commerce.infra.reconciliation_orm  # noqa: F401
 import yasargold_commerce.infra.reservation_orm  # noqa: F401
 import yasargold_commerce.infra.shipment_orm  # noqa: F401
@@ -124,11 +125,15 @@ def seed_db(engine, SessionLocal):
     return {"item_id": 1, "item_code": E2E_ITEM_CODE}
 
 
+E2E_POS_SECRET = "e2e-pos-secret-not-for-production-use"
+
+
 @pytest.fixture(autouse=True)
 def set_env(monkeypatch):
     """Set required env vars for JWT and commerce API."""
     monkeypatch.setenv("JWT_SECRET_KEY", E2E_JWT_SECRET)
     monkeypatch.setenv("DATABASE_URL", "sqlite:///:memory:")  # satisfies import checks
+    monkeypatch.setenv("POS_API_SECRET", E2E_POS_SECRET)
 
 
 

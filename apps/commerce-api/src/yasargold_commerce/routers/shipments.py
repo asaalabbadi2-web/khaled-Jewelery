@@ -6,12 +6,19 @@ Endpoints:
     POST   /api/v1/shipments/{shipment_id}/void         void within void_window
     POST   /api/v1/shipments/{shipment_id}/deliver      mark delivered (webhook)
 
-SECURITY (v1.4 — Law 1 + Law 4 runtime enforcement):
+SECURITY (v1.4 — Law 1 + Law 4 + Law 5 runtime enforcement):
     create, void, and deliver require a valid JWT with scope="admin".
     Auth is enforced by the require_admin dependency from auth.py.
 
-    Proof test: tests/security/test_admin_scope_enforcement.py
-    — asserts that a customer-scoped JWT returns 403 on all admin endpoints.
+    GET /orders/{order_id}/shipments requires scope="customer" (Law 4) AND
+    ownership of the order (Law 5 — BOLA). Ownership is validated by
+    _get_order_service().find_order_for_customer() before any shipment query.
+    Non-owner and non-existent orders both return 404 with an identical body —
+    the response never reveals whether a resource exists (no enumeration).
+
+    Proof tests:
+      tests/security/test_admin_scope_enforcement.py  — Law 1/4 (admin endpoints)
+      tests/security/test_shipment_bola.py            — Law 5 (BOLA, GET shipment)
 
 claim-then-send pattern (ADR-015):
     Phase 1: claim() saves PENDING → commit (before network call)
@@ -58,6 +65,11 @@ router = APIRouter(prefix="/api/v1", tags=["shipments"])
 _gateway = LogShippingGateway()
 _shipment_service = ShipmentService(_gateway)
 _order_service = OrderService()
+
+
+def _get_order_service() -> OrderService:
+    """Injectable OrderService — overridden in tests via app.dependency_overrides."""
+    return _order_service
 
 
 # ---------------------------------------------------------------------------
@@ -224,11 +236,33 @@ def create_shipment(
 def get_shipment_by_order(
     order_id: str,
     db: Session = Depends(get_db),
-    _customer_ref: str = Depends(get_customer_ref),
+    customer_ref: str = Depends(get_customer_ref),
+    order_service: OrderService = Depends(_get_order_service),
 ) -> ShipmentResponse:
-    # BOLA: auth enforced; ownership check (shipment.order.customer_ref == customer_ref)
-    # deferred to Gate B. GET /orders/{order_id} already enforces ownership via
-    # find_order_for_customer(); this endpoint is the only remaining open surface.
+    """Return the shipment for an order only if the caller owns it (Law 5 — BOLA).
+
+    Ownership is validated by OrderService.find_order_for_customer() before the
+    shipment query — the domain service decides; the router only maps None → 404.
+
+    BOLA invariant: the 404 response is identical for all rejection cases —
+    non-existent order, order owned by another customer, and no shipment yet all
+    return the same status and body. The caller can never enumerate resources.
+
+    Transitional note (ADR-017 §5):
+    find_shipment_for_customer() was not introduced as a ShipmentService method
+    because Shipment aggregates do not carry customer_ref — that field belongs to
+    Order. Adding it to ShipmentService would require cross-context access to
+    OrderRepository, creating bounded-context coupling. This router-level composition
+    of two existing domain primitives is the accepted transitional form until
+    ADR-023 M2.x consolidates the shipping and order contexts.
+    """
+    # Step 1 — ownership check (domain service, Law 5)
+    order_uow = SQLAlchemyOrderUnitOfWork(db)
+    order = order_service.find_order_for_customer(OrderId(order_id), customer_ref, order_uow)
+    if order is None:
+        raise HTTPException(status_code=404, detail="No shipment found for this order")
+
+    # Step 2 — fetch shipment (ownership already validated)
     row = db.execute(
         select(ShipmentRow).where(ShipmentRow.order_id == order_id)
     ).scalar_one_or_none()

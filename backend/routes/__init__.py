@@ -1720,3 +1720,14 @@ def _upsert_weight_closing_order(invoice: Invoice, close_price_per_gram: float, 
 #  POST /admin/historical-clearing-adjustment/<id>/apply,
 #  POST /admin/historical-clearing-adjustment/<id>/cancel)
 
+# Re-exports for test compatibility (functions moved to submodules)
+from routes.vouchers import update_voucher, approve_voucher          # noqa: F401
+from routes.system import (                                          # noqa: F401
+    _create_postgres_backup_to_file,
+    _restore_postgres_from_backup_file,
+    _is_postgres_database,
+    _pg_tools_available,
+    _postgres_conn_parts,
+)
+from routes.invoices import _ensure_karat_diff_expense_account       # noqa: F401
+

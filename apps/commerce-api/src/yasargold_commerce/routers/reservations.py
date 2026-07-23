@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from yasargold_commerce.db import get_db
+from yasargold_commerce.infra.pos_claim_orm import PosClaimRow
 from yasargold_commerce.infra.reservation_uow import SQLAlchemyReservationUnitOfWork
 from yasargold_commerce.models import GoldPrice, Item
 from yasargold_domain.pricing.engine import PRICING_ENGINE_VERSION, karat_rate
@@ -171,6 +172,27 @@ def create_reservation(
         raise HTTPException(
             status_code=409,
             detail={"code": "ITEM_NOT_AVAILABLE"},
+        )
+
+    # V3 mutual exclusion — POS claim blocks online reservation (INV-4 inverse).
+    # If the showroom has an ACTIVE pos-claim on this item, the item is in the
+    # process of being sold at the counter. Allowing a concurrent online
+    # reservation would race the POS sale — the mirror of the problem pos-claim
+    # solves. Reject immediately so the customer sees it before paying.
+    active_pos_claim = db.execute(
+        select(PosClaimRow)
+        .where(
+            PosClaimRow.item_id    == item.id,
+            PosClaimRow.status     == "ACTIVE",
+            PosClaimRow.expires_at >  now,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+
+    if active_pos_claim is not None:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "ITEM_POS_CLAIMED"},
         )
 
     gp = db.execute(select(GoldPrice).order_by(GoldPrice.id.desc()).limit(1)).scalar_one_or_none()

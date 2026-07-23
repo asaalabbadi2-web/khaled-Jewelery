@@ -23,10 +23,10 @@ def test_create_postgres_backup_uses_pg_dump_custom_format(tmp_path):
         return None
 
     with app.app_context():
-        with patch('routes._is_postgres_database', return_value=True), patch(
-            'routes._pg_tools_available', return_value=(True, [])
-        ), patch('routes._postgres_conn_parts', return_value=_POSTGRES_PARTS), patch(
-            'routes.subprocess.run', side_effect=_fake_run
+        with patch('routes.system._is_postgres_database', return_value=True), patch(
+            'routes.system._pg_tools_available', return_value=(True, [])
+        ), patch('routes.system._postgres_conn_parts', return_value=_POSTGRES_PARTS), patch(
+            'routes.system.subprocess.run', side_effect=_fake_run
         ):
             _create_postgres_backup_to_file(str(backup_path))
 
@@ -51,12 +51,12 @@ def test_restore_postgres_terminates_connections_before_pg_restore(tmp_path):
         return None
 
     with app.app_context():
-        with patch('routes._is_postgres_database', return_value=True), patch(
-            'routes._pg_tools_available', return_value=(True, [])
-        ), patch('routes._postgres_conn_parts', return_value=_POSTGRES_PARTS), patch(
-            'routes.db.session.remove'
-        ), patch('routes.db.engine.dispose'), patch(
-            'routes.subprocess.run', side_effect=_fake_run
+        with patch('routes.system._is_postgres_database', return_value=True), patch(
+            'routes.system._pg_tools_available', return_value=(True, [])
+        ), patch('routes.system._postgres_conn_parts', return_value=_POSTGRES_PARTS), patch(
+            'routes.system.db.session.remove'
+        ), patch('routes.system.db.engine.dispose'), patch(
+            'routes.system.subprocess.run', side_effect=_fake_run
         ):
             _restore_postgres_from_backup_file(str(backup_path))
 
@@ -93,12 +93,12 @@ def test_restore_postgres_falls_back_to_psql_for_plain_sql_dump(tmp_path):
         return None
 
     with app.app_context():
-        with patch('routes._is_postgres_database', return_value=True), patch(
-            'routes._pg_tools_available', return_value=(True, [])
-        ), patch('routes._postgres_conn_parts', return_value=_POSTGRES_PARTS), patch(
-            'routes.db.session.remove'
-        ), patch('routes.db.engine.dispose'), patch(
-            'routes.subprocess.run', side_effect=_fake_run
+        with patch('routes.system._is_postgres_database', return_value=True), patch(
+            'routes.system._pg_tools_available', return_value=(True, [])
+        ), patch('routes.system._postgres_conn_parts', return_value=_POSTGRES_PARTS), patch(
+            'routes.system.db.session.remove'
+        ), patch('routes.system.db.engine.dispose'), patch(
+            'routes.system.subprocess.run', side_effect=_fake_run
         ):
             _restore_postgres_from_backup_file(str(backup_path))
 

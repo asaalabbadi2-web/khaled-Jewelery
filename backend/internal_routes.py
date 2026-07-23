@@ -163,6 +163,59 @@ def sync_online_order():
         return jsonify({"error": "internal server error"}), 500
 
 
+@internal_bp.get("/item-sale/<int:item_id>")
+def check_item_sale(item_id: int):
+    """Return the most recent committed POS sale for item_id after a given timestamp.
+
+    Used by ReconciliationWorker (F1) to detect orphaned pos-claims: ACTIVE claims
+    whose TTL expired without a CONFIRMED call, where the ERP nevertheless committed
+    a sale. An orphaned claim means the item appears available online even though it
+    was already sold at the counter.
+
+    Query params:
+        after  — ISO 8601 UTC timestamp; only sales created at or after this time
+
+    Returns:
+        200 {"invoice_id": <int>, "total": <float>}  — committed sale found
+        404                                           — no sale after that time
+        400 / 403 / 503                               — input / auth errors
+    """
+    ok, err = _check_internal_secret()
+    if not ok:
+        return err
+
+    after_str = request.args.get("after", "").strip()
+    if not after_str:
+        return jsonify({"error": "after parameter required"}), 400
+
+    try:
+        # ERP stores naive datetimes; strip timezone offset after converting to UTC.
+        after_dt = datetime.fromisoformat(after_str.replace("Z", "+00:00"))
+        after_naive = after_dt.replace(tzinfo=None)
+    except ValueError:
+        return jsonify({"error": "after must be an ISO 8601 timestamp"}), 400
+
+    from models import db, Invoice, InvoiceItem
+
+    invoice = (
+        db.session.query(Invoice)
+        .join(InvoiceItem, InvoiceItem.invoice_id == Invoice.id)
+        .filter(InvoiceItem.item_id == item_id)
+        .filter(Invoice.invoice_type == "بيع")
+        .filter(Invoice.created_at >= after_naive)
+        .order_by(Invoice.created_at.asc())
+        .first()
+    )
+
+    if invoice is None:
+        return jsonify({"found": False}), 404
+
+    return jsonify({
+        "invoice_id": invoice.id,
+        "total": invoice.total,
+    }), 200
+
+
 @internal_bp.get("/order-reconcile/<order_id>")
 def order_reconcile(order_id: str):
     """Return ERP invoice data for a given Commerce order_id (reconciliation).

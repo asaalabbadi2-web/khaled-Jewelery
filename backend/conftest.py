@@ -36,7 +36,7 @@ if base_dir not in sys.path:
 import app as flask_app_module
 
 from app import app, reset_database
-from models import db, Account, Supplier, Customer, Employee, Invoice, User
+from models import db, Account, SafeBox, Supplier, Customer, Employee, Invoice, User
 
 
 @pytest.fixture(scope='session', autouse=True)
@@ -89,6 +89,28 @@ def initialize_db():
             admin = User(username='admin', full_name='Admin', email=None, is_active=True, is_admin=True)
             admin.set_password('admin123')
             db.session.add(admin)
+
+        # Account 1610 — dedicated ledger account for SafeBox 32 (مدى).
+        # Must NOT reuse Account 15 (cash): voucher_engine skips supplier-tagging
+        # on safe-box accounts, which breaks test_voucher_party_tagging.
+        if not Account.query.get(1610):
+            db.session.add(Account(
+                id=1610,
+                account_number='1610',
+                name='خزينة مدى',
+                type='Asset',
+                tracks_weight=False,
+            ))
+            db.session.flush()
+
+        # SafeBox id=32 (مدى) — required by test_historical_clearing_adjustment.py
+        if not SafeBox.query.get(32):
+            db.session.add(SafeBox(
+                id=32,
+                name='مدى',
+                safe_type='cash',
+                account_id=1610,
+            ))
 
         # Seed a supplier with id=1 (some integration tests expect supplier 1)
         if not Supplier.query.get(1):

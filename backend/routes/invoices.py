@@ -3902,7 +3902,56 @@ def add_invoice():
         except Exception:
             # If offices subsystem is unavailable for some reason, still allow invoice creation.
             pass
-    
+
+    # Gate B — POS claim protocol (T2.2: INV-4 ENFORCED, ADR-016 §H1).
+    # Replaces the pre-transaction availability read with an atomic claim request.
+    # Commerce grants exclusive intent inside its own transaction; the ERP may
+    # not write until the grant is received.
+    # Fail-open: Commerce API timeout → sale proceeds + WARNING (legacy H2 path).
+    _pos_claims: list[tuple[int, str]] = []   # [(item_id, claim_id), ...]
+    _pos_claims_confirmed = False
+
+    if invoice_type == 'بيع':
+        try:
+            from services.commerce_availability import (
+                request_pos_claim as _request_pos_claim,
+                _release_pos_claims_best_effort,
+            )
+            _items_to_claim = [
+                item.get('item_id')
+                for item in (data.get('items') or [])
+                if item.get('item_id') is not None
+            ]
+            for _item_id in _items_to_claim:
+                _result = _request_pos_claim(int(_item_id))
+                if _result.denied:
+                    # Release any claims already granted for this invoice, then
+                    # return 409 with ZERO writes (C3b on the ERP side).
+                    _release_pos_claims_best_effort(_pos_claims)
+                    _pos_claims.clear()
+                    return jsonify({
+                        'error': 'item_pos_blocked',
+                        'message': _result.blocked_reason,
+                        'item_id': _item_id,
+                        'block_type': _result.block_type,
+                        'reserved_until': _result.reserved_until,
+                    }), 409
+                elif _result.claim_id:
+                    _pos_claims.append((int(_item_id), _result.claim_id))
+        except Exception as _gate_b_exc:
+            # Fail-open: release partial claims; proceed without any claim.
+            # The TOCTOU risk re-appears briefly (same as pre-T2.2 Gate B).
+            import logging as _log_module
+            _log_module.getLogger(__name__).warning(
+                "gate_b: pos-claim error — failing open: %s", _gate_b_exc
+            )
+            try:
+                from services.commerce_availability import _release_pos_claims_best_effort
+                _release_pos_claims_best_effort(_pos_claims)
+            except Exception:
+                pass
+            _pos_claims.clear()
+
     commission_amount = 0.0
     commission_vat_total = 0.0
     data_total = _to_float_request(data.get('total', 0.0))
@@ -8736,6 +8785,13 @@ def add_invoice():
                 resp['above_live_price'] = purchase_above_live_price_details
             resp['discount_pct'] = round(float(discount_pct or 0.0), 2) if discount_pct is not None else None
             resp['threshold_pct'] = float(large_discount_pct_threshold or 0.0)
+            _pos_claims_confirmed = True
+            if _pos_claims:
+                try:
+                    from services.commerce_availability import _confirm_pos_claims_best_effort
+                    _confirm_pos_claims_best_effort(_pos_claims)
+                except Exception:
+                    pass
             return jsonify(resp), 201
 
         print(f"✅ Balance verified! Marking invoice and journal entry as posted...")
@@ -8862,6 +8918,13 @@ def add_invoice():
         except Exception:
             created_payment_method_ids = set()
         _try_process_due_auto_clearing_settlements(payment_method_ids=created_payment_method_ids)
+        _pos_claims_confirmed = True
+        if _pos_claims:
+            try:
+                from services.commerce_availability import _confirm_pos_claims_best_effort
+                _confirm_pos_claims_best_effort(_pos_claims)
+            except Exception:
+                pass
         return jsonify(new_invoice.to_dict()), 201
 
     except (ValueError, IntegrityError) as e:
@@ -8885,6 +8948,15 @@ def add_invoice():
             'detail_short': _err_detail2[:600],
             'error_type': type(e).__name__,
         }), 500
+    finally:
+        # Release any unclaimed pos-claims so the item is freed immediately
+        # rather than waiting for TTL expiry.  Best-effort: never blocks return.
+        if _pos_claims and not _pos_claims_confirmed:
+            try:
+                from services.commerce_availability import _release_pos_claims_best_effort
+                _release_pos_claims_best_effort(_pos_claims)
+            except Exception:
+                pass
 
 @invoices_bp.route('/devtools/import/sales-invoices', methods=['POST'])
 @require_admin
