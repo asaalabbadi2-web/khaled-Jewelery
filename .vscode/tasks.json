@@ -6,557 +6,244 @@
 			"type": "promptString",
 			"description": "Commit message",
 			"default": "chore: updates"
-		},
-		{
-			"id": "googleWebClientId",
-			"type": "promptString",
-			"description": "Google OAuth Web Client ID (for Drive backup on web). Leave empty to disable Drive sign-in.",
-			"default": ""
 		}
 	],
 	"tasks": [
+
+		// ─────────────────────────────────────────────────────────────
+		// WEB — Next.js (apps/web, pnpm workspace)
+		// ─────────────────────────────────────────────────────────────
+
 		{
-			"label": "Run Backend Server",
+			"label": "Web: Dev Server",
 			"type": "shell",
-			"command": "export DATABASE_URL=\"sqlite:///${workspaceFolder}/app.db\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing backend (${PORT})...\"; echo \"${pids}\" | xargs kill -TERM 2>/dev/null || true; sleep 0.5; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Force killing backend (${PORT})...\"; echo \"${pids}\" | xargs kill -KILL 2>/dev/null || true; fi; for i in $(seq 1 30); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; fi; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"ERROR: Port ${PORT} still in use; cannot start backend.\"; lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true; exit 1; fi; echo \"Starting backend...\"; if [ -x \"./venv/bin/gunicorn\" ]; then ./venv/bin/gunicorn --chdir \"${workspaceFolder}/backend\" -b 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 120 app:app; elif [ -x \"./venv/bin/python\" ]; then ./venv/bin/python app.py; else python3 app.py; fi",
-			"options": {
-				"cwd": "${workspaceFolder}/backend"
-			},
+			"command": "pnpm --filter web dev",
+			"options": { "cwd": "${workspaceFolder}" },
 			"isBackground": true,
+			"problemMatcher": {
+				"pattern": { "regexp": "." },
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "Starting Next.js",
+					"endsPattern": "Ready in|Local:.*3000"
+				}
+			},
+			"presentation": { "group": "web", "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			"label": "Web: Build",
+			"type": "shell",
+			"command": "pnpm --filter web build",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": [],
+			"presentation": { "group": "web", "reveal": "always" }
+		},
+		{
+			"label": "Web: Test (vitest)",
+			"type": "shell",
+			"command": "pnpm --filter web test --run",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": [],
+			"presentation": { "group": "web", "reveal": "always" }
+		},
+		{
+			"label": "Web: Lint (ESLint)",
+			"type": "shell",
+			"command": "pnpm --filter web lint",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": ["$eslint-stylish"],
+			"presentation": { "group": "web", "reveal": "always" }
+		},
+		{
+			"label": "Web: Typecheck",
+			"type": "shell",
+			"command": "pnpm --filter web typecheck",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": ["$tsc"],
+			"presentation": { "group": "web", "reveal": "always" }
+		},
+		{
+			"label": "Web: Storybook",
+			"type": "shell",
+			"command": "pnpm --filter web storybook",
+			"options": { "cwd": "${workspaceFolder}" },
+			"isBackground": true,
+			"problemMatcher": {
+				"pattern": { "regexp": "." },
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "Starting Storybook",
+					"endsPattern": "Storybook.*started|Local:.*6006"
+				}
+			},
+			"presentation": { "group": "web", "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			"label": "Web: Brand Guard",
+			"type": "shell",
+			"command": "pnpm --filter web brand-guard",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": [],
+			"presentation": { "group": "web", "reveal": "always" }
+		},
+		{
+			"label": "Web: Dependency Cruiser",
+			"type": "shell",
+			"command": "pnpm --filter web depcruise",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": [],
+			"presentation": { "group": "web", "reveal": "always" }
+		},
+
+		// ─────────────────────────────────────────────────────────────
+		// COMMERCE API — FastAPI (apps/commerce-api, uv workspace)
+		// ─────────────────────────────────────────────────────────────
+
+		{
+			"label": "Commerce API: Dev Server",
+			"type": "shell",
+			"command": "uv run uvicorn yasargold_commerce.main:app --reload --port 8000",
+			"options": { "cwd": "${workspaceFolder}/apps/commerce-api" },
+			"isBackground": true,
+			"problemMatcher": {
+				"pattern": { "regexp": "." },
+				"background": {
+					"activeOnStart": true,
+					"beginsPattern": "Started|Uvicorn running",
+					"endsPattern": "Application startup complete"
+				}
+			},
+			"presentation": { "group": "commerce", "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			"label": "Commerce API: Test",
+			"type": "shell",
+			"command": "uv run pytest tests/ -q",
+			"options": { "cwd": "${workspaceFolder}/apps/commerce-api" },
+			"problemMatcher": [],
+			"presentation": { "group": "commerce", "reveal": "always" }
+		},
+		{
+			"label": "Commerce API: Import Linter",
+			"type": "shell",
+			"command": "uv run lint-imports",
+			"options": { "cwd": "${workspaceFolder}/apps/commerce-api" },
+			"problemMatcher": [],
+			"presentation": { "group": "commerce", "reveal": "always" }
+		},
+		{
+			"label": "Domain: Test (packages/domain)",
+			"type": "shell",
+			"command": "uv run pytest packages/domain/tests/ -q",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": [],
+			"presentation": { "group": "commerce", "reveal": "always" }
+		},
+
+		// ─────────────────────────────────────────────────────────────
+		// BACKEND — Flask ERP (backend/, venv)
+		// ─────────────────────────────────────────────────────────────
+
+		{
+			"label": "Backend: Start",
+			"type": "shell",
+			"command": "export DATABASE_URL=\"sqlite:///${workspaceFolder}/app.db\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing port ${PORT}...\"; echo \"${pids}\" | xargs kill -TERM 2>/dev/null || true; sleep 0.5; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"${pids}\" | xargs kill -KILL 2>/dev/null || true; fi; for i in $(seq 1 30); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; fi; echo \"Starting backend on :${PORT}...\"; if [ -x \"./venv/bin/gunicorn\" ]; then ./venv/bin/gunicorn -b 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 120 app:app; elif [ -x \"./venv/bin/python\" ]; then ./venv/bin/python app.py; else python3 app.py; fi",
+			"options": { "cwd": "${workspaceFolder}/backend" },
+			"isBackground": true,
+			"problemMatcher": [],
+			"presentation": { "group": "backend", "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			"label": "Backend: Start (foreground / reload)",
+			"type": "shell",
+			"command": "export DATABASE_URL=\"sqlite:///${workspaceFolder}/app.db\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing port ${PORT}...\"; echo \"${pids}\" | xargs kill -KILL 2>/dev/null || true; sleep 1; fi; echo \"Starting backend (--reload) on :${PORT}...\"; if [ -x \"./venv/bin/gunicorn\" ]; then ./venv/bin/gunicorn --reload -b 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 120 app:app; elif [ -x \"./venv/bin/python\" ]; then ./venv/bin/python app.py; else python3 app.py; fi",
+			"options": { "cwd": "${workspaceFolder}/backend" },
+			"isBackground": false,
+			"problemMatcher": [],
+			"presentation": { "group": "backend", "reveal": "always", "panel": "dedicated" }
+		},
+		{
+			"label": "Backend: Pytest",
+			"type": "shell",
+			"command": "( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -m pytest -q || python3 -m pytest -q )",
+			"options": { "cwd": "${workspaceFolder}/backend" },
+			"problemMatcher": [],
+			"presentation": { "group": "backend", "reveal": "always" }
+		},
+
+		// ─────────────────────────────────────────────────────────────
+		// FULL STACK — start all three services
+		// ─────────────────────────────────────────────────────────────
+
+		{
+			"label": "Dev: Start All",
+			"dependsOn": [
+				"Backend: Start",
+				"Commerce API: Dev Server",
+				"Web: Dev Server"
+			],
+			"dependsOrder": "parallel",
+			"problemMatcher": []
+		},
+
+		// ─────────────────────────────────────────────────────────────
+		// DOCKER
+		// ─────────────────────────────────────────────────────────────
+
+		{
+			"label": "Docker: Build Backend Image",
+			"type": "shell",
+			"command": "docker build -t yasargold-backend:dev -f backend/Dockerfile .",
+			"options": { "cwd": "${workspaceFolder}" },
 			"problemMatcher": []
 		},
 		{
-			"label": "Restart All Services",
+			"label": "Docker: Compose Up (prod)",
 			"type": "shell",
-			"command": "export DATABASE_URL=\"sqlite:///${workspaceFolder}/app.db\"; BACKEND_PORT=8001; FLUTTER_PORT=8080; echo '--- Stopping services ---'; for PORT in $BACKEND_PORT $FLUTTER_PORT; do pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing port ${PORT}: ${pids}\"; echo \"${pids}\" | xargs kill -TERM 2>/dev/null || true; sleep 0.5; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"${pids}\" | xargs kill -KILL 2>/dev/null || true; fi; for i in $(seq 1 20); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; fi; done; echo '--- Starting backend ---'; cd \"${workspaceFolder}/backend\"; if [ -x \"./venv/bin/gunicorn\" ]; then ./venv/bin/gunicorn --chdir \"${workspaceFolder}/backend\" -b 0.0.0.0:${BACKEND_PORT} --workers 1 --threads 4 --timeout 120 app:app & elif [ -x \"./venv/bin/python\" ]; then ./venv/bin/python app.py & else python3 app.py & fi; sleep 3; echo '--- Starting Flutter Web ---'; cd \"${workspaceFolder}/frontend\" && flutter run -d web-server --web-hostname=127.0.0.1 --web-port=${FLUTTER_PORT} &",
-			"options": {
-				"cwd": "${workspaceFolder}"
-			},
+			"command": "docker compose -f docker-compose.prod.yml up --build",
+			"options": { "cwd": "${workspaceFolder}" },
 			"isBackground": true,
 			"problemMatcher": []
 		},
+
+		// ─────────────────────────────────────────────────────────────
+		// GIT
+		// ─────────────────────────────────────────────────────────────
+
 		{
-			"label": "Run Flutter Web",
+			"label": "Git: Commit & Push",
 			"type": "shell",
-			"command": "cd frontend && flutter run -d web-server --web-hostname=127.0.0.1 --web-port=8080 --dart-define=GOOGLE_WEB_CLIENT_ID=${input:googleWebClientId}",
-			"isBackground": true,
+			"command": "bash _safe_commit.sh \"${input:commitMessage}\"",
+			"options": { "cwd": "${workspaceFolder}" },
+			"problemMatcher": []
+		},
+
+		// ─────────────────────────────────────────────────────────────
+		// DEBUG UTILITIES (essential only)
+		// ─────────────────────────────────────────────────────────────
+
+		{
+			"label": "Debug: Backend Health",
+			"type": "shell",
+			"command": "curl -s http://127.0.0.1:8001/api/debug/db-info | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin), ensure_ascii=False, indent=2))'",
+			"problemMatcher": []
+		},
+		{
+			"label": "Debug: Gold Price",
+			"type": "shell",
+			"command": "curl -s http://127.0.0.1:8001/api/public/gold_price | python3 -c 'import sys,json; d=json.load(sys.stdin); print(\"24K:\",d.get(\"price_24k\"),\"21K:\",d.get(\"price_21k\"),\"source:\",d.get(\"source\"))'",
+			"problemMatcher": []
+		},
+		{
+			"label": "Debug: Commerce API Health",
+			"type": "shell",
+			"command": "curl -s http://127.0.0.1:8000/health | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin), indent=2))'",
 			"problemMatcher": []
 		},
 		{
 			"label": "Sanity: Category Weight Tracking",
 			"type": "shell",
 			"command": "export DATABASE_URL=\"sqlite:///../app.db\"; cd backend && ( [ -x venv/bin/python ] && PY=venv/bin/python || PY=python3; \"$PY\" devtools/sanity_category_tracking.py )",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Git: Commit & Push",
-			"type": "shell",
-			"command": "bash _safe_commit.sh \"${input:commitMessage}\"",
-			"options": {
-				"cwd": "${workspaceFolder}"
-			},
-			"problemMatcher": []
-		},
-		{
-			"label": "Git: Commit & Push via Hook",
-			"type": "shell",
-			"command": "bash _safe_commit.sh \"${input:commitMessage}\"",
-			"options": {
-				"cwd": "${workspaceFolder}"
-			},
-			"problemMatcher": []
-		},
-		{
-			"label": "Analyze Accounts Numbering",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json; from collections import Counter\naccounts=json.load(sys.stdin)\nfor a in accounts: a[\"account_number\"]=str(a.get(\"account_number\"))\nprint(\"count\", len(accounts))\ntracks=[a for a in accounts if a.get(\"tracks_weight\")]\nnon=[a for a in accounts if not a.get(\"tracks_weight\")]\nprint(\"tracks_weight\", len(tracks), \"non_weight\", len(non))\nprint(\"min_account_number\", min(a[\"account_number\"] for a in accounts))\nprint(\"max_account_number\", max(a[\"account_number\"] for a in accounts))\n# prefix groups\npref=Counter(a[\"account_number\"][0] for a in accounts if a.get(\"account_number\"))\nprint(\"prefix_counts\", dict(sorted(pref.items())))\n# anomalies\nbad_weight=[a for a in tracks if not a[\"account_number\"].startswith(\"7\")]\nbad_non=[a for a in non if a[\"account_number\"].startswith(\"7\")]\nprint(\"bad_weight_prefix\", len(bad_weight))\nprint(\"bad_non_weight_prefix\", len(bad_non))\nctr=Counter(a[\"account_number\"] for a in accounts)\ndup=[k for k,v in ctr.items() if v>1]\nprint(\"duplicate_account_numbers\", len(dup))\nroot_like=[a for a in accounts if a.get(\"parent_id\") is None and len(a[\"account_number\"])>1]\nprint(\"root_like_len>1\", len(root_like))\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Debug: Show Backend DB Info",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/debug/db-info | python3 -c 'import sys,json; print(json.dumps(json.load(sys.stdin), ensure_ascii=False, indent=2))'",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "List Root-like Accounts",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nfor a in accounts: a[\"account_number\"]=str(a.get(\"account_number\"))\nroot_like=[a for a in accounts if a.get(\"parent_id\") is None and len(a[\"account_number\"])>1]\nroot_like=sorted(root_like, key=lambda a:a[\"account_number\"])\nprint(\"root_like_len>1\", len(root_like))\nfor a in root_like:\n  print(a[\"account_number\"], \"id=\", a.get(\"id\"), \"tracks_weight=\", a.get(\"tracks_weight\"), \"transaction_type=\", a.get(\"transaction_type\"), \"name=\", a.get(\"name\"))\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Check Weight Root Hierarchy",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nfor num in (\"7\",\"71\",\"72\",\"73\",\"74\",\"75\"):\n  a=by_num.get(num)\n  if not a:\n    print(num,\"NOT FOUND\"); continue\n  print(num,\"id=\",a.get(\"id\"),\"parent_id=\",a.get(\"parent_id\"),\"name=\",a.get(\"name\"))\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Analyze Account Number Lengths",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nnums=[]\nfor a in accounts:\n  s=str(a.get(\"account_number\"))\n  if s and s.isdigit():\n    nums.append(int(s))\nlengths={}\nfor a in accounts:\n  s=str(a.get(\"account_number\"))\n  lengths[len(s)]=lengths.get(len(s),0)+1\nprint(\"length_counts\", dict(sorted(lengths.items())))\nprint(\"numeric_min\", min(nums) if nums else None)\nprint(\"numeric_max\", max(nums) if nums else None)\n# show top 15 numeric\nnums_sorted=sorted(nums, reverse=True)[:15]\nprint(\"top_numeric\", nums_sorted)\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Detect Legacy Weight Accounts",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nweight=[a for a in accounts if a.get(\"tracks_weight\")]\nlegacy=[]\nmissing_fin=[]\nfor a in weight:\n  num=str(a.get(\"account_number\"))\n  if not num.startswith(\"7\") or len(num)<2: continue\n  fin=num[1:]\n  fin_acc=by_num.get(fin)\n  if not fin_acc:\n    missing_fin.append((num, fin, a.get(\"name\")))\n    continue\n  # check linkage symmetry if possible\n  # some financial accounts may not have memo_account_id exposed via API - check field exists\n  memo_id=fin_acc.get(\"memo_account_id\")\n  if memo_id is not None and memo_id != a.get(\"id\"):\n    legacy.append((num, fin, a.get(\"id\"), memo_id, a.get(\"name\"), fin_acc.get(\"name\")))\n\nprint(\"weight_total\", len(weight))\nprint(\"weight_missing_financial\", len(missing_fin))\nprint(\"weight_link_mismatch\", len(legacy))\nif missing_fin:\n  print(\"\\nMissing financial for weight (first 25):\")\n  for num, fin, name in missing_fin[:25]:\n    print(num, \"->\", fin, \"name=\", name)\nif legacy:\n  print(\"\\nLink mismatch samples (first 25):\")\n  for num, fin, wid, memo_id, wname, fname in legacy[:25]:\n    print(\"weight\", num, \"id\", wid, \"financial\", fin, \"financial.memo_account_id\", memo_id, \"names:\", fname, \"|\", wname)\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Detect Legacy Weight Accounts (Summary)",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nweight=[a for a in accounts if a.get(\"tracks_weight\")]\nmissing=[]\nfor a in weight:\n  num=str(a.get(\"account_number\"))\n  if not num.startswith(\"7\") or len(num)<2: continue\n  fin=num[1:]\n  if fin not in by_num:\n    # try common fixups\n    candidates=[\"1\"+fin, \"2\"+fin, \"3\"+fin, \"4\"+fin, \"5\"+fin]\n    found=[c for c in candidates if c in by_num]\n    missing.append((num, fin, found, a.get(\"name\")))\n\nprint(\"weight_total\", len(weight))\nprint(\"weight_missing_direct_financial\", len(missing))\n# group by best candidate\nfrom collections import Counter\nbest=Counter((m[2][0] if m[2] else \"NONE\") for m in missing)\nprint(\"best_candidate_counts\", dict(best))\nprint(\"\\nSamples (first 20):\")\nfor num, fin, found, name in missing[:20]:\n  print(num, \"->\", fin, \"candidates=\", found[:3], \"name=\", name)\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Detect Legacy Weight Accounts (Counts at End)",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nweight=[a for a in accounts if a.get(\"tracks_weight\")]\nmissing=[]\nfor a in weight:\n  num=str(a.get(\"account_number\"))\n  if not num.startswith(\"7\") or len(num)<2: continue\n  fin=num[1:]\n  if fin not in by_num:\n    candidates=[\"1\"+fin, \"2\"+fin, \"3\"+fin, \"4\"+fin, \"5\"+fin]\n    found=[c for c in candidates if c in by_num]\n    missing.append((num, fin, found, a.get(\"name\")))\n\n# print a few samples\nfor num, fin, found, name in missing[:12]:\n  print(num, \"->\", fin, \"candidates=\", found[:3], \"name=\", name)\n\nfrom collections import Counter\nbest=Counter((m[2][0] if m[2] else \"NONE\") for m in missing)\nprint(\"--\")\nprint(\"weight_total\", len(weight))\nprint(\"weight_missing_direct_financial\", len(missing))\nprint(\"best_candidate_counts\", dict(best))\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "List Weight Accounts Missing Financial",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nweight=[a for a in accounts if a.get(\"tracks_weight\")]\nmissing=[]\nfor a in weight:\n  num=str(a.get(\"account_number\"))\n  if not num.startswith(\"7\") or len(num)<2: continue\n  fin=num[1:]\n  if fin not in by_num:\n    missing.append((num, fin, a.get(\"transaction_type\"), a.get(\"name\")))\nmissing=sorted(missing, key=lambda x:int(x[0]) if x[0].isdigit() else x[0])\nprint(\"count\", len(missing))\nfor num, fin, tt, name in missing:\n  print(num, \"->\", fin, \"tt=\", tt, \"name=\", name)\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "List Weight Accounts Missing Financial (JSON)",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nweight=[a for a in accounts if a.get(\"tracks_weight\")]\nmissing=[]\nfor a in weight:\n  num=str(a.get(\"account_number\"))\n  if not num.startswith(\"7\") or len(num)<2: continue\n  fin=num[1:]\n  if fin not in by_num:\n    missing.append({\"weight\":num,\"expected_financial\":fin,\"transaction_type\":a.get(\"transaction_type\"),\"name\":a.get(\"name\")})\nmissing=sorted(missing, key=lambda x:int(x[\"weight\"]) if x[\"weight\"].isdigit() else x[\"weight\"])\nprint(json.dumps({\"count\":len(missing),\"items\":missing}, ensure_ascii=False))\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Dump Weight Missing Financial JSON",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nweight=[a for a in accounts if a.get(\"tracks_weight\")]\nmissing=[]\nfor a in weight:\n  num=str(a.get(\"account_number\"))\n  if not num.startswith(\"7\") or len(num)<2: continue\n  fin=num[1:]\n  if fin not in by_num:\n    missing.append({\"weight\":num,\"expected_financial\":fin,\"transaction_type\":a.get(\"transaction_type\"),\"name\":a.get(\"name\")})\nmissing=sorted(missing, key=lambda x:int(x[\"weight\"]) if x[\"weight\"].isdigit() else x[\"weight\"])\nopen(\"backend/tmp_weight_missing_financial.json\",\"w\",encoding=\"utf-8\").write(json.dumps({\"count\":len(missing),\"items\":missing}, ensure_ascii=False, indent=2))\nprint(\"wrote\", len(missing))\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Inspect Inventory Related Accounts",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby={str(a.get(\"account_number\")):a for a in accounts}\nnums=[\"130\",\"1300\",\"1310\",\"1340\",\"1350\",\"130000\",\"130001\",\"7130000\",\"7130001\",\"71330\",\"71340\",\"7340\"]\nfor n in nums:\n  a=by.get(n)\n  if not a:\n    print(n,\"NOT FOUND\");\n    continue\n  print(n,\"id=\",a.get(\"id\"),\"parent_id=\",a.get(\"parent_id\"),\"tt=\",a.get(\"transaction_type\"),\"tracks_weight=\",a.get(\"tracks_weight\"),\"memo_account_id=\",a.get(\"memo_account_id\"),\"name=\",a.get(\"name\"))\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Check Memo Link Numbering Consistency",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_id={a.get(\"id\"):a for a in accounts}\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nmism=[]\nfor a in accounts:\n  memo_id=a.get(\"memo_account_id\")\n  if not memo_id: continue\n  memo=by_id.get(memo_id)\n  if not memo: continue\n  fin_num=str(a.get(\"account_number\"))\n  memo_num=str(memo.get(\"account_number\"))\n  expected=\"7\"+fin_num\n  if memo_num!=expected:\n    mism.append({\"financial\":fin_num,\"financial_name\":a.get(\"name\"),\"memo\":memo_num,\"memo_name\":memo.get(\"name\"),\"expected\":expected})\n\nmism=sorted(mism, key=lambda x: (len(x[\"financial\"]), x[\"financial\"]))\nopen(\"backend/tmp_memo_link_mismatches.json\",\"w\",encoding=\"utf-8\").write(json.dumps({\"count\":len(mism),\"items\":mism}, ensure_ascii=False, indent=2))\nprint(\"mismatches\", len(mism))\nif mism:\n  for m in mism[:12]:\n    print(m[\"financial\"],\"->\",m[\"memo\"],\"expected\",m[\"expected\"],\"|\",m[\"financial_name\"],\"/\",m[\"memo_name\"])\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Inspect Account 1350 Memo Link",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby_num={str(a.get(\"account_number\")):a for a in accounts}\nby_id={a.get(\"id\"):a for a in accounts}\na=by_num.get(\"1350\")\nprint(\"1350\", a)\nif a and a.get(\"memo_account_id\"):\n  m=by_id.get(a.get(\"memo_account_id\"))\n  print(\"memo\", m)\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Dump 1340/71330 Existence",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/accounts | python3 -c 'import sys,json\naccounts=json.load(sys.stdin)\nby={str(a.get(\"account_number\")):a for a in accounts}\nkeys=[\"1340\",\"71330\",\"71340\",\"7340\",\"1350\"]\nout={k:by.get(k) for k in keys}\nopen(\"backend/tmp_1340_71330.json\",\"w\",encoding=\"utf-8\").write(json.dumps(out, ensure_ascii=False, indent=2))\nprint(\"wrote\")\n'",
-			"problemMatcher": []
-		},
-		{
-			"label": "Debug: Employee Account Auto-Create",
-			"type": "shell",
-			"command": "cd backend && PY=$( [ -x venv/bin/python ] && echo venv/bin/python || echo python3 ); $PY - <<'PY'\nfrom app import app\nfrom models import db, Account\nfrom employee_account_helpers import ensure_employee_group_accounts, create_employee_account, ensure_memo_for_account\n\nwith app.app_context():\n    ensure_employee_group_accounts(created_by='debug')\n    acc = create_employee_account('موظف اختبار (debug)', created_by='debug')\n    ensure_memo_for_account(acc)\n    db.session.commit()\n\n    parent = Account.query.get(acc.parent_id)\n    memo = Account.query.get(acc.memo_account_id) if acc.memo_account_id else None\n    memo_parent = Account.query.get(memo.parent_id) if memo and memo.parent_id else None\n\n    print('FIN', acc.account_number, acc.name)\n    print('FIN_PARENT', parent.account_number if parent else None)\n    print('MEMO', memo.account_number if memo else None)\n    print('MEMO_PARENT', memo_parent.account_number if memo_parent else None)\n\n    p1700 = Account.query.filter_by(account_number='1700').first()\n    pmemo = Account.query.filter_by(account_number='71700').first()\n    print('1700_CHILDREN', Account.query.filter_by(parent_id=p1700.id).count() if p1700 else None)\n    print('71700_CHILDREN', Account.query.filter_by(parent_id=pmemo.id).count() if pmemo else None)\nPY"
-		},
-		{
-			"label": "Purge Legacy Accounts (Dry Run)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python purge_legacy_accounts.py --dry-run || python3 purge_legacy_accounts.py --dry-run )",
-			"isBackground": false
-		},
-		{
-			"label": "Purge Legacy Accounts (Dry Run)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python purge_legacy_accounts.py --dry-run || python3 purge_legacy_accounts.py --dry-run )",
-			"isBackground": false
-		},
-		{
-			"label": "Purge Legacy Accounts (APPLY)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python purge_legacy_accounts.py --yes --force-unlink-employees || python3 purge_legacy_accounts.py --yes --force-unlink-employees )",
-			"isBackground": false
-		},
-		{
-			"label": "Purge Legacy Accounts (Dry Run)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python purge_legacy_accounts.py --dry-run || python3 purge_legacy_accounts.py --dry-run )",
-			"isBackground": false
-		},
-		{
-			"label": "Pytest: Party Accounts",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -m pytest -q test_party_accounts_capacity.py || python3 -m pytest -q test_party_accounts_capacity.py )",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Inspect COA roots (1200/1100/210)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c 'from app import app; from models import db, Account, Customer, Supplier; ctx=app.app_context(); ctx.push(); nums=[\"1100\",\"1200\",\"210\",\"220\",\"110\",\"120\",\"21\"]; \nfor num in nums:\n acc=Account.query.filter_by(account_number=num).first();\n print(\"ROOT\",num,\"exists\",bool(acc),\"id\",getattr(acc,\"id\",None),\"name\",getattr(acc,\"name\",None));\n if acc:\n  kids=Account.query.filter_by(parent_id=acc.id).order_by(db.cast(Account.account_number, db.Integer)).all();\n  print(\" kids\",len(kids),\"first\",[(k.account_number,k.name) for k in kids[:10]]);\n cat1200=Account.query.filter_by(account_number=\"1200\").first(); cat1100=Account.query.filter_by(account_number=\"1100\").first(); cat210=Account.query.filter_by(account_number=\"210\").first();\n cust_parents=[]\n for c in Customer.query.filter(Customer.account_id.isnot(None)).all():\n  a=Account.query.get(c.account_id);\n  if a: cust_parents.append(a.parent_id)\n print(\"customers_with_accounts\",len(cust_parents))\n print(\"customers_parent_1200\",cust_parents.count(getattr(cat1200,\"id\",None)))\n print(\"customers_parent_1100\",cust_parents.count(getattr(cat1100,\"id\",None)))\n sup_parents=[]\n for s in Supplier.query.filter(Supplier.account_id.isnot(None)).all():\n  a=Account.query.get(s.account_id);\n  if a: sup_parents.append(a.parent_id)\n print(\"suppliers_with_accounts\",len(sup_parents))\n print(\"suppliers_parent_210\",sup_parents.count(getattr(cat210,\"id\",None)))\n ctx.pop()' || python3 -c 'print(\"no venv\")' )",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Inspect Party Roots",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/inspect_coa_party_roots.py || python3 devtools/inspect_coa_party_roots.py )",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Inspect Party Roots",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/inspect_coa_party_roots.py || python3 devtools/inspect_coa_party_roots.py )",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Inspect Party Roots",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/inspect_coa_party_roots.py || python3 devtools/inspect_coa_party_roots.py )",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "List SQLite DB backups",
-			"type": "shell",
-			"command": "cd backend && ls -lt app.db* | head -n 20",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Compare DB with backup",
-			"type": "shell",
-			"command": "cd backend && (cmp -s app.db app.db.backup_20260123_072756 && echo 'SAME' || echo 'DIFFERENT')",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Inspect account 1200 in app.db",
-			"type": "shell",
-			"command": "cd backend && (command -v sqlite3 >/dev/null 2>&1 && sqlite3 app.db \"select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number in ('1200','1700','71700','210');\" || echo 'sqlite3 not found')",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Check backend account 1200 via HTTP",
-			"type": "shell",
-			"command": "python3 - <<'PY'\nimport json, sys, urllib.request\nurl='http://127.0.0.1:8001/api/accounts'\nwith urllib.request.urlopen(url, timeout=5) as r:\n    data=json.loads(r.read().decode('utf-8'))\n\nacc=[a for a in data if str(a.get('account_number'))=='1200']\nprint('found',len(acc))\nif acc:\n    a=acc[0]\n    print('1200 name=',a.get('name'),'type=',a.get('type'),'parent_id=',a.get('parent_id'))\nPY",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Find which DB has 1200 inventory",
-			"type": "shell",
-			"command": "cd backend && for f in *.db *.db.backup_* 2>/dev/null; do \n  if [ -f \"$f\" ]; then \n    name=$(sqlite3 \"$f\" \"select name from account where account_number='1200' limit 1;\" 2>/dev/null || true);\n    if [ -n \"$name\" ]; then printf \"%s: %s\\n\" \"$f\" \"$name\"; fi;\n  fi;\ndone",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Find which DB has 1200 inventory",
-			"type": "shell",
-			"command": "cd backend && setopt nullglob && for f in *.db *.db.backup_*; do name=$(sqlite3 \"$f\" \"select name from account where account_number='1200' limit 1;\" 2>/dev/null || true); if [ -n \"$name\" ]; then echo \"$f: $name\"; fi; done",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Find DB 1200 name",
-			"type": "shell",
-			"command": "cd backend && setopt nullglob && for f in *.db *.db.backup_*; do name=$(sqlite3 \"$f\" \"select name from account where account_number='1200' limit 1;\" 2>/dev/null || true); if [ -n \"$name\" ]; then echo \"$f: $name\"; fi; done",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Dart: Format touched files",
-			"type": "shell",
-			"command": "cd frontend && dart format lib/screens/journal_entry_form.dart lib/screens/recurring_template_form.dart lib/screens/add_voucher_screen.dart lib/screens/clearing_settlement_screen.dart lib/widgets/account_picker_sheet.dart",
-			"isBackground": false
-		},
-		{
-			"label": "Seed: Create Test Vaults & Payment Methods",
-			"type": "shell",
-			"command": "export DATABASE_URL=\"sqlite:///../app.db\"; cd backend && ( [ -x venv/bin/python ] && PY=venv/bin/python || PY=python3; \"$PY\" seed_test_vaults_and_payments.py )",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Debug: Inspect Employee Payables Roots (240/230)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3,os; con=sqlite3.connect('app.db'); cur=con.cursor();\nnums=['240','230','170','1700','2300','2310','2320'];\nq='select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number in (%s) order by account_number' % ','.join(['?']*len(nums));\ncur.execute(q, nums);\nprint('roots:');\n[print(r) for r in cur.fetchall()];\nfor root in ['240','230']:\n    cur.execute('select id from account where account_number=? limit 1',(root,));\n    row=cur.fetchone();\n    if not row:\n        print('\\nroot',root,'NOT FOUND');\n        continue\n    root_id=row[0]\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where parent_id=? order by account_number',(root_id,));\n    rows=cur.fetchall();\n    print('\\nchildren of',root,'count',len(rows));\n    [print(r) for r in rows[:40]];\ncon.close()\" || python3 -c \"import sqlite3,os; con=sqlite3.connect('app.db'); cur=con.cursor();\nnums=['240','230','170','1700','2300','2310','2320'];\nq='select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number in (%s) order by account_number' % ','.join(['?']*len(nums));\ncur.execute(q, nums);\nprint('roots:');\n[print(r) for r in cur.fetchall()];\nfor root in ['240','230']:\n    cur.execute('select id from account where account_number=? limit 1',(root,));\n    row=cur.fetchone();\n    if not row:\n        print('\\nroot',root,'NOT FOUND');\n        continue\n    root_id=row[0]\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where parent_id=? order by account_number',(root_id,));\n    rows=cur.fetchall();\n    print('\\nchildren of',root,'count',len(rows));\n    [print(r) for r in rows[:40]];\ncon.close()\" )"
-		},
-		{
-			"label": "Debug: Check 240 Exists",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','2430','230','2300','2310','2320']:\n    cur.execute('select id,account_number,name,parent_id from account where account_number=? limit 1',(num,));\n    row=cur.fetchone();\n    print(num, '=>', row);\ncon.close()\" || python3 -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','2430','230','2300','2310','2320']:\n    cur.execute('select id,account_number,name,parent_id from account where account_number=? limit 1',(num,));\n    row=cur.fetchone();\n    print(num, '=>', row);\ncon.close()\" )"
-		},
-		{
-			"label": "Debug: Check Employee Payables Root 240",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','250','2510']:\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',(num,));\n    print(num, cur.fetchone());\ncon.close()\" || python3 -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor();\nfor num in ['240','2400','2410','2420','250','2510']:\n    cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',(num,));\n    print(num, cur.fetchone());\ncon.close()\" )"
-		},
-		{
-			"label": "Debug: Query Account 240 Only",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor(); cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',('240',)); print(cur.fetchone()); con.close()\" || python3 -c \"import sqlite3; con=sqlite3.connect('app.db'); cur=con.cursor(); cur.execute('select id,account_number,name,parent_id,type,transaction_type,tracks_weight from account where account_number=? limit 1',('240',)); print(cur.fetchone()); con.close()\" )"
-		},
-		{
-			"label": "Pytest: Employee Payables Auto-Create",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -m pytest -q test_employee_payables_autocreate.py || python3 -m pytest -q test_employee_payables_autocreate.py )",
-			"problemMatcher": []
-		},
-		{
-			"label": "Debug: Create Employee and Show Payables Parents",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python -c \"from app import app; from employee_account_helpers import get_or_create_employee_payables_accounts; from models import Account, db; \nwith app.app_context():\n    accs=get_or_create_employee_payables_accounts('تجربة موظف', created_by='debug');\n    for a in accs:\n        parent=Account.query.get(int(a.parent_id)) if a.parent_id else None\n        print(a.account_number, a.name, 'parent=', getattr(parent,'account_number',None))\n    db.session.commit()\" || python3 -c \"from app import app; from employee_account_helpers import get_or_create_employee_payables_accounts; from models import Account, db; \nwith app.app_context():\n    accs=get_or_create_employee_payables_accounts('تجربة موظف', created_by='debug');\n    for a in accs:\n        parent=Account.query.get(int(a.parent_id)) if a.parent_id else None\n        print(a.account_number, a.name, 'parent=', getattr(parent,'account_number',None))\n    db.session.commit()\" )",
-			"problemMatcher": []
-		},
-		{
-			"label": "Flutter: Analyze",
-			"type": "shell",
-			"command": "cd frontend && flutter analyze",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Flutter: Analyze (after invoice auth fix)",
-			"type": "shell",
-			"command": "cd frontend && flutter analyze",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Backend: Restart (foreground for warnings)",
-			"type": "shell",
-			"command": "cd backend && export DATABASE_URL=\"sqlite:///../app.db\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"$pids\" ]; then echo \"Killing backend (${PORT})...\"; kill -TERM $pids 2>/dev/null || true; sleep 1; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"$pids\" ]; then echo \"Force killing backend (${PORT})...\"; kill -KILL $pids 2>/dev/null || true; fi; fi; echo \"Starting backend...\"; if [ -x \"./venv/bin/gunicorn\" ]; then ./venv/bin/gunicorn -b 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 120 app:app; elif [ -x \"./venv/bin/python\" ]; then ./venv/bin/python app.py; else python3 app.py; fi",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "HTTP: Status weight closing endpoints",
-			"type": "shell",
-			"command": "curl -s -o /dev/null -w 'profiles=%{http_code}\\n' http://127.0.0.1:8001/api/weight-closing/profiles; curl -s -o /dev/null -w 'safe_boxes=%{http_code}\\n' 'http://127.0.0.1:8001/api/safe-boxes?safe_types=cash,bank&is_active=true'",
-			"isBackground": false
-		},
-		{
-			"label": "HTTP: Inspect weight closing profiles (head)",
-			"type": "shell",
-			"command": "curl -s http://127.0.0.1:8001/api/weight-closing/profiles | python3 -c 'import sys,json; d=json.load(sys.stdin); p=(d.get(\"profiles\") or []); print(\"profiles\",len(p));\nif p: \n  x=p[0]; print(\"first_keys\", sorted(list(x.keys()))); \n  print(\"key\", x.get(\"key\")); meta=x.get(\"meta\") or {}; print(\"display\", meta.get(\"display_name\"));\n'",
-			"isBackground": false
-		},
-		{
-			"label": "Flutter: Analyze",
-			"type": "shell",
-			"command": "cd frontend && flutter analyze",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Flutter: Analyze",
-			"type": "shell",
-			"command": "cd frontend && flutter analyze",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Flutter: Analyze",
-			"type": "shell",
-			"command": "cd frontend && flutter analyze",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Flutter: Analyze",
-			"type": "shell",
-			"command": "cd frontend && flutter analyze",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Flutter: Analyze (after payment UI move)",
-			"type": "shell",
-			"command": "cd frontend && flutter analyze",
-			"isBackground": false,
-			"problemMatcher": []
-		},
-		{
-			"label": "Devtool: Verify Supplier Gold Settlement Voucher",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/verify_supplier_purchase_gold_settlement.py || python3 devtools/verify_supplier_purchase_gold_settlement.py )",
-			"isBackground": false
-		},
-		{
-			"label": "Devtool: Verify Supplier Gold Settlement Voucher",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/verify_supplier_purchase_gold_settlement.py || python3 devtools/verify_supplier_purchase_gold_settlement.py )",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Inspect supplier JE flags",
-			"type": "shell",
-			"command": "cd backend && python3 - <<'PY'\nimport os, sqlite3\nDB_PATH=os.path.abspath(os.path.join(os.getcwd(),'..','app.db'))\nprint('DB_PATH',DB_PATH)\ncon=sqlite3.connect(DB_PATH)\ncon.row_factory=sqlite3.Row\ncur=con.cursor()\ncur.execute(\"select id, entry_number, is_deleted, is_draft, is_posted from journal_entry where entry_number=?\", ('JE-2026-00001',))\nje=cur.fetchone()\nprint('journal_entry:', dict(je) if je else None)\nif je:\n    cur.execute(\"\"\"\n        select jl.id as line_id, jl.supplier_id, jl.account_id, a.account_number, a.type as account_type,\n               jl.cash_debit, jl.cash_credit,\n               jl.debit_18k, jl.credit_18k, jl.debit_21k, jl.credit_21k,\n               jl.is_deleted as line_is_deleted\n        from journal_entry_line jl\n        join account a on a.id = jl.account_id\n        where jl.journal_entry_id=?\n        order by jl.id\n    \"\"\", (je['id'],))\n    rows=cur.fetchall()\n    print('lines:', len(rows))\n    for r in rows:\n        print(dict(r))\ncon.close()\nPY"
-		},
-		{
-			"label": "Debug: Supplier cash lines (sqlite)",
-			"type": "shell",
-			"command": "cd backend && python3 - <<'PY'\nimport os, sqlite3\nDB_PATH=os.path.abspath(os.path.join(os.getcwd(),'..','app.db'))\ncon=sqlite3.connect(DB_PATH)\ncon.row_factory=sqlite3.Row\ncur=con.cursor()\ncur.execute(\"\"\"\nselect\n  coalesce(sum(jl.cash_debit),0) as sd,\n  coalesce(sum(jl.cash_credit),0) as sc,\n  coalesce(sum(jl.cash_debit),0)-coalesce(sum(jl.cash_credit),0) as net\nfrom journal_entry_line jl\njoin journal_entry je on je.id=jl.journal_entry_id\nwhere jl.supplier_id=?\n  and (jl.cash_debit!=0 or jl.cash_credit!=0)\n  and (je.is_deleted=0 or je.is_deleted is null)\n  and (jl.is_deleted=0 or jl.is_deleted is null)\n\"\"\", (1,))\nprint('sum cash for supplier_id=1:', dict(cur.fetchone()))\n\ncur.execute(\"\"\"\nselect jl.id as line_id, je.entry_number, a.account_number, a.type as account_type,\n       jl.cash_debit, jl.cash_credit, je.is_draft, je.is_posted, je.is_deleted\nfrom journal_entry_line jl\njoin journal_entry je on je.id=jl.journal_entry_id\njoin account a on a.id=jl.account_id\nwhere jl.supplier_id=?\n  and (jl.cash_debit!=0 or jl.cash_credit!=0)\norder by jl.id\n\"\"\", (1,))\nrows=cur.fetchall()\nprint('cash lines:', len(rows))\nfor r in rows:\n    print(dict(r))\ncon.close()\nPY"
-		},
-		{
-			"label": "Debug: HTTP db-info",
-			"type": "shell",
-			"command": "python3 - <<'PY'\nimport json, urllib.request\nurl='http://127.0.0.1:8001/api/debug/db-info'\nwith urllib.request.urlopen(url, timeout=5) as r:\n    data=json.loads(r.read().decode('utf-8'))\nprint('engine_url=',data.get('engine_url'))\nprint('database_uri=',data.get('sqlalchemy_database_uri'))\nprint('db_path=',data.get('db_path'))\nPY"
-		},
-		{
-			"label": "Debug: HTTP suppliers balances",
-			"type": "shell",
-			"command": "python3 - <<'PY'\nimport json, urllib.request\nurl='http://127.0.0.1:8001/api/suppliers'\nwith urllib.request.urlopen(url, timeout=5) as r:\n    data=json.loads(r.read().decode('utf-8'))\nprint('count',len(data))\nfor s in data[:5]:\n    print('id',s.get('id'),'name',s.get('name'),'cash',s.get('balance_cash'),'g21',s.get('balance_gold_21k'),'g18',s.get('balance_gold_18k'))\nPY"
-		},
-		{
-			"label": "Debug: Compare account balances (15)",
-			"type": "shell",
-			"command": "python3",
-			"args": [
-				"-c",
-				"import json,urllib.request; base='http://127.0.0.1:8001/api'; acc_no='15';\n\ndef get_json(path):\n    with urllib.request.urlopen(base+path,timeout=8) as r:\n        return json.loads(r.read().decode('utf-8'))\n\naccounts=get_json('/accounts'); acc=[a for a in accounts if str(a.get('account_number'))==acc_no];\nprint('account_matches',len(acc));\nacc_id=acc[0]['id'];\nprint('account_id',acc_id); print('account_name',acc[0].get('name'));\nbalances=get_json('/accounts/balances'); b=balances.get(str(acc_id)) or balances.get(acc_id);\nprint('balances_cash',b.get('cash')); print('balances_21k',b.get('gold_21k'));\nst=get_json('/accounts/%s/statement'%acc_id);\nprint('statement_closing_cash',st.get('closing_balance_cash')); print('statement_closing_gold_norm',st.get('closing_balance_gold_normalized'));\nstm=get_json('/accounts/%s/statement_merged'%acc_id);\nprint('merged_is_merged',stm.get('is_merged')); print('merged_closing_cash',stm.get('closing_balance_cash')); print('merged_closing_gold_norm',stm.get('closing_balance_gold_normalized'))"
-			]
-		},
-		{
-			"label": "Debug: Compare account balances (account 15)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/compare_account_balances.py --account-number 15 || python3 devtools/compare_account_balances.py --account-number 15 )",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Compare account balances (account 15, full)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/compare_account_balances.py --account-number 15 || python3 devtools/compare_account_balances.py --account-number 15 ) | cat",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Fetch dashboard liquidity",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; u='http://127.0.0.1:8001/api/dashboard/admin'; d=json.load(urllib.request.urlopen(u,timeout=8)); print('cash_balance', (d.get('kpis') or {}).get('cash_balance')); print('safe_boxes', len(d.get('safe_boxes') or [])); print('first_safe', (d.get('safe_boxes') or [{}])[0].get('name'), (d.get('safe_boxes') or [{}])[0].get('balance_cash'))\"",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: List safe boxes (name/account_id)",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8001/api/safe-boxes',timeout=8));\nprint('count',len(d));\nfor sb in d: print(sb.get('id'), sb.get('name'), sb.get('safe_type'), sb.get('account_id'))\"",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Compare account balances (15 JSON)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/compare_account_balances.py --account-number 15 --json || python3 devtools/compare_account_balances.py --account-number 15 --json )",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Fetch dashboard liquidity (after restart)",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; u='http://127.0.0.1:8001/api/dashboard/admin'; d=json.load(urllib.request.urlopen(u,timeout=8)); print('cash_balance', (d.get('kpis') or {}).get('cash_balance')); sb=(d.get('safe_boxes') or []); print('safe_boxes', len(sb));\nprint('first_safe', (sb[0].get('name') if sb else None), (sb[0].get('balance_cash') if sb else None))\"",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Compare dashboard vs balances for safe-box account 15",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; base='http://127.0.0.1:8001/api';\nacc_id='15';\nb=json.load(urllib.request.urlopen(base+'/accounts/balances',timeout=8));\nbal=b.get(acc_id) or b.get(int(acc_id));\nd=json.load(urllib.request.urlopen(base+'/dashboard/admin',timeout=8));\nfirst=(d.get('safe_boxes') or [{}])[0];\nprint('balances_cash', bal.get('cash')); print('dashboard_first_safe_cash', first.get('balance_cash')); print('first_safe_account_id', first.get('id'), first.get('name'))\"",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Compare account balances (15 JSON after NULL entry_type fix)",
-			"type": "shell",
-			"command": "cd backend && ( [ -x \"./venv/bin/python\" ] && ./venv/bin/python devtools/compare_account_balances.py --account-number 15 --json || python3 devtools/compare_account_balances.py --account-number 15 --json )",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Fetch dashboard liquidity (after NULL entry_type fix)",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; u='http://127.0.0.1:8001/api/dashboard/admin'; d=json.load(urllib.request.urlopen(u,timeout=8)); sb=(d.get('safe_boxes') or []); print('cash_balance', (d.get('kpis') or {}).get('cash_balance')); print('first_safe_cash', (sb[0].get('balance_cash') if sb else None));\"",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Inspect account 15 stored balance_cash",
-			"type": "shell",
-			"command": "cd backend && (command -v sqlite3 >/dev/null 2>&1 && sqlite3 app.db \"select id, account_number, name, balance_cash from account where id=15;\" || echo 'sqlite3 not found')",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Inspect JE entry_type sums for account 15",
-			"type": "shell",
-			"command": "cd backend && (command -v sqlite3 >/dev/null 2>&1 && sqlite3 app.db \"select je.entry_type, count(*), sum(coalesce(jl.cash_debit,0)), sum(coalesce(jl.cash_credit,0)) from journal_entry_line jl join journal_entry je on je.id=jl.journal_entry_id where jl.account_id=15 and coalesce(jl.is_deleted,0)=0 and coalesce(je.is_deleted,0)=0 group by je.entry_type order by je.entry_type;\" || echo 'sqlite3 not found')",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Count journal lines for account 15",
-			"type": "shell",
-			"command": "cd backend && (command -v sqlite3 >/dev/null 2>&1 && sqlite3 app.db \"select count(*) from journal_entry_line jl join journal_entry je on je.id=jl.journal_entry_id where jl.account_id=15 and coalesce(jl.is_deleted,0)=0 and coalesce(je.is_deleted,0)=0;\" || echo 'sqlite3 not found')",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Count journal lines for account 15 (root app.db)",
-			"type": "shell",
-			"command": "cd /Users/salehalabbadi/yasargold && (command -v sqlite3 >/dev/null 2>&1 && sqlite3 app.db \"select count(*) from journal_entry_line jl join journal_entry je on je.id=jl.journal_entry_id where jl.account_id=15 and coalesce(jl.is_deleted,0)=0 and coalesce(je.is_deleted,0)=0;\" || echo 'sqlite3 not found')",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Inspect journal lines for account 15 (root app.db)",
-			"type": "shell",
-			"command": "cd /Users/salehalabbadi/yasargold && (command -v sqlite3 >/dev/null 2>&1 && sqlite3 -header -column app.db \"select jl.id, jl.journal_entry_id, je.entry_type, je.is_draft, je.is_posted, jl.cash_debit, jl.cash_credit, jl.is_deleted, je.is_deleted from journal_entry_line jl join journal_entry je on je.id=jl.journal_entry_id where jl.account_id=15;\" || echo 'sqlite3 not found')",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: SQL sum live balance for account 15 (root app.db)",
-			"type": "shell",
-			"command": "cd /Users/salehalabbadi/yasargold && (command -v sqlite3 >/dev/null 2>&1 && sqlite3 app.db \"select (coalesce(sum(jl.cash_debit),0)-coalesce(sum(jl.cash_credit),0)) as cash from journal_entry_line jl join journal_entry je on je.id=jl.journal_entry_id where jl.account_id=15 and coalesce(jl.is_deleted,0)=0 and coalesce(je.is_deleted,0)=0 and coalesce(je.is_draft,0)=0;\" || echo 'sqlite3 not found')",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Check dashboard safe_box fields",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8001/api/dashboard/admin',timeout=8)); sb=(d.get('safe_boxes') or []); print('safe_box_keys', sorted(list((sb[0] if sb else {}).keys()))); print('first_safe_cash', (sb[0] if sb else {}).get('balance_cash')); print('first_safe_account_id', (sb[0] if sb else {}).get('account_id')); print('first_safe_source', (sb[0] if sb else {}).get('balances_source'))\"",
-			"isBackground": false
-		},
-		{
-			"label": "Backend: Hard Restart (reload)",
-			"type": "shell",
-			"command": "export DATABASE_URL=\"sqlite:////Users/salehalabbadi/yasargold/app.db\"; PORT=8001; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"Killing backend (${PORT})...\"; echo \"${pids}\" | xargs kill -KILL 2>/dev/null || true; fi; for i in $(seq 1 30); do sleep 0.2; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; [ -z \"${pids}\" ] && break; done; pids=\"$(lsof -ti tcp:${PORT} 2>/dev/null || true)\"; if [ -n \"${pids}\" ]; then echo \"ERROR: Port ${PORT} still in use\"; lsof -nP -iTCP:${PORT} -sTCP:LISTEN || true; exit 1; fi; echo \"Starting backend (reload)...\"; cd /Users/salehalabbadi/yasargold/backend && ( [ -x \"./venv/bin/gunicorn\" ] && ./venv/bin/gunicorn --reload -b 0.0.0.0:${PORT} --workers 1 --threads 4 --timeout 120 app:app || python3 app.py )",
-			"isBackground": true,
-			"problemMatcher": []
-		},
-		{
-			"label": "Debug: Check dashboard safe_box fields (after hard restart)",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8001/api/dashboard/admin',timeout=8)); sb=(d.get('safe_boxes') or []); print('first_safe_cash', (sb[0] if sb else {}).get('balance_cash')); print('first_safe_account_id', (sb[0] if sb else {}).get('account_id')); print('first_safe_source', (sb[0] if sb else {}).get('balances_source'))\"",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Dashboard cash_balance KPI",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8001/api/dashboard/admin',timeout=8)); print('kpi_cash_balance', (d.get('kpis') or {}).get('cash_balance'));\"",
-			"isBackground": false
-		},
-		{
-			"label": "Debug: Ensure dashboard debug fields removed",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8001/api/dashboard/admin',timeout=8)); sb=(d.get('safe_boxes') or []); print('has_account_id', 'account_id' in (sb[0] if sb else {})); print('first_safe_cash', (sb[0] if sb else {}).get('balance_cash'));\"",
-			"isBackground": false
-		},
-		{
-			"label": "Verify: Account 15 balance consistent (dashboard vs statement)",
-			"type": "shell",
-			"command": "python3 -c \"import json,urllib.request; base='http://127.0.0.1:8001/api';\naccounts=json.load(urllib.request.urlopen(base+'/accounts',timeout=8)); acc=[a for a in accounts if str(a.get('account_number'))=='15'][0]; acc_id=acc['id']; st=json.load(urllib.request.urlopen(base+'/accounts/%s/statement'%acc_id,timeout=8)); dash=json.load(urllib.request.urlopen(base+'/dashboard/admin',timeout=8)); safe=(dash.get('safe_boxes') or [])[0]; print('statement', st.get('closing_balance_cash')); print('dashboard_safe', safe.get('balance_cash'));\"",
-			"isBackground": false
-		},
-		{
-			"label": "Test: Gold Price Update",
-			"type": "shell",
-			"command": "python3 - <<'PY'\nimport json, urllib.request, urllib.error\nbase = 'http://127.0.0.1:8001/api'\n\nprint('--- قبل التحديث ---')\ntry:\n    with urllib.request.urlopen(base + '/public/gold_price', timeout=8) as r:\n        d = json.loads(r.read().decode())\n    print('price_usd_per_oz:', d.get('price_usd_per_oz'))\n    print('price_24k (SAR/g):', d.get('price_24k'))\n    print('price_main_karat:', d.get('price_main_karat'), '| karat:', d.get('main_karat'))\n    print('date:', d.get('date'))\n    print('source:', d.get('source'))\nexcept Exception as e:\n    print('ERROR fetching price:', e)\n\nprint()\nprint('--- جاري التحديث من الإنترنت ---')\ntry:\n    req = urllib.request.Request(\n        base + '/gold_price/update',\n        data=b'{}',\n        headers={'Content-Type': 'application/json'},\n        method='POST',\n    )\n    with urllib.request.urlopen(req, timeout=20) as r:\n        upd = json.loads(r.read().decode())\n    print('success:', upd.get('success'))\n    print('fetched_price_usd:', upd.get('price'))\nexcept urllib.error.HTTPError as e:\n    print('HTTP ERROR', e.code, e.read().decode()[:400])\nexcept Exception as e:\n    print('ERROR updating price:', e)\n\nprint()\nprint('--- بعد التحديث ---')\ntry:\n    with urllib.request.urlopen(base + '/public/gold_price', timeout=8) as r:\n        d2 = json.loads(r.read().decode())\n    print('price_usd_per_oz:', d2.get('price_usd_per_oz'))\n    print('price_24k (SAR/g):', d2.get('price_24k'))\n    print('price_main_karat:', d2.get('price_main_karat'), '| karat:', d2.get('main_karat'))\n    print('date:', d2.get('date'))\n    print('source:', d2.get('source'))\nexcept Exception as e:\n    print('ERROR fetching price after update:', e)\nPY",
-			"isBackground": false,
 			"problemMatcher": []
 		}
 	]
