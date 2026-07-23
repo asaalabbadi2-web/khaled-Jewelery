@@ -263,6 +263,18 @@ GROUP BY state;
 
 ---
 
+## Clock Discipline
+
+Container NTP keeps system clocks close for logs and metrics — it is **not** the
+source of truth for business decisions. All reservation-expiry, payment-intent
+voiding, and shipment void-window decisions use an injected `now` parameter
+sourced from the DB clock at the transaction boundary.
+
+See **ADR-015 §Clock Discipline** (Presentation vs Decision time) for the full
+governing rule. NTP here serves logs/metrics only.
+
+---
+
 ## Sign-off
 
 | Gate | Tested by | Result | Date |
