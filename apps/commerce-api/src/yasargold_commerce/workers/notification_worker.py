@@ -78,7 +78,7 @@ class NotificationWorker:
                 return 0
 
             dispatched_ids: list[int] = []
-            now = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)  # clock-guard: boundary
 
             for row in rows:
                 try:

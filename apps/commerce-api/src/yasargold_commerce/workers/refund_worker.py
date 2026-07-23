@@ -66,7 +66,7 @@ class RefundWorker:
             if not intents:
                 return 0
 
-            now = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)  # clock-guard: boundary
             refunded = 0
 
             for intent in intents:

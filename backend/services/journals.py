@@ -85,7 +85,7 @@ def create_wage_weight_release_journal(weight_grams: float, note: str | None = N
     wage_release_account = _ensure_memo_expense_account(WAGE_RELEASE_MEMO_ACCOUNT)
 
     description = (note or "Release wage weight").strip()
-    now = datetime.utcnow()
+    now = datetime.utcnow()  # clock-guard: TIME-001
 
     journal_entry = JournalEntry(
         date=now,

@@ -108,6 +108,68 @@ promotion validity) MUST follow this protocol from day one.
 
 ---
 
+## Clock Discipline
+
+### Two kinds of time
+
+The system distinguishes two fundamentally different uses of "now":
+
+**PRESENTATION TIME (UI)** — the UI must display how long until a reservation
+expires, how fresh the gold price is, and similar live countdowns. The client's
+system clock is untrusted (skew up to ±hours observed in the wild). The frontend
+obtains the current time via `serverNow` / `syncServerClock` per **FC-2** of the
+Frontend Constitution. A server-anchored offset is maintained in the browser so
+all countdowns and freshness labels are anchored to server time — never to
+`Date.now()`.
+
+**DECISION TIME (Domain and Workers)** — any operation that **changes system
+state** — reservation expiry, claim TTL enforcement, payment-intent voiding,
+reconciliation windows, gold-price freshness gates — must obtain time via the
+**injected Clock Provider** defined in this ADR. The caller passes `now: datetime`
+as an explicit parameter; the domain function uses that value and never calls
+`datetime.now()` internally.
+
+The **ultimate source** for decisions tied to durable state (`Reservation`,
+`Order`, `PosClaim`, `Shipment`) is the **database clock** (`SELECT NOW()` or
+equivalent, read once per transaction boundary and threaded through as the
+injected `now`). Container NTP keeps clocks close for **logs, metrics, and trace
+timestamps only** — it is not a source for business decisions.
+
+### Why the distinction matters
+
+An NTP-synchronised container clock still drifts ±100 ms–5 s against the DB
+clock. For gold-price freshness windows measured in minutes and reservation TTLs
+measured in seconds, that drift can produce incorrect expiry decisions. Injection
+makes the time source explicit and testable: the domain unit-test passes a fixed
+`_NOW` constant; production passes the DB clock read at the transaction boundary.
+The host system clock never enters the decision path.
+
+Proof: `packages/domain/tests/shipping/test_clock_discipline.py` (Baseline +
+HostDrift classes) demonstrates that patching `datetime.now` in the module has no
+effect on the decision when `now` is injected correctly — and that the direction of
+drift does not matter.
+
+### Enforcement
+
+`scripts/clock_guard.py` scans decision-path directories for bare
+`datetime.now()` / `datetime.utcnow()` calls and fails CI on any unacknowledged
+violation.
+
+- **Scanned:** `packages/domain/src/`, `apps/commerce-api/src/yasargold_commerce/workers/`, `backend/services/`
+- **Exempt:** `return datetime.now(` (clock-factory); ` or datetime.now(` (injection fallback); `testing.py` files
+
+Suppression taxonomy (inline comment required):
+
+| Tag | Meaning | Counted in ratchet? |
+|-----|---------|-------------------|
+| `# clock-guard: boundary` | ADR-015 boundary caller — worker/router reads the clock once and passes it down | ❌ No |
+| `# clock-guard: TIME-001` | Known Gap — legacy decision-path call, tracked and shrinking | ✅ Yes |
+| `# clock-guard: record-only` | Audit/display timestamp; no downstream decision reads this value | ❌ No |
+
+**Ratchet:** `docs/architecture/.clock-debt-baseline` holds the committed count of `TIME-001` suppressions. CI fails if the count increases. To lower the baseline after genuine removals: `python scripts/clock_guard.py --update` (only in the same PR that removes suppressions).
+
+---
+
 ## Related
 
 - ADR-014 — Notifications provider-agnostic (first `now` parameter appearance)

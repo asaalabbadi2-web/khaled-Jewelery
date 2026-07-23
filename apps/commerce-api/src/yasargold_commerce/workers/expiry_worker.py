@@ -61,7 +61,7 @@ class ExpiryWorker:
         try:
             uow = SQLAlchemyReservationUnitOfWork(session)
             with uow:
-                now = datetime.now(timezone.utc)
+                now = datetime.now(timezone.utc)  # clock-guard: boundary
                 expired = _expiry_service.expire_elapsed(uow, now=now, limit=self._batch_size)
                 uow.commit()
 

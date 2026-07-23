@@ -84,7 +84,7 @@ class ERPSyncWorker:
                 return 0
 
             synced_ids: list[int] = []
-            now = datetime.now(timezone.utc)
+            now = datetime.now(timezone.utc)  # clock-guard: boundary
 
             for row in rows:
                 try:
