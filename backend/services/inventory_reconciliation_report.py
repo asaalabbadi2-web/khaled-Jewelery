@@ -154,7 +154,7 @@ class InventoryReconciliationReport:
         from sqlalchemy import func
 
         snap = ReconciliationSnapshot(
-            generated_at=datetime.now(),
+            generated_at=datetime.now(),  # clock-guard: TIME-001
             gl_available=False,  # Phase 5 sets this True when GL wired
         )
 

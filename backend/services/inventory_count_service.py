@@ -94,7 +94,7 @@ class InventoryCountService:
             snapshot_ledger_id=max_id,
             blind_count=blind_count,
             opened_by=opened_by,
-            opened_at=datetime.now(),
+            opened_at=datetime.now(),  # clock-guard: TIME-001
             notes=notes or None,
         )
         db.session.add(session)
@@ -237,7 +237,7 @@ class InventoryCountService:
         line.counted_weight = round(float(counted_weight), 4)
         line.variance = round(line.counted_weight - float(line.expected_weight or 0.0), 4)
         line.counted_by = counted_by or None
-        line.counted_at = datetime.now()
+        line.counted_at = datetime.now()  # clock-guard: TIME-001
 
         if session.status == 'open':
             session.status = 'counting'
@@ -282,7 +282,7 @@ class InventoryCountService:
                 for ln in uncounted_q.all():
                     ln.counted_weight = 0.0
                     ln.variance = round(0.0 - float(ln.expected_weight or 0.0), 4)
-                    ln.counted_at = datetime.now()
+                    ln.counted_at = datetime.now()  # clock-guard: TIME-001
                 db.session.flush()
                 uncounted = 0
             elif session_type == 'opening':
@@ -298,7 +298,7 @@ class InventoryCountService:
                 )
 
         session.status = 'closed'
-        session.closed_at = datetime.now()
+        session.closed_at = datetime.now()  # clock-guard: TIME-001
         return uncounted
 
     # ── Approve ───────────────────────────────────────────────────────────────
@@ -332,7 +332,7 @@ class InventoryCountService:
 
         session.status = 'approved'
         session.approved_by = approved_by
-        session.approved_at = datetime.now()
+        session.approved_at = datetime.now()  # clock-guard: TIME-001
 
         session_type = getattr(session, 'session_type', 'periodic') or 'periodic'
 
@@ -355,79 +355,6 @@ class InventoryCountService:
 
     @classmethod
     def _post_opening_balances(cls, session: 'InventoryCountSession', posted_by: str) -> None:
-        """Post each counted line as an opening-balance Ledger entry.
-
-        The opening session declares "what we count IS the truth." Any prior
-        balance (e.g. from a backfill or earlier entries) is zeroed out first
-        via a reversal entry, then the counted weight is posted as the new truth.
-
-        Two entry types per affected bucket:
-          'opening_reversal' — cancels existing balance (idempotent, skipped if zero)
-          'opening_balance'  — posts counted weight as the new starting point
-
-        Both use the same (source_id=session.id, source_line_id=ln.id), which
-        is safe because source_type differs → no UniqueConstraint collision.
-        """
-        from models import db, InventoryCountLine, InventoryLedger, InventoryBalance
-
-        lines = InventoryCountLine.query.filter_by(session_id=session.id).all()
-        for ln in lines:
-            if ln.counted_weight is None:
-                continue
-
-            counted = round(float(ln.counted_weight), 4)
-
-            # ── Step 1: Reverse existing balance so opening count becomes the sole truth ──
-            existing = InventoryBalance.query.filter_by(
-                branch_id=ln.branch_id,
-                category_id=ln.category_id,
-                karat=ln.karat,
-            ).first()
-            prior_balance = round(float(existing.balance), 4) if existing else 0.0
-
-            reversal_exists = InventoryLedger.query.filter_by(
-                source_type='opening_reversal',
-                source_id=session.id,
-                source_line_id=ln.id,
-                movement_type='opening',
-            ).first()
-            if not reversal_exists and prior_balance != 0.0:
-                db.session.add(InventoryLedger(
-                    source_type='opening_reversal',
-                    source_id=session.id,
-                    source_line_id=ln.id,
-                    movement_type='opening',
-                    branch_id=ln.branch_id,
-                    category_id=ln.category_id,
-                    karat=ln.karat,
-                    weight_delta=-prior_balance,
-                    posted_by=posted_by,
-                    notes=f'إلغاء رصيد سابق — جلسة افتتاحية #{session.id}',
-                ))
-
-            # ── Step 2: Post counted weight as opening balance ────────────────────────
-            balance_exists = InventoryLedger.query.filter_by(
-                source_type='opening_balance',
-                source_id=session.id,
-                source_line_id=ln.id,
-                movement_type='opening',
-            ).first()
-            if not balance_exists and counted != 0.0:
-                db.session.add(InventoryLedger(
-                    source_type='opening_balance',
-                    source_id=session.id,
-                    source_line_id=ln.id,
-                    movement_type='opening',
-                    branch_id=ln.branch_id,
-                    category_id=ln.category_id,
-                    karat=ln.karat,
-                    weight_delta=counted,
-                    posted_by=posted_by,
-                    notes=f'رصيد افتتاحي — جلسة #{session.id}',
-                ))
-
-        db.session.flush()
-
-        # Rebuild InventoryBalance: apply all opening entries (reversal + balance)
+        """Delegate to InventoryPostingService — Single Writer for all Ledger writes."""
         from services.inventory_posting_service import InventoryPostingService
-        InventoryPostingService.rebuild_balance_for_session(session)
+        InventoryPostingService.post_opening_session(session, posted_by)

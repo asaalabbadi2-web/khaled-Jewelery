@@ -59,7 +59,7 @@ class InventoryHealthReport:
         )
         from sqlalchemy import func
 
-        snap = InventoryHealthSnapshot(generated_at=datetime.now())
+        snap = InventoryHealthSnapshot(generated_at=datetime.now())  # clock-guard: TIME-001
         add = snap.metrics.append
 
         # 1. Balance invariant

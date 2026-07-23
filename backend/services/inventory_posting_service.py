@@ -61,6 +61,88 @@ class InventoryPostingService:
             f'InventoryPostingService: unsupported document type {type(document).__name__}'
         )
 
+    @classmethod
+    def post_opening_session(cls, session, posted_by: str) -> list:
+        """Post opening-balance Ledger entries for an approved opening count session.
+
+        For each counted line:
+          1. If a prior InventoryBalance exists, posts an 'opening_reversal' entry
+             that zeroes it out.
+          2. Posts an 'opening_balance' entry with the physically counted weight.
+
+        Both entry types use movement_type='opening'.  Idempotent — safe to call
+        again if the session was already partially posted.
+        Rebuilds InventoryBalance from the new entries before returning.
+        Returns list of new InventoryLedger rows written.
+        """
+        from models import db, InventoryCountLine, InventoryLedger, InventoryBalance
+
+        lines = InventoryCountLine.query.filter_by(session_id=session.id).all()
+        entries: list = []
+
+        for ln in lines:
+            if ln.counted_weight is None:
+                continue
+
+            counted = round(float(ln.counted_weight), 4)
+
+            existing = InventoryBalance.query.filter_by(
+                branch_id=ln.branch_id,
+                category_id=ln.category_id,
+                karat=ln.karat,
+            ).first()
+            prior_balance = round(float(existing.balance), 4) if existing else 0.0
+
+            reversal_exists = InventoryLedger.query.filter_by(
+                source_type='opening_reversal',
+                source_id=session.id,
+                source_line_id=ln.id,
+                movement_type='opening',
+            ).first()
+            if not reversal_exists and prior_balance != 0.0:
+                row = InventoryLedger(
+                    source_type='opening_reversal',
+                    source_id=session.id,
+                    source_line_id=ln.id,
+                    movement_type='opening',
+                    branch_id=ln.branch_id,
+                    category_id=ln.category_id,
+                    karat=ln.karat,
+                    weight_delta=-prior_balance,
+                    posted_by=posted_by,
+                    notes=f'إلغاء رصيد سابق — جلسة افتتاحية #{session.id}',
+                )
+                db.session.add(row)
+                entries.append(row)
+
+            balance_exists = InventoryLedger.query.filter_by(
+                source_type='opening_balance',
+                source_id=session.id,
+                source_line_id=ln.id,
+                movement_type='opening',
+            ).first()
+            if not balance_exists and counted != 0.0:
+                row = InventoryLedger(
+                    source_type='opening_balance',
+                    source_id=session.id,
+                    source_line_id=ln.id,
+                    movement_type='opening',
+                    branch_id=ln.branch_id,
+                    category_id=ln.category_id,
+                    karat=ln.karat,
+                    weight_delta=counted,
+                    posted_by=posted_by,
+                    notes=f'رصيد افتتاحي — جلسة #{session.id}',
+                )
+                db.session.add(row)
+                entries.append(row)
+
+        if entries:
+            db.session.flush()
+
+        cls.rebuild_balance_for_session(session)
+        return entries
+
     # ── Invoice helpers ───────────────────────────────────────────────────────
 
     @classmethod
@@ -73,7 +155,7 @@ class InventoryPostingService:
             return []
 
         movement_type, direction = mapping
-        now = datetime.now()
+        now = datetime.now()  # clock-guard: TIME-001
         posted_by = getattr(invoice, 'posted_by', None)
         branch_id = getattr(invoice, 'branch_id', None)
         invoice_id = int(invoice.id)
@@ -164,7 +246,7 @@ class InventoryPostingService:
         movement_type, _ = mapping
         reversal_type = movement_type + '_reversal'
         invoice_id = int(invoice.id)
-        now = datetime.now()
+        now = datetime.now()  # clock-guard: TIME-001
         posted_by = getattr(invoice, 'posted_by', None)
         entries: list = []
 
@@ -224,7 +306,7 @@ class InventoryPostingService:
 
         adj_id = int(adjustment.id)
         posted_by = getattr(adjustment, 'posted_by', None) or getattr(adjustment, 'created_by', None)
-        now = datetime.now()
+        now = datetime.now()  # clock-guard: TIME-001
         entries: list = []
 
         for line in (getattr(adjustment, 'lines', None) or []):
@@ -329,7 +411,7 @@ class InventoryPostingService:
             if row:
                 row.balance = round(row.balance + entry.weight_delta, 4)
                 row.snapshot_max_ledger_id = entry.id
-                row.updated_at = datetime.now()
+                row.updated_at = datetime.now()  # clock-guard: TIME-001
             else:
                 row = InventoryBalance(
                     branch_id=entry.branch_id,
@@ -337,7 +419,7 @@ class InventoryPostingService:
                     karat=entry.karat,
                     balance=round(entry.weight_delta, 4),
                     snapshot_max_ledger_id=entry.id,
-                    updated_at=datetime.now(),
+                    updated_at=datetime.now(),  # clock-guard: TIME-001
                 )
                 db.session.add(row)
 

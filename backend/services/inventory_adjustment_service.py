@@ -65,7 +65,7 @@ class InventoryAdjustmentService:
             reason=reason or 'OTHER',
             notes=notes or None,
             created_by=created_by or session.approved_by or 'system',
-            created_at=datetime.now(),
+            created_at=datetime.now(),  # clock-guard: TIME-001
         )
         db.session.add(adj)
         db.session.flush()
@@ -128,7 +128,7 @@ class InventoryAdjustmentService:
             status='draft',
             reason=reason,
             created_by=created_by,
-            created_at=datetime.now(),
+            created_at=datetime.now(),  # clock-guard: TIME-001
         )
         db.session.add(adj)
         db.session.flush()
