@@ -14,6 +14,7 @@ import {
 } from 'react'
 import { goldStatusFromAge, GoldPriceStatus } from './domain-states'
 import { goldApi } from './api'
+import { syncServerClock, serverNow } from './server-clock'
 import type { GoldLiveBarRates } from '@/components/GoldLiveBar'
 
 export interface GoldPriceState {
@@ -60,17 +61,24 @@ export function GoldPriceProvider({
       goldApi.getRates()
         .then(data => {
           if (cancelled) return
+          syncServerClock(data.serverNow)
           setRates({ karat24: data.karat24, karat21: data.karat21 })
           const serverAge = Math.max(
             0,
-            Math.floor((Date.now() - new Date(data.updatedAt).getTime()) / 1_000),
+            Math.floor((serverNow() - new Date(data.updatedAt).getTime()) / 1_000),
           )
           setAge(serverAge)
         })
         .catch(() => { /* keep initial values — bar stays visible with no prices */ })
     }
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.ready.then(() => { if (!cancelled) doFetch() })
+      if (navigator.serviceWorker.controller) {
+        // SW already active (warm load / SPA navigation) — fetch immediately
+        doFetch()
+      } else {
+        // Cold first-load — wait for SW to activate before fetching
+        navigator.serviceWorker.ready.then(() => { if (!cancelled) doFetch() })
+      }
     } else {
       doFetch()
     }

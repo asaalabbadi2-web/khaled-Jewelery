@@ -1,9 +1,13 @@
 import { goldApi } from '@/lib/api'
 import { GoldPriceProvider } from '@/lib/gold-price-context'
+import { SearchProvider } from '@/lib/search-context'
+import { ReservationProvider } from '@/lib/reservation-context'
 import { GoldLiveBarWrapper } from '@/components/GoldLiveBarWrapper'
 import { SiteNavWrapper } from '@/components/SiteNavWrapper'
 import { ContentOffset } from '@/components/ContentOffset'
 import { SiteFooter } from '@/components/SiteFooter'
+import { SearchSheet } from './SearchSheet'
+import { BrowsingStripIsland } from './BrowsingStripIsland'
 
 export default async function SiteLayout({ children }: { children: React.ReactNode }) {
   let initialRates = null
@@ -19,10 +23,16 @@ export default async function SiteLayout({ children }: { children: React.ReactNo
 
   return (
     <GoldPriceProvider initialRates={initialRates} initialAge={initialAge}>
-      <GoldLiveBarWrapper />
-      <SiteNavWrapper />
-      <ContentOffset>{children}</ContentOffset>
-      <SiteFooter />
+      <SearchProvider>
+        <ReservationProvider>
+          <GoldLiveBarWrapper />
+          <SiteNavWrapper />
+          <ContentOffset>{children}</ContentOffset>
+          <SiteFooter />
+          <SearchSheet />
+          <BrowsingStripIsland />
+        </ReservationProvider>
+      </SearchProvider>
     </GoldPriceProvider>
   )
 }

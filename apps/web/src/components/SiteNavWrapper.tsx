@@ -3,6 +3,7 @@
 import { useRouter, usePathname } from 'next/navigation'
 import { SiteHeader } from './SiteHeader'
 import { useGoldPrice } from '@/lib/gold-price-context'
+import { useSearch } from '@/lib/search-context'
 import type { SiteHeaderProps } from './SiteHeader'
 
 type ActivePage = NonNullable<SiteHeaderProps['active']>
@@ -17,6 +18,7 @@ export function SiteNavWrapper() {
   const router    = useRouter()
   const pathname  = usePathname()
   const { hasBanner } = useGoldPrice()
+  const { openSearch } = useSearch()
 
   const active = Object.entries(ROUTE_TO_ACTIVE).find(
     ([route]) => pathname === route || pathname.startsWith(route + '/'),
@@ -30,6 +32,7 @@ export function SiteNavWrapper() {
       onCatalog={() => router.push('/jewellery/rings')}
       onAbout={()   => router.push('/about')}
       onTrack={()   => router.push('/track')}
+      onSearch={openSearch}
     />
   )
 }
