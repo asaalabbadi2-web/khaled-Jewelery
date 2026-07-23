@@ -1,0 +1,263 @@
+openapi: "3.1.0"
+info:
+  title: "POS Claim — Contract v1.0"
+  version: "1.0.0"
+  description: |
+    Machine-to-machine contract between the ERP (POS terminal) and the Commerce API
+    for the terminal fix of INV-4 (ADR-016 §H1).
+
+    **Design inversion (ADR-016 §N1):**
+    Before this contract, the ERP *read* availability then *wrote* an invoice — a
+    TOCTOU race spanning two databases.
+    After: the ERP *requests an exclusive claim* from Commerce. Commerce grants or
+    denies the claim inside its own ACID transaction (SELECT FOR UPDATE on the
+    reservation row). The ERP may only write its invoice after receiving a 201.
+
+    **Three-step ERP integration:**
+    ```
+    1. POST /api/v1/items/{item_id}/pos-claim          # request exclusive intent
+       ├── 201  → proceed; store claim_id
+       └── 409  → block; abort sale; no ERP DB write
+
+    2. (ERP opens its own transaction; writes invoice to ERP DB)
+
+    3a. POST /api/v1/items/{item_id}/pos-claim/{claim_id}/confirm  # invoice committed
+    3b. DELETE /api/v1/items/{item_id}/pos-claim/{claim_id}        # invoice rolled back
+    ```
+
+    **Claim lifecycle:**
+    ```
+    ACTIVE ──→ CONFIRMED  (ERP committed invoice)
+           ──→ RELEASED   (ERP rolled back; voluntary return)
+           ──→ EXPIRED    (ERP crashed; natural expiry after ttl_seconds)
+    ```
+
+    **Auth:** All three endpoints require the `X-POS-Secret` header (shared secret,
+    constant-time comparison). Secret is configured via `POS_API_SECRET` env var on
+    the Commerce side and `COMMERCE_POS_SECRET` on the ERP side.
+
+    **Consumers of this spec:**
+    - Track 1 (Frontend): may add POS UI that shows claim status
+    - Track 3 (Integration tests): sandbox assertions for ERP ↔ Commerce claim flow
+
+servers:
+  - url: "http://localhost:8001"
+    description: "Local development (Commerce API)"
+  - url: "http://commerce-api.internal"
+    description: "Staging / production (internal network)"
+
+security:
+  - posSecret: []
+
+components:
+  securitySchemes:
+    posSecret:
+      type: apiKey
+      in: header
+      name: X-POS-Secret
+      description: |
+        Machine-to-machine secret. Commerce verifies using constant-time compare
+        against the `POS_API_SECRET` environment variable.
+
+  schemas:
+    PosClaimRequest:
+      type: object
+      properties:
+        ttl_seconds:
+          type: integer
+          minimum: 1
+          maximum: 300
+          default: 30
+          description: |
+            How long (seconds) the claim is valid. Should be at least as long as the
+            ERP's invoice write path (typically < 5 s). The Commerce API clamps to
+            [1, 300]. Default 30 s is sufficient for any ERP write path; shorter
+            values reduce exposure when the ERP crashes without releasing.
+
+    PosClaimResponse:
+      type: object
+      required: [claim_id, item_id, expires_at]
+      properties:
+        claim_id:
+          type: string
+          example: "CLM-a3f9b2c1d4e5f6a7"
+          description: Opaque claim identifier. Store this for the confirm/release call.
+        item_id:
+          type: integer
+          example: 42
+        expires_at:
+          type: string
+          format: date-time
+          example: "2026-07-23T14:35:00+03:00"
+          description: UTC ISO-8601. ERP must confirm before this timestamp or the claim expires.
+
+    PosClaimStatusResponse:
+      type: object
+      required: [claim_id, status]
+      properties:
+        claim_id:
+          type: string
+        status:
+          type: string
+          enum: [CONFIRMED, RELEASED, EXPIRED]
+
+    PosClaimConflict:
+      type: object
+      required: [type]
+      discriminator:
+        propertyName: type
+      properties:
+        type:
+          type: string
+          enum: [online_reservation, pos_claim]
+      oneOf:
+        - title: OnlineReservationConflict
+          type: object
+          required: [type, reservation_id, reserved_until]
+          properties:
+            type:
+              const: online_reservation
+            reservation_id:
+              type: string
+              description: Commerce reservation ID (for audit)
+            reserved_until:
+              type: string
+              format: date-time
+        - title: PosClaimConflict
+          type: object
+          required: [type, claim_id, expires_at]
+          properties:
+            type:
+              const: pos_claim
+            claim_id:
+              type: string
+              description: The winning claim that holds the item
+            expires_at:
+              type: string
+              format: date-time
+
+    ErrorDetail:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          oneOf:
+            - type: string
+            - $ref: '#/components/schemas/PosClaimConflict'
+
+paths:
+  /api/v1/items/{item_id}/pos-claim:
+    post:
+      operationId: createPosClaim
+      summary: Request an exclusive POS claim for an item
+      description: |
+        Atomically checks online reservation state and creates a POS claim.
+
+        **Idempotency:** NOT idempotent. Each call creates a new claim if the
+        item is available. The ERP should not retry on failure; instead, check
+        the 409 detail and surface the conflict to the operator.
+
+        **On 201:** Store `claim_id`. Call confirm/release when the ERP invoice
+        completes or is rolled back.
+
+        **On 409:** Abort the sale. Show the conflict type to the operator.
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ERP item primary key
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PosClaimRequest'
+      responses:
+        "201":
+          description: Claim granted. ERP may write its invoice.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosClaimResponse'
+        "409":
+          description: |
+            Item is unavailable for POS sale. Two sub-types:
+            - `online_reservation` — an ACTIVE online reservation exists.
+            - `pos_claim` — another POS request has an unexpired ACTIVE claim.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorDetail'
+        "401":
+          description: Missing or invalid X-POS-Secret header
+        "503":
+          description: POS_API_SECRET not configured on the Commerce side
+
+  /api/v1/items/{item_id}/pos-claim/{claim_id}/confirm:
+    post:
+      operationId: confirmPosClaim
+      summary: Confirm a POS claim after the ERP invoice is committed
+      description: |
+        Marks the claim CONFIRMED. Call this immediately after the ERP's
+        `db.session.commit()` succeeds.
+
+        Once confirmed, the item is treated as sold from the Commerce perspective.
+        The ERPSyncWorker reconciles the order record asynchronously.
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: claim_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Claim confirmed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PosClaimStatusResponse'
+        "404":
+          description: Claim not found for this item_id / claim_id pair
+        "422":
+          description: Claim is expired or already in a terminal state (CONFIRMED / RELEASED)
+        "401":
+          description: Missing or invalid X-POS-Secret header
+
+  /api/v1/items/{item_id}/pos-claim/{claim_id}:
+    delete:
+      operationId: releasePosClaim
+      summary: Release a POS claim when the ERP sale is rolled back
+      description: |
+        Marks the claim RELEASED. Call this when the ERP's `db.session.rollback()`
+        fires (exception handlers, validation errors, operator cancellation).
+
+        If the ERP crashes without calling this endpoint, the claim expires naturally
+        after `ttl_seconds`. The item is then claimable again by the next POS request.
+
+        Calling DELETE on an already-confirmed or already-released claim is idempotent
+        and returns 204.
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: claim_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Claim released (or already in a terminal state — no-op)
+        "404":
+          description: Claim not found for this item_id / claim_id pair
+        "401":
+          description: Missing or invalid X-POS-Secret header

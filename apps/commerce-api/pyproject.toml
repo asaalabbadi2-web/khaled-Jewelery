@@ -16,6 +16,7 @@ dependencies = [
     "yasargold-platform",
     "prometheus-client>=0.21",
     "httpx>=0.28",
+    "alembic>=1.13",
 ]
 
 [tool.uv.sources]

@@ -1,0 +1,190 @@
+# docker-compose.local.yml — fully-local staging environment
+#
+# Architecture mirrors production:
+#   • Two SEPARATE PostgreSQL instances (seam is explicit, hides no TOCTOU bugs)
+#   • ERP has NO published port — internal network only (constitution §1.3)
+#   • Schema is managed by Alembic (commerce-migrate) + db.create_all (ERP)
+#   • COMMERCE_ENV=development; all external gateways use log/sandbox adapters
+#
+# HARD RULE: this file must never reference a Tailscale endpoint, remote IP,
+# or any production service.  Tailscale/remote endpoints → staging ERP only,
+# never production.  See docs/runbooks/local-staging.md for the full rationale.
+#
+# Usage: see Makefile targets (make up / make down / make reset / make smoke)
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  yasargold:
+    driver: bridge
+
+volumes:
+  postgres-erp-data:
+  postgres-commerce-data:
+
+services:
+
+  # ── Data stores ────────────────────────────────────────────────────────────
+
+  postgres-erp:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: erp
+      POSTGRES_PASSWORD: erp_dev
+      POSTGRES_DB: yasargold_erp
+    volumes:
+      - postgres-erp-data:/var/lib/postgresql/data
+    networks:
+      - yasargold
+    # local inspection only — never published in staging/production
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U erp -d yasargold_erp"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *default-logging
+
+  postgres-commerce:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: commerce
+      POSTGRES_PASSWORD: commerce_dev
+      POSTGRES_DB: yasargold_commerce
+    volumes:
+      - postgres-commerce-data:/var/lib/postgresql/data
+    networks:
+      - yasargold
+    # local inspection only — never published in staging/production
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U commerce -d yasargold_commerce"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - yasargold
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging: *default-logging
+
+  # ── Commerce migration (one-shot, exits 0 on success) ────────────────────
+  # This is the explicit deploy step: schema is applied here, never in the API
+  # lifespan.  The `commerce` service depends on this completing successfully.
+  # In staging/production this step runs in CI or a deploy pipeline step.
+
+  commerce-migrate:
+    build:
+      context: .
+      dockerfile: apps/commerce-api/Dockerfile
+    command: >
+      sh -c "cd /app/apps/commerce-api &&
+             alembic upgrade head"
+    environment:
+      DATABASE_URL: postgresql://commerce:commerce_dev@postgres-commerce/yasargold_commerce
+    networks:
+      - yasargold
+    depends_on:
+      postgres-commerce:
+        condition: service_healthy
+    restart: no
+    logging: *default-logging
+
+  # ── ERP (Flask + gunicorn) — internal only, NO published port ─────────────
+  # constitution §1.3: ERP is a back-office service; storefront never calls it
+  # directly.  Commerce API talks to ERP via ERP_BASE_URL on the internal network.
+  # ERP auto-creates its schema via db.create_all() on startup (existing pattern).
+
+  erp:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://erp:erp_dev@postgres-erp/yasargold_erp
+      SECRET_KEY: local-erp-flask-secret-not-for-production
+      FLASK_ENV: development
+      CORS_ORIGINS: "*"
+      COMMERCE_API_URL: http://commerce:8000
+      ERP_INTERNAL_SECRET: local-internal-secret-dev
+      POS_API_SECRET: local-pos-secret-dev
+    # NO ports: block — ERP is reachable only on the yasargold network
+    networks:
+      - yasargold
+    depends_on:
+      postgres-erp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8001/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: *default-logging
+
+  # ── Commerce API (FastAPI + uvicorn) ──────────────────────────────────────
+
+  commerce:
+    build:
+      context: .
+      dockerfile: apps/commerce-api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://commerce:commerce_dev@postgres-commerce/yasargold_commerce
+      COMMERCE_ENV: development
+      REDIS_URL: redis://redis:6379/0
+      ERP_BASE_URL: http://erp:8001
+      ERP_INTERNAL_SECRET: local-internal-secret-dev
+      POS_API_SECRET: local-pos-secret-dev
+    ports:
+      - "8000:8000"
+    networks:
+      - yasargold
+    depends_on:
+      commerce-migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      erp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging: *default-logging
+
+  # ── Workers (same image as commerce, different command) ───────────────────
+  # Runs all background workers in daemon threads — local convenience only.
+  # In production each worker runs in its own container with its own restart
+  # policy and scheduler.  See docs/runbooks/local-staging.md §Workers.
+
+  workers:
+    build:
+      context: .
+      dockerfile: apps/commerce-api/Dockerfile
+    command: ["python", "/app/apps/commerce-api/run_workers.py"]
+    environment:
+      DATABASE_URL: postgresql://commerce:commerce_dev@postgres-commerce/yasargold_commerce
+      COMMERCE_ENV: development
+      REDIS_URL: redis://redis:6379/0
+      ERP_BASE_URL: http://erp:8001
+      ERP_INTERNAL_SECRET: local-internal-secret-dev
+    networks:
+      - yasargold
+    depends_on:
+      commerce:
+        condition: service_healthy
+    logging: *default-logging
