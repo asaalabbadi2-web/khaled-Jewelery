@@ -19,18 +19,23 @@ ON CONFLICT (id) DO NOTHING;
 
 -- ── Chart of accounts (minimum for double-entry bookkeeping at POS) ────────
 -- IDs mirror conftest.py so that unit tests continue to pass against this seed.
+-- balance_18k/21k/22k/24k, tracks_weight, include_in_gram_profit,
+-- exclude_from_gram_profit are all nullable=False with SQLAlchemy client-side
+-- defaults — psql bypasses those defaults, so explicit zeros are required here.
 INSERT INTO account
-  (id, account_number, name, type, transaction_type, balance_cash)
+  (id, account_number, name, type, transaction_type,
+   balance_cash, balance_18k, balance_21k, balance_22k, balance_24k,
+   tracks_weight, include_in_gram_profit, exclude_from_gram_profit)
 VALUES
-  (15,   '15',   'صندوق النقدية',                'Asset',   'cash', 50000.0),
-  (400,  '400',  'مبيعات ذهب جديد',             'Revenue', 'gold',     0.0),
-  (521,  '521',  'تكلفة مبيعات الذهب',           'Expense', 'gold',     0.0),
-  (1200, '1200', 'مخزون ذهب عيار 24',            'Asset',   'gold',     0.0),
-  (1220, '1220', 'مخزون ذهب عيار 21',            'Asset',   'gold',     0.0),
-  (1300, '1300', 'مخزون ذهب معروض للبيع (موحد)','Asset',   'gold',     0.0),
-  (1310, '1310', 'مخزون ذهب كسر (موحد)',         'Asset',   'gold',     0.0),
-  (1610, '1610', 'خزينة مدى',                    'Asset',   'cash',     0.0)
-ON CONFLICT (id) DO NOTHING;
+  (15,   '15',   'صندوق النقدية',                'Asset',   'cash', 50000.0, 0.0, 0.0, 0.0, 0.0, false, false, false),
+  (400,  '400',  'مبيعات ذهب جديد',             'Revenue', 'gold',     0.0,  0.0, 0.0, 0.0, 0.0, false, false, false),
+  (521,  '521',  'تكلفة مبيعات الذهب',           'Expense', 'gold',     0.0,  0.0, 0.0, 0.0, 0.0, false, false, false),
+  (1200, '1200', 'مخزون ذهب عيار 24',            'Asset',   'gold',     0.0,  0.0, 0.0, 0.0, 0.0, true,  false, false),
+  (1220, '1220', 'مخزون ذهب عيار 21',            'Asset',   'gold',     0.0,  0.0, 0.0, 0.0, 0.0, true,  false, false),
+  (1300, '1300', 'مخزون ذهب معروض للبيع (موحد)','Asset',   'gold',     0.0,  0.0, 0.0, 0.0, 0.0, true,  false, false),
+  (1310, '1310', 'مخزون ذهب كسر (موحد)',         'Asset',   'gold',     0.0,  0.0, 0.0, 0.0, 0.0, true,  false, false),
+  (1610, '1610', 'خزينة مدى',                    'Asset',   'cash',     0.0,  0.0, 0.0, 0.0, 0.0, false, false, false)
+ON CONFLICT DO NOTHING;
 
 -- ── Categories (must match commerce_seed.sql IDs) ─────────────────────────
 INSERT INTO category (id, name, description, karat, created_at) VALUES
@@ -52,7 +57,7 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- ── Current gold price ─────────────────────────────────────────────────────
--- Note: ERP GoldPrice model has no explicit __tablename__ → Flask-SQLAlchemy
--- lowercases the class name → table is 'goldprice' (not 'gold_price').
-INSERT INTO goldprice (id, price) VALUES (1, 195.50)
+-- Flask-SQLAlchemy converts GoldPrice → gold_price (camel_to_snake, not
+-- simple lowercase), so the table name has an underscore.
+INSERT INTO gold_price (id, price) VALUES (1, 195.50)
 ON CONFLICT (id) DO NOTHING;

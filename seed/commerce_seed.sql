@@ -37,6 +37,8 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 -- ── Gold price (SAR per gram, 21-karat basis) ──────────────────────────────
+-- gold_price.date stores UTC (naive). Both catalog.py and reservations.py
+-- normalise it with .replace(tzinfo=timezone.utc). Never store local time here.
 INSERT INTO gold_price (id, price, date) VALUES
   (1, 195.50, NOW())
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET price = EXCLUDED.price, date = EXCLUDED.date;

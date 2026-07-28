@@ -134,12 +134,46 @@ def get_last_known_price():
     return None
 
 
+def _push_to_commerce(price: float) -> None:
+    """Push a fresh gold price to the Commerce API after saving it locally.
+
+    Fire-and-forget: if Commerce is unreachable, we log a warning and
+    continue — the ERP's own operation must never fail because of this.
+    The Commerce gold_price table has no other writer, so a failed push
+    means quotes become STALE within 90 s; the next scheduler cycle will
+    restore freshness. This is an acceptable gap — it is logged for ops.
+    """
+    url = os.environ.get("COMMERCE_API_URL", "").rstrip("/")
+    secret = os.environ.get("ERP_INTERNAL_SECRET", "")
+    if not url or not secret:
+        return
+    try:
+        import json, uuid, urllib.request
+        corr_id = str(uuid.uuid4())
+        body = json.dumps({"price": price}).encode()
+        req = urllib.request.Request(
+            f"{url}/api/internal/gold-price",
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "X-Internal-Secret": secret,
+                "X-Correlation-ID": corr_id,
+            },
+            method="POST",
+        )
+        resp = urllib.request.urlopen(req, timeout=5)
+        print(f"[GoldPrice] pushed {price:.2f} to Commerce → HTTP {resp.status} correlation_id={corr_id}")
+    except Exception as exc:
+        print(f"[WARN] gold price push to Commerce failed: {exc}")
+
+
 def save_gold_price(app, price):
     with app.app_context():
         from models import GoldPrice
-        gp = GoldPrice(price=price, date=datetime.datetime.now())
+        gp = GoldPrice(price=price, date=datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None))
         db.session.add(gp)
         db.session.commit()
+    _push_to_commerce(price)
 
 
 # ---------------------------------------------------------------------------
