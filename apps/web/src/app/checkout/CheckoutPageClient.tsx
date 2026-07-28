@@ -102,6 +102,24 @@ function CheckoutSummary({ reservation }: { reservation: ReservationRecord }) {
   )
 }
 
+// ─── Field wrapper ─────────────────────────────────────────────────────────
+
+function Field({
+  id, label, required, error, children,
+}: { id: string; label: string; required?: boolean; error?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label htmlFor={id} className="block text-xs font-medium text-charcoal mb-1">
+        {label}{required && <span className="text-gold mr-0.5">*</span>}
+      </label>
+      {children}
+      {error && (
+        <p className="text-xs text-warning mt-1" role="alert">{error}</p>
+      )}
+    </div>
+  )
+}
+
 // ─── Step indicator ────────────────────────────────────────────────────────
 
 function StepIndicator({ step }: { step: 1 | 2 }) {
@@ -394,23 +412,6 @@ export function CheckoutPageClient() {
     )
   }
 
-  // ─── Field component ─────────────────────────────────────────────────────
-
-  function Field({
-    id, label, required, error, children,
-  }: { id: string; label: string; required?: boolean; error?: string; children: React.ReactNode }) {
-    return (
-      <div>
-        <label htmlFor={id} className="block text-xs font-medium text-charcoal mb-1">
-          {label}{required && <span className="text-gold mr-0.5">*</span>}
-        </label>
-        {children}
-        {error && (
-          <p className="text-xs text-warning mt-1" role="alert">{error}</p>
-        )}
-      </div>
-    )
-  }
 
   const inputCls = (field: keyof AddressData) =>
     `w-full border rounded-sm px-3 py-2.5 text-sm text-charcoal bg-surface focus:outline-none focus:ring-1 focus:ring-gold/30 ${

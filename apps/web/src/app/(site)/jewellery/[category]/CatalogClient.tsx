@@ -2,16 +2,15 @@
 
 import { useState, useMemo, useCallback } from 'react'
 import { X, SlidersHorizontal, ChevronDown } from 'lucide-react'
-import { ProductCard } from '@/components/product'
+import { ProductCard, type ProductCardItem } from '@/components/product'
 import { COPY } from '@/lib/contract-copy'
-import type { MockCatalogItem } from '@/mocks/catalog-data'
 
 interface Props {
-  items:        MockCatalogItem[]
+  items:        ProductCardItem[]
   categoryName: string
 }
 
-type Karat   = 24 | 21 | 18
+type Karat   = 24 | 22 | 21 | 18
 type Weight  = 'lt5' | '5to10' | 'gt10'
 type SortKey = 'newest' | 'priceAsc' | 'priceDesc' | 'weight'
 
@@ -38,7 +37,7 @@ const WEIGHT_OPTIONS: { key: Weight; label: string }[] = [
   { key: 'gt10',  label: COPY.catalog.weightGt10  },
 ]
 
-function matchesWeight(item: MockCatalogItem, sel: Weight[]): boolean {
+function matchesWeight(item: ProductCardItem, sel: Weight[]): boolean {
   if (sel.length === 0) return true
   return sel.some(w =>
     w === 'lt5'   ? item.weight < 5 :
@@ -47,7 +46,7 @@ function matchesWeight(item: MockCatalogItem, sel: Weight[]): boolean {
   )
 }
 
-function applySorting(items: MockCatalogItem[], sort: SortKey): MockCatalogItem[] {
+function applySorting(items: ProductCardItem[], sort: SortKey): ProductCardItem[] {
   const copy = [...items]
   if (sort === 'priceAsc')  return copy.sort((a, b) => a.price - b.price)
   if (sort === 'priceDesc') return copy.sort((a, b) => b.price - a.price)
@@ -61,11 +60,11 @@ function toggle<T>(arr: T[], val: T): T[] {
 
 // Score each item by how many active filter groups it satisfies; return top-3. (FP-5)
 function nearestItems(
-  allItems: MockCatalogItem[],
+  allItems: ProductCardItem[],
   karats: Karat[],
   weights: Weight[],
   [priceMin, priceMax]: [number, number],
-): MockCatalogItem[] {
+): ProductCardItem[] {
   return allItems
     .map(item => {
       let score = 0

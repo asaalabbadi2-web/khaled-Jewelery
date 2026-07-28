@@ -125,7 +125,7 @@ export function SearchSheet() {
                 >
                   <div className="w-12 h-12 rounded-lg overflow-hidden bg-image-bg shrink-0">
                     <ImageWithFallback
-                      src={item.img}
+                      src={undefined}
                       alt={item.name}
                       className="w-full h-full object-cover"
                     />
@@ -140,7 +140,7 @@ export function SearchSheet() {
 
                   <div className="shrink-0 text-left" dir="ltr">
                     <span className="text-sm font-semibold tabular-nums text-charcoal">
-                      {pr(item.price)}
+                      {pr(item.price ?? 0)}
                     </span>
                     <span className="text-xs text-muted mr-1">{COPY.search.currencySuffix}</span>
                   </div>

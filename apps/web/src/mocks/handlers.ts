@@ -38,31 +38,60 @@ export const handlers = [
     })
   }),
 
-  // Catalog listing — supports ?q= for search
-  http.get(`${API_BASE}/catalog/items`, ({ request }) => {
+  // Catalog listing — path matches Commerce API /api/v1/catalog/products
+  http.get(`${API_BASE}/catalog/products`, ({ request }) => {
     const q = new URL(request.url).searchParams.get('q')?.trim().toLowerCase() ?? ''
     const items = q ? MOCK_CATALOG.filter(p => p.name.includes(q)) : MOCK_CATALOG
-    return HttpResponse.json({ items, total: items.length })
+    // Shape matches CatalogPageSchema
+    const mapped = items.map(p => ({
+      id:              p.id,
+      item_code:       p.id,
+      slug:            p.slug,
+      name:            p.name,
+      karat:           String(p.karat),
+      weight:          p.weight,
+      net_gold_weight: p.weight,
+      has_stones:      false,
+      stock:           p.availability === 'SOLD' ? 0 : 1,
+      price:           p.price,
+      category:        null,
+    }))
+    return HttpResponse.json({ items: mapped, total: mapped.length, page: 1, page_size: 20 })
   }),
 
-  // Single product by slug — uses shared MOCK_CATALOG (A3: no standalone mock)
-  http.get(`${API_BASE}/catalog/items/:slug`, ({ params }) => {
+  // Single product by slug — path matches Commerce API /api/v1/catalog/products/{slug}
+  http.get(`${API_BASE}/catalog/products/:slug`, ({ params }) => {
     const item = MOCK_CATALOG.find(p => p.slug === params.slug)
     if (!item) return HttpResponse.json({ detail: 'not found' }, { status: 404 })
-    return HttpResponse.json({ ...item, breakdown: getBreakdown(item.id, item) })
+    return HttpResponse.json({
+      id:              item.id,
+      item_code:       item.id,
+      slug:            item.slug,
+      name:            item.name,
+      karat:           String(item.karat),
+      weight:          item.weight,
+      net_gold_weight: item.weight,
+      has_stones:      false,
+      stock:           item.availability === 'SOLD' ? 0 : 1,
+      price:           item.price,
+      category:        null,
+      pricing_snapshot: null,
+    })
   }),
 
   // Create reservation — derives lockedPrice from the requested item (CRIT-1)
+  // Accepts item_slug (real API contract) and falls back to itemId (legacy MSW).
   http.post(`${API_BASE}/reservations`, async ({ request }) => {
-    const body = await request.json() as { itemId?: string }
-    const item = MOCK_CATALOG.find(p => p.id === body.itemId)
+    const body = await request.json() as { item_slug?: string; itemId?: string }
+    const slug = body.item_slug ?? body.itemId ?? ''
+    const item = MOCK_CATALOG.find(p => p.slug === slug || p.id === slug)
     if (!item) return HttpResponse.json({ detail: 'item not found' }, { status: 404 })
 
     const reservationId = `RSV-${String(ridCounter++).padStart(3, '0')}`
     const expiresAt     = new Date(Date.now() + 10 * 60_000).toISOString()
 
     reservationStore.set(reservationId, {
-      itemId:      item.id,
+      itemId:      item.slug,
       itemName:    item.name,
       lockedPrice: item.price,
       expiresAt,

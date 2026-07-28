@@ -17,6 +17,7 @@ export interface MockCatalogItem {
 }
 
 export const MOCK_CATALOG: MockCatalogItem[] = [
+  // ── Storybook / E2E test fixtures (stable slugs, not real DB items) ──────
   { id: 'R-21-0342', slug: 'R-21-0342', name: 'خاتم سوليتير',  karat: 21, weight: 8.45,  price: 1_215, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1605100804763-247f67b3557e?w=600&h=600&fit=crop&auto=format' },
   { id: 'R-21-0418', slug: 'R-21-0418', name: 'خاتم تريلوجي',  karat: 21, weight: 9.30,  price: 2_340, availability: ItemAvailability.RESERVED,  img: 'https://images.unsplash.com/photo-1589128777073-263566ae5e4d?w=600&h=600&fit=crop&auto=format' },
   { id: 'R-18-0314', slug: 'R-18-0314', name: 'خاتم هالو',      karat: 18, weight: 5.60,  price: 1_480, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1598560917807-1bae44bd2be8?w=600&h=600&fit=crop&auto=format' },
@@ -25,6 +26,17 @@ export const MOCK_CATALOG: MockCatalogItem[] = [
   { id: 'R-21-0399', slug: 'R-21-0399', name: 'خاتم كلاسيك',    karat: 21, weight: 7.80,  price: 1_790, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=600&h=600&fit=crop&auto=format' },
   { id: 'B-21-0101', slug: 'B-21-0101', name: 'سوار ترولوجي',   karat: 21, weight: 6.10,  price: 1_400, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1573408301185-9519f94816b5?w=600&h=600&fit=crop&auto=format' },
   { id: 'N-21-0202', slug: 'N-21-0202', name: 'عقد سوليتير',    karat: 21, weight: 4.30,  price:   990, availability: ItemAvailability.AVAILABLE, img: 'https://images.unsplash.com/photo-1515562141207-7a88fb7ce338?w=600&h=600&fit=crop&auto=format' },
+
+  // ── Real Commerce DB items (slugs mirror item_code.lower()) ──────────────
+  // Prices and weights must stay in sync with seed/commerce_seed.sql.
+  // MSW uses these entries to simulate the reservation lifecycle in dev mode
+  // so that Server-Component catalog pages (which call the real API) and
+  // Client-Component reservation flow (which goes through MSW) use the same items.
+  { id: 'i-000101', slug: 'i-000101', name: 'خاتم ذهب سادة 21',    karat: 21, weight: 5.20,  price:   855, availability: ItemAvailability.AVAILABLE, img: '' },
+  { id: 'i-000102', slug: 'i-000102', name: 'خاتم ذهب مجوهر 21',   karat: 21, weight: 6.80,  price: 1_240, availability: ItemAvailability.AVAILABLE, img: '' },
+  { id: 'i-000201', slug: 'i-000201', name: 'سوار ذهب 21',          karat: 21, weight: 12.50, price: 2_050, availability: ItemAvailability.AVAILABLE, img: '' },
+  { id: 'i-000301', slug: 'i-000301', name: 'قلادة ذهب 18',         karat: 18, weight: 8.30,  price: 1_640, availability: ItemAvailability.AVAILABLE, img: '' },
+  { id: 'i-000302', slug: 'i-000302', name: 'قلادة ذهب مجوهرة 18', karat: 18, weight: 10.10, price: 2_480, availability: ItemAvailability.AVAILABLE, img: '' },
 ]
 
 // Per-item price breakdown (label + SAR value)

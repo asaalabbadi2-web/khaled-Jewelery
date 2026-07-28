@@ -2,9 +2,7 @@ import Link from 'next/link'
 import { TrendingUp, Gem, Award, Package } from 'lucide-react'
 import { ProductCard } from '@/components/product'
 import { COPY } from '@/lib/contract-copy'
-import { MOCK_CATALOG } from '@/mocks/catalog-data'
-
-const FEATURED = MOCK_CATALOG.slice(0, 6)
+import { fetchProducts, toCatalogCardItem } from '@/lib/api/server'
 
 const COLLECTIONS = [
   {
@@ -54,7 +52,9 @@ const CHIPS = [
   COPY.home.chipShipping,
 ]
 
-export default function HomePage() {
+export default async function HomePage() {
+  const apiItems = await fetchProducts({ page_size: 6 })
+  const FEATURED  = apiItems.map(toCatalogCardItem)
   return (
     <main>
       {/* ── HERO ── */}

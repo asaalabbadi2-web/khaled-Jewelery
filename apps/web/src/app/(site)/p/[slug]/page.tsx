@@ -6,7 +6,12 @@ import { ProductImageGallery } from './ProductImageGallery'
 import { ProductCard } from '@/components/product'
 import { ItemAvailability } from '@/lib/domain-states'
 import { COPY } from '@/lib/contract-copy'
-import { MOCK_CATALOG, getBreakdown, MOCK_THUMBNAILS } from '@/mocks/catalog-data'
+import {
+  fetchProductDetail,
+  fetchProducts,
+  toCatalogCardItem,
+  toBreakdownRows,
+} from '@/lib/api/server'
 
 const TRUST = [
   { icon: Award,   text: COPY.product.trustCert     },
@@ -21,51 +26,46 @@ export default async function ProductPage({
 }) {
   const { slug } = await params
 
-  const product = MOCK_CATALOG.find(p => p.slug === slug)
-  if (!product || product.availability === ItemAvailability.SOLD) notFound()
+  const product = await fetchProductDetail(slug)
+  if (!product || product.stock === 0) notFound()
 
-  const breakdown  = getBreakdown(product.id, product)
-  const thumbnails = MOCK_THUMBNAILS[product.id] ?? []
+  const breakdown = toBreakdownRows(product)
 
   const SPECS = [
-    { label: COPY.product.specKarat,    value: COPY.product.specValue.karat(product.karat)   },
-    { label: COPY.product.specWeight,   value: COPY.product.specValue.weight(product.weight) },
-    { label: COPY.product.specMaterial, value: COPY.product.specValue.material               },
-    { label: COPY.product.specStone,    value: COPY.product.specValue.stone                  },
+    { label: COPY.product.specKarat,    value: COPY.product.specValue.karat(parseInt(product.karat ?? '21', 10) as 18 | 21 | 22 | 24) },
+    { label: COPY.product.specWeight,   value: COPY.product.specValue.weight(product.weight ?? 0) },
+    { label: COPY.product.specMaterial, value: COPY.product.specValue.material },
+    { label: COPY.product.specStone,    value: COPY.product.specValue.stone    },
   ]
 
-  // Similar pieces: same karat, different item, available/reserved only
-  const similar = MOCK_CATALOG
-    .filter(p => p.id !== product.id && p.karat === product.karat)
+  // Similar pieces: same karat, different slug, in-stock
+  const allKarat   = await fetchProducts({ karat: product.karat ?? undefined, in_stock: true, page_size: 10 })
+  const similar    = allKarat
+    .filter(p => p.slug !== slug)
     .slice(0, 3)
+    .map(toCatalogCardItem)
 
   return (
     <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pb-16">
-      {/* Two-column product layout */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 lg:gap-12">
 
-        {/* Left: image gallery */}
         <ProductImageGallery
-          mainImg={product.img}
+          mainImg={undefined}
           name={product.name}
-          thumbnails={thumbnails}
+          thumbnails={[]}
         />
 
-        {/* Right column */}
         <div className="flex flex-col gap-5">
-          {/* Piece number + unique badge */}
           <p className="text-muted text-xs flex items-center gap-2" dir="ltr">
-            <span className="tabular-nums">{COPY.product.pieceNumberLabel}{'  '}{product.id}</span>
+            <span className="tabular-nums">{COPY.product.pieceNumberLabel}{'  '}{product.item_code}</span>
             <span className="text-gold/60">·</span>
             <span dir="rtl">{COPY.product.trustUnique}</span>
           </p>
 
-          {/* Name */}
           <h1 className="text-2xl font-semibold text-charcoal tracking-[-0.02em] -mt-2">
             {product.name}
           </h1>
 
-          {/* Specs table */}
           <table className="w-full text-sm border-collapse" aria-label="مواصفات القطعة">
             <tbody>
               {SPECS.map(({ label, value }) => (
@@ -77,15 +77,13 @@ export default async function ProductPage({
             </tbody>
           </table>
 
-          {/* Interactive pricing card */}
           <ProductPageClient
-            itemId={product.id}
+            itemId={product.slug}
             itemName={product.name}
-            price={product.price}
+            price={product.price ?? 0}
             breakdownItems={breakdown}
           />
 
-          {/* Trust row */}
           <div className="flex flex-wrap gap-4 border-t border-gold/10 pt-4">
             {TRUST.map(({ icon: Icon, text }) => (
               <div key={text} className="flex items-center gap-1.5 text-muted text-xs">
@@ -97,7 +95,6 @@ export default async function ProductPage({
         </div>
       </div>
 
-      {/* Similar pieces strip */}
       {similar.length > 0 && (
         <section className="mt-14 pt-8 border-t border-gold/15">
           <div className="flex items-baseline justify-between mb-6">
@@ -120,6 +117,5 @@ export default async function ProductPage({
   )
 }
 
-export function generateStaticParams() {
-  return MOCK_CATALOG.map(p => ({ slug: p.slug }))
-}
+// Dynamic rendering — product availability changes in real time
+export const dynamic = 'force-dynamic'

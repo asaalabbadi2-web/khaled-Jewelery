@@ -43,20 +43,23 @@ export const goldApi = {
 }
 
 export interface CatalogItem {
-  id:           string
-  slug:         string
-  name:         string
-  karat:        18 | 21 | 24
-  weight:       number
-  price:        number
-  availability: string
-  img:          string
+  id:              number
+  item_code:       string
+  slug:            string
+  name:            string
+  karat:           string | null
+  weight:          number | null
+  net_gold_weight: number | null
+  has_stones:      boolean
+  stock:           number
+  price:           number | null
+  category:        { id: number; name: string; karat: string | null } | null
 }
 
 export const catalogApi = {
   search: (q: string) =>
-    apiFetch<{ items: CatalogItem[]; total: number }>(
-      q ? `/catalog/items?q=${encodeURIComponent(q)}` : '/catalog/items',
+    apiFetch<{ items: CatalogItem[]; total: number; page: number; page_size: number }>(
+      q ? `/catalog/products?q=${encodeURIComponent(q)}` : '/catalog/products',
     ),
 }
 
@@ -64,6 +67,18 @@ export interface ReservationResponse {
   reservationId: string
   lockedPrice:   number
   expiresAt:     string
+}
+
+// Raw shape from the real Commerce API (snake_case).
+// MSW returns the camelCase compat fields alongside the real fields.
+interface RawReservationResponse {
+  reservation_id?: string
+  valid_until?:    string
+  locked_total_sar?: string
+  // MSW compat (camelCase)
+  reservationId?: string
+  lockedPrice?:   number
+  expiresAt?:     string
 }
 
 export interface ReservationRecord {
@@ -77,11 +92,17 @@ export interface ReservationRecord {
 }
 
 export const reservationApi = {
-  create: (itemId: string) =>
-    apiFetch<ReservationResponse>('/reservations', {
+  create: async (itemSlug: string): Promise<ReservationResponse> => {
+    const raw = await apiFetch<RawReservationResponse>('/reservations', {
       method: 'POST',
-      body:   JSON.stringify({ itemId }),
-    }),
+      body:   JSON.stringify({ item_slug: itemSlug }),
+    })
+    return {
+      reservationId: raw.reservationId ?? raw.reservation_id ?? '',
+      lockedPrice:   raw.lockedPrice   ?? parseFloat(raw.locked_total_sar ?? '0'),
+      expiresAt:     raw.expiresAt     ?? raw.valid_until ?? '',
+    }
+  },
   get: (rid: string) =>
     apiFetch<ReservationRecord>(`/reservations/${rid}`),
 }
