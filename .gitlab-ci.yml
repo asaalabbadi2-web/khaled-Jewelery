@@ -65,17 +65,17 @@ web-test:
     - pnpm install --frozen-lockfile
   script:
     # Gate 1: TypeScript
-    - pnpm --filter web typecheck
+    - pnpm --filter yasargold-web typecheck
     # Gate 2: ESLint (covers no-hex-color + jsx-a11y)
-    - pnpm --filter web lint
-    # Gate 3: State coverage + server-clock unit tests (red→green demo for HALTED)
-    - pnpm --filter web test --run
+    - pnpm --filter yasargold-web lint
+    # Gate 3: State coverage + server-clock unit tests
+    - pnpm --filter yasargold-web test
     # Gate 4: Brand guard
     - node apps/web/scripts/brand-guard.mjs
     # Gate 5: Import direction
-    - pnpm --filter web depcruise src
+    - pnpm --filter yasargold-web depcruise src
     # Gate 6: Build (catches missing server components / import errors)
-    - pnpm --filter web build
+    - pnpm --filter yasargold-web build
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
       changes:
