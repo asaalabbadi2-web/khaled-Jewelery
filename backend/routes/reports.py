@@ -2871,7 +2871,14 @@ def get_home_leaderboard():
             row_entry['points_purchase'] = int(it.get('points_purchase') or 0)
         if can_view_share:
             row_entry['share'] = round(float(share), 4)
+        # Unattributed entries (negative IDs from unresolved posted_by) are
+        # visible to admins only — employees see a clean list of real staff.
+        if int(it.get('id', 0) or 0) < 0 and not _can_view_admin:
+            continue
         ranking.append(row_entry)
+
+    # Recompute after visibility filtering so total always = sum of displayed cards.
+    _display_total_points = sum(max(0, int(r.get('score', 0) or 0)) for r in ranking)
 
     champion = None
     if ranking and bool(sales_race_config.get('show_champion', True)):
@@ -3011,9 +3018,9 @@ def get_home_leaderboard():
             summary_payload['total_cash'] = total_sales_amount
             summary_payload['total_sales_amount'] = total_sales_amount
             summary_payload['total_purchase_amount'] = total_purchase_amount
-            # Use sum of individually-computed employee points so the summary
-            # card always matches the visible leaderboard totals.
-            summary_payload['total_points'] = _sum_individual_points
+            # Use sum of the filtered ranking so the summary card always matches
+            # exactly what is visible to the current user.
+            summary_payload['total_points'] = _display_total_points
         if can_view_total_profit:
             summary_payload['total_profit'] = round(_to_float(getattr(totals, 'profit_total', 0.0), 0.0), 2)
         payload['admin_summary'] = summary_payload
