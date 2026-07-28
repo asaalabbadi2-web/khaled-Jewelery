@@ -44,6 +44,7 @@ from services.live_balances import safe_box_balances_bulk
 from utils import normalize_number
 from routes import (
     _invoice_weight_mk_v2,
+    _line_weight_total_in_main_karat,
 )
 
 reports_bp = Blueprint('reports', __name__)

@@ -34,6 +34,8 @@ from accounting.voucher_engine import (
     _append_safe_transactions_for_voucher,
     _generate_journal_entry_number,
 )
+from allocation_service import AllocationService
+from accounting.wages import _ensure_gold24k_commission_revenue_account
 from routes import (
     _resolve_account_id_for_amount_type,
 )

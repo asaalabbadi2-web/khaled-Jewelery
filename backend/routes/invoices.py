@@ -90,6 +90,7 @@ from accounting.weight_closing import _load_weight_closing_settings
 from accounting.safe_boxes import _ensure_safe_box_transactions_for_invoice_je
 from accounting.wages import _ensure_manufacturing_wage_expense_account, _ensure_gold24k_commission_revenue_account
 from accounting.inventory import get_inventory_average_cost
+from accounting.balances import _recalculate_account_balances_for_accounts
 from routes import (
     get_current_gold_price,
     _next_invoice_type_id,

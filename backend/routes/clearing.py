@@ -42,6 +42,7 @@ from accounting.weight_closing import _auto_consume_weight_closing, _load_weight
 from dual_system_helpers import create_dual_journal_entry, verify_dual_balance
 from settlement_state_service import get_settled_amounts
 from services.weight_execution import resolve_weight_profile
+from allocation_service import AllocationService
 from routes import (
     get_current_gold_price,
     _resolve_account_from_id_or_number,

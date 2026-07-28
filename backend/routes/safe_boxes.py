@@ -5,7 +5,7 @@ import traceback
 from datetime import datetime, timedelta
 
 from flask import Blueprint, g, jsonify, request
-from sqlalchemy import func, and_, or_
+from sqlalchemy import func, and_, or_, case, cast, Integer
 
 from models import (
     db,

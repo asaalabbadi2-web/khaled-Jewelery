@@ -25,6 +25,7 @@ from auth_decorators import require_permission
 from pricing.karat_service import convert_from_main_karat, convert_to_main_karat, get_main_karat
 from accounting.voucher_engine import _update_account_balances_from_journal_lines
 from accounting.safe_boxes import _rebuild_safe_box_transactions_for_journal_entry
+from accounting.balances import _recalculate_account_balances_for_accounts
 from routes import (
     get_current_gold_price,
 )
