@@ -160,6 +160,18 @@ app = Flask(__name__)
 # Flask secret key (used by some Flask features). Keep separate from JWT secret.
 app.config['SECRET_KEY'] = (os.getenv('FLASK_SECRET_KEY') or os.getenv('SECRET_KEY') or 'yasar-gold-dev-flask-secret').strip()
 
+# Swagger UI — available at /apidocs (local/dev only; no auth bypass)
+app.config['SWAGGER'] = {
+    'title': 'YasarGold ERP API',
+    'uiversion': 3,
+    'openapi': '3.0.3',
+}
+from flasgger import Swagger as _Swagger
+_swagger = _Swagger(app, template={
+    'info': {'title': 'YasarGold ERP API', 'version': '1.0'},
+    'servers': [{'url': '/'}],
+})
+
 
 def _normalize_database_url(raw: str) -> str:
 	"""Normalize DATABASE_URL to avoid surprises with Flask's instance/ path.
