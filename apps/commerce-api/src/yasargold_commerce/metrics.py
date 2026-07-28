@@ -312,3 +312,30 @@ RECONCILIATION_ORDERS_CHECKED = Counter(
     "reconciliation_orders_checked_total",
     "Total PAID Commerce orders checked in each reconciliation pass",
 )
+
+# ---------------------------------------------------------------------------
+# Gold Price Bridge (ERP → Commerce push, /api/internal/gold-price)
+# ---------------------------------------------------------------------------
+# Staleness alert query (Prometheus/Grafana):
+#   time() - gold_price_last_push_timestamp_seconds > 300
+#   (threshold: 5 min = 3.3× the HALTED window; fires before customers notice)
+
+GOLD_PRICE_PUSH_TOTAL = Counter(
+    "gold_price_push_total",
+    "Successful gold price pushes received from ERP via /api/internal/gold-price",
+)
+
+GOLD_PRICE_PUSH_FAILURES = Counter(
+    "gold_price_push_failures_total",
+    "Gold price push requests rejected (wrong secret, validation error, DB write failure). "
+    "Alert: any value > 0 in a 5-min window — the ERP→Commerce bridge is broken.",
+    labelnames=["reason"],
+    # reason: "auth" | "validation" | "db_error"
+)
+
+GOLD_PRICE_LAST_PUSH_TIMESTAMP = Gauge(
+    "gold_price_last_push_timestamp_seconds",
+    "Unix timestamp (UTC) of the last successfully stored gold price push. "
+    "Staleness = time() - this value. "
+    "Alert: staleness > 300 s (5 min) → quotes will soon be HALTED.",
+)

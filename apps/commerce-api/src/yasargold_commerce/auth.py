@@ -13,6 +13,12 @@ FastAPI dependencies exported from this module:
 
     require_pos_auth(x_pos_secret) -> None
         Machine-to-machine auth for ERP → Commerce pos-claim endpoints.
+
+    require_internal_auth(x_internal_secret) -> None
+        Machine-to-machine auth for ERP → Commerce internal endpoints
+        (e.g. POST /api/internal/gold-price). Checks X-Internal-Secret
+        header against ERP_INTERNAL_SECRET env var using constant-time
+        comparison. Raises 401 if missing/wrong; 503 if not configured.
         Checks X-POS-Secret header against POS_API_SECRET env var.
         Raises 401 if header is missing or wrong; 503 if not configured.
 
@@ -133,6 +139,33 @@ def require_admin(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin scope required",
+        )
+
+
+def require_internal_auth(
+    x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+) -> None:
+    """Machine-to-machine auth for ERP → Commerce internal endpoints.
+
+    The ERP sends X-Internal-Secret: <value>. Commerce verifies against
+    ERP_INTERNAL_SECRET env var using constant-time comparison.
+
+    Raises:
+        503 — ERP_INTERNAL_SECRET not configured on the Commerce side
+        401 — header missing or value does not match
+    """
+    configured = os.environ.get("ERP_INTERNAL_SECRET", "")
+    if not configured:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Internal auth not configured — set ERP_INTERNAL_SECRET",
+        )
+    if not x_internal_secret or not _secrets.compare_digest(
+        x_internal_secret.encode(), configured.encode()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-Internal-Secret header",
         )
 
 

@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import make_asgi_app
 
 from yasargold_commerce.rate_limiter import FakeRedis, RateLimitMiddleware
-from yasargold_commerce.routers import catalog, orders, payments, pos_claims, reservations, shipments
+from yasargold_commerce.routers import catalog, internal, orders, payments, pos_claims, reservations, shipments
 
 _log = logging.getLogger(__name__)
 
@@ -163,6 +163,7 @@ app.include_router(payments.router)
 app.include_router(orders.router)
 app.include_router(shipments.router)
 app.include_router(pos_claims.router)
+app.include_router(internal.router)
 
 # Prometheus metrics endpoint — scraped by Prometheus at /metrics
 app.mount("/metrics", make_asgi_app())

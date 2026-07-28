@@ -147,6 +147,16 @@ ROUTE_SECURITY: dict[tuple[str, str], RouteSecurityClass] = {
     ),
 
     # ------------------------------------------------------------------
+    # Internal — ERP → Commerce machine-to-machine
+    # ------------------------------------------------------------------
+    ("POST", "/api/internal/gold-price"): RouteSecurityClass(
+        scope="admin", rate_class="ops",
+        note="Auth: X-Internal-Secret (require_internal_auth); ERP scheduler pushes "
+             "fresh gold price after saving to its own DB. Rate=ops (unlimited) because "
+             "volume is bounded by the ERP scheduler frequency (~1/min).",
+    ),
+
+    # ------------------------------------------------------------------
     # Ops
     # ------------------------------------------------------------------
     ("GET", "/health"): RouteSecurityClass(

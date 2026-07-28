@@ -122,6 +122,7 @@ def _map_list_item(row: Item) -> CatalogListItemSchema:
         net_gold_weight=net_gold,
         has_stones=row.has_stones,
         stock=row.stock or 0,
+        price=float(row.price) if row.price is not None else None,
         category=row.category,
     )
 
@@ -148,6 +149,7 @@ def _map_detail_item(row: Item, gp: GoldPrice | None) -> ProductDetailSchema:
         wage=row.wage,
         description=row.description,
         stock=row.stock or 0,
+        price=float(row.price) if row.price is not None else None,
         category=row.category,
         pricing_snapshot=_pricing_snapshot(gp, row.karat),
     )

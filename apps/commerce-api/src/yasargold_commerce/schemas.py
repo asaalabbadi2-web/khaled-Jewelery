@@ -52,6 +52,7 @@ class CatalogListItemSchema(BaseModel):
     )
     has_stones: bool = False
     stock: int = 0
+    price: float | None = Field(None, description="Stored reference price in SAR; derived from ERP. Use pricing_snapshot on the detail page for the live-rate price.")
     category: CategorySchema | None = None
 
 
@@ -107,6 +108,7 @@ class ProductDetailSchema(BaseModel):
     wage: float | None = None
     description: str | None = None
     stock: int = 0
+    price: float | None = Field(None, description="Stored reference price in SAR; same source as CatalogListItemSchema.price")
     category: CategorySchema | None = None
     pricing_snapshot: PricingSnapshotSchema | None = Field(
         None, description="Live gold rate context; None when status is HALTED"

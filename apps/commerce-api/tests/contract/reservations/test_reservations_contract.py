@@ -47,28 +47,31 @@ class _StubItem:
     item_code: str = "YG001"
     karat: str = "21"
     stock: int = 1  # ADR-013 Condition 1: default available in ERP
-
-
-_RIYADH = timezone(timedelta(hours=3))
+    weight: float | None = 8.45
+    has_stones: bool = False
+    stones_weight: float | None = None
+    stones_value: float | None = None
+    wage: float | None = 250.0
 
 
 def _fresh_date() -> datetime:
-    """30 seconds ago in Riyadh local time — always FRESH.
+    """30 seconds ago as a naive UTC datetime.
 
-    Matches production: ERP stores gold_price.date as naive Riyadh local time
-    via db.func.now() with TZ=Asia/Riyadh on the server.
+    _build_quote treats naive gp.date as UTC via .replace(tzinfo=timezone.utc).
+    Producing a naive UTC datetime here gives the correct age in _build_quote.
+    age = 30s < FRESH_TTL (90s) → QuoteStatus.FRESH.
     """
-    return datetime.now(_RIYADH).replace(tzinfo=None) - timedelta(seconds=30)
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=30)
 
 
 def _stale_date() -> datetime:
-    """3 minutes ago in Riyadh local time — STALE (90s < age < 5min)."""
-    return datetime.now(_RIYADH).replace(tzinfo=None) - timedelta(minutes=3)
+    """3 minutes ago as naive UTC. age = 3min → 90s < age < 5min → STALE."""
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=3)
 
 
 def _halted_date() -> datetime:
-    """10 minutes ago in Riyadh local time — HALTED (age > 5min)."""
-    return datetime.now(_RIYADH).replace(tzinfo=None) - timedelta(minutes=10)
+    """10 minutes ago as naive UTC. age = 10min > 5min → HALTED."""
+    return datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=10)
 
 
 @dataclass
@@ -170,6 +173,9 @@ def _make_stub_uow(fail_lock: bool = False) -> _StubUow:
     return _StubUow(repository=_StubRepo(should_fail_lock=fail_lock))
 
 
+_rate_patch: object | None = None
+
+
 def _client_with_stubs(
     uow: _StubUow,
     item: _StubItem | None = None,
@@ -177,6 +183,17 @@ def _client_with_stubs(
     no_item: bool = False,
     no_gold_price: bool = False,
 ) -> tuple[TestClient, _StubUow]:
+    # Patch check_rate_limit to return True — contract tests verify business
+    # logic, not infrastructure. Rate limiting is separately tested.
+    global _rate_patch
+    if _rate_patch is not None:
+        _rate_patch.stop()  # type: ignore[union-attr]
+    from unittest.mock import patch as _mock_patch
+    _rate_patch = _mock_patch(
+        "yasargold_commerce.rate_limiter.check_rate_limit", return_value=True
+    )
+    _rate_patch.start()  # type: ignore[union-attr]
+
     actual_item = None if no_item else (item or _StubItem())
     actual_gp = None if no_gold_price else (gold_price or _StubGoldPrice())
     stub_session = _StubDbSession(item=actual_item, gold_price=actual_gp)
@@ -189,7 +206,11 @@ def _client_with_stubs(
 
 
 def _cleanup() -> None:
+    global _rate_patch
     app.dependency_overrides.clear()
+    if _rate_patch is not None:
+        _rate_patch.stop()  # type: ignore[union-attr]
+        _rate_patch = None
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +278,13 @@ class TestHappyPath:
     def test_item_slug_preserved_in_response(self) -> None:
         r = self.client.post("/api/v1/reservations", json={"item_slug": "yg001"})
         assert r.json()["item_slug"] == "yg001"
+
+    def test_response_has_locked_total_sar(self) -> None:
+        r = self.client.post("/api/v1/reservations", json={"item_slug": "yg001"})
+        data = r.json()
+        assert "locked_total_sar" in data
+        # karat_rate(230.0, 21) * 8.45 + wage 250 > 0
+        assert Decimal(str(data["locked_total_sar"])) > 0
 
     def test_two_requests_produce_unique_event_ids(self) -> None:
         uow1 = _make_stub_uow()

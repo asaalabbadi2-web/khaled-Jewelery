@@ -19,10 +19,6 @@ HTTP layer does NOT:
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-
-# ERP stores gold_price.date as a naive datetime in Riyadh local time (UTC+3)
-# via db.func.now() with TZ=Asia/Riyadh on the production server.
-_RIYADH = timezone(timedelta(hours=3))
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -79,11 +75,12 @@ class ReservationCreatedResponse(BaseModel):
     item_slug: str
     locked_rate_per_gram_24k: Decimal
     karat_rate_per_gram: Decimal
+    locked_total_sar: Decimal
     pricing_engine_version: str
     reserved_at: datetime
     valid_until: datetime
 
-    @field_serializer("locked_rate_per_gram_24k", "karat_rate_per_gram")
+    @field_serializer("locked_rate_per_gram_24k", "karat_rate_per_gram", "locked_total_sar")
     def _serialize_decimal(self, v: Decimal) -> str:
         return str(v)
 
@@ -102,8 +99,7 @@ def _get_uow(db: Session = Depends(get_db)) -> ReservationUnitOfWork:
 # ---------------------------------------------------------------------------
 
 def _build_quote(item: Item, gp: GoldPrice, now: datetime) -> Quote:
-    # Treat naive gp.date as Riyadh local time (UTC+3); aware datetimes pass through.
-    gp_date = gp.date if gp.date.tzinfo is not None else gp.date.replace(tzinfo=_RIYADH)
+    gp_date = gp.date if gp.date.tzinfo is not None else gp.date.replace(tzinfo=timezone.utc)
     age = now - gp_date
     if age <= _FRESH_TTL:
         status = QuoteStatus.FRESH
@@ -222,14 +218,24 @@ def create_reservation(
         )
 
     RESERVATION_SUCCESS.inc()
-    gp_date = gp.date if gp.date.tzinfo is not None else gp.date.replace(tzinfo=_RIYADH)
+    gp_date = gp.date if gp.date.tzinfo is not None else gp.date.replace(tzinfo=timezone.utc)
     QUOTE_AGE_SECONDS.observe((now - gp_date).total_seconds())
+
+    net_gold = Decimal(str(
+        ((item.weight or 0.0) - (item.stones_weight or 0.0)) if item.has_stones
+        else (item.weight or 0.0)
+    ))
+    wage    = Decimal(str(item.wage or 0))
+    stones  = Decimal(str(item.stones_value or 0)) if item.has_stones else Decimal("0")
+    locked_total_sar = locked_quote.karat_rate_per_gram * net_gold + wage + stones
+
     return ReservationCreatedResponse(
         reservation_id=str(reservation_id),
         quote_id=str(locked_quote.id),
         item_slug=item.item_code.lower(),
         locked_rate_per_gram_24k=locked_quote.gold_rate_per_gram_24k,
         karat_rate_per_gram=locked_quote.karat_rate_per_gram,
+        locked_total_sar=locked_total_sar,
         pricing_engine_version=locked_quote.pricing_engine_version,
         reserved_at=now,
         valid_until=locked_quote.valid_until,
