@@ -11,6 +11,7 @@ from models import (
     db,
     Account,
     Invoice,
+    InvoiceKaratLine,
     JournalEntry,
     JournalEntryLine,
     Office,
@@ -42,6 +43,10 @@ from routes import (
     _resolve_account_from_id_or_number,
     _normalize_fk_ref,
 )
+from office_account_service import ensure_office_account
+from office_supplier_service import ensure_office_supplier
+from accounting.mappings import get_account_id_by_number
+from dual_system_helpers import create_dual_journal_entry, verify_dual_balance
 
 office_reservations_bp = Blueprint('office_reservations', __name__)
 
