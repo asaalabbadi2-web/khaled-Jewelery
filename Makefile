@@ -12,7 +12,7 @@ COMPOSE     := docker compose -f docker-compose.local.yml
 ERP_DB_URL  := postgresql://erp:erp_dev@localhost:5433/yasargold_erp
 COM_DB_URL  := postgresql://commerce:commerce_dev@localhost:5434/yasargold_commerce
 
-.PHONY: up down reset logs smoke seed-admin web migrate
+.PHONY: up up-debug down reset logs smoke seed-admin web web-host migrate
 
 ## Start all services (builds images if needed; runs Alembic migration on first boot)
 up:
@@ -21,10 +21,21 @@ up:
 	@echo "Waiting for services to be healthy..."
 	@$(COMPOSE) ps
 	@echo ""
-	@echo "Commerce API → http://localhost:8000/docs"
-	@echo "ERP internal  → http://erp:8001  (no host port by design)"
+	@echo "  Storefront   → http://localhost:3001"
+	@echo "  Commerce API → http://localhost:8000/docs"
+	@echo "  ERP          → internal only  (run 'make up-debug' to expose /apidocs)"
 	@echo ""
 	@echo "Run 'make smoke' to verify the deployment."
+
+## Start all services + ERP on port 8001 + /apidocs (dev inspection only)
+## ERP port is NOT published in the default stack — this mirrors production §1.3.
+up-debug:
+	$(COMPOSE) --profile debug up -d --build
+	@echo ""
+	@echo "  Storefront      → http://localhost:3001"
+	@echo "  ERP Swagger     → http://localhost:8001/apidocs  (debug profile)"
+	@echo "  Commerce API    → http://localhost:8000/docs"
+	@echo ""
 
 ## Stop all services (preserves volumes / data)
 down:
@@ -63,27 +74,38 @@ reset:
 	@echo "Seeding Commerce database..."
 	PGPASSWORD=commerce_dev psql $(COM_DB_URL) -f seed/commerce_seed.sql
 	@$(MAKE) seed-admin
+	@echo "Starting storefront..."
+	$(COMPOSE) up -d web
 	@echo ""
-	@echo "Reset complete.  Run 'make smoke' to verify."
+	@echo "Reset complete."
+	@echo ""
+	@echo "  Storefront   → http://localhost:3001"
+	@echo "  Commerce API → http://localhost:8000/docs"
+	@echo "  ERP          → internal only  (run 'make up-debug' to expose /apidocs)"
+	@echo ""
+	@echo "Run 'make smoke' to verify."
 
-## Create the ERP admin user (username: admin, password: admin123)
-## Uses Python + werkzeug so the password hash is correct — cannot do this in SQL portably.
-seed-admin:
-	$(COMPOSE) exec -T erp python - <<'EOF'
+define SEED_ADMIN_PY
 import sys
 sys.path.insert(0, '/app/backend')
 from app import app
 from models import db, User
 with app.app_context():
     if not User.query.filter_by(username='admin').first():
-        u = User(username='admin', full_name='مدير النظام', role='system_admin')
+        u = User(username='admin', full_name='مدير النظام', is_admin=True)
         u.set_password('admin123')
         db.session.add(u)
         db.session.commit()
         print('admin user created')
     else:
         print('admin user already exists')
-EOF
+endef
+export SEED_ADMIN_PY
+
+## Create the ERP admin user (username: admin, password: admin123)
+## Uses Python + werkzeug so the password hash is correct — cannot do this in SQL portably.
+seed-admin:
+	@echo "$$SEED_ADMIN_PY" | $(COMPOSE) exec -T erp python -
 
 ## Follow logs for all services (Ctrl-C to stop)
 logs:
@@ -113,7 +135,8 @@ smoke:
 	@echo ""
 	@echo "Smoke PASSED ✓"
 
-## Run the Next.js storefront in dev mode on the host (not in Docker)
-## The browser hits commerce-api at localhost:8000.
-web:
+## Run the Next.js storefront in dev mode directly on the host (faster HMR,
+## no Docker overhead).  Use this when iterating on frontend code.
+## The Docker web service (make up) is for full-stack integration testing.
+web-host:
 	NEXT_PUBLIC_COMMERCE_API=http://localhost:8000 pnpm --filter web dev
