@@ -2419,7 +2419,6 @@ class Settings(db.Model):
 
         # Existing to_dict continues below...
 
-        # إعدادات سباق المبيعات ثابتة (لا تُقرأ من قاعدة البيانات بعد الآن)
         sales_race_settings = {
             'enabled': True,
             'default_period': 'today',
@@ -2434,13 +2433,9 @@ class Settings(db.Model):
         raw_sales_race = getattr(self, 'sales_race_settings', None)
         if raw_sales_race:
             try:
-                decoded_sales_race = json.loads(raw_sales_race)
+                decoded_sales_race = json.loads(raw_sales_race) if isinstance(raw_sales_race, str) else raw_sales_race
                 if isinstance(decoded_sales_race, dict):
-                    # نحتفظ فقط بالحقول التي لا تضر (enabled, default_period, points_per_gram, allow_fallback, show_invoice_count, show_champion)
-                    for k in ('enabled', 'default_period', 'points_per_gram',
-                              'allow_fallback_to_latest_period', 'show_invoice_count', 'show_champion'):
-                        if k in decoded_sales_race:
-                            sales_race_settings[k] = decoded_sales_race[k]
+                    sales_race_settings.update(decoded_sales_race)
             except Exception:
                 pass
 

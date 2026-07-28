@@ -2635,7 +2635,15 @@ def get_home_leaderboard():
             pass
 
     # ── Compute caller identity early (needed for visibility checks) ──────────
+    # reports_bp has no before_request; read the token directly when g.current_user
+    # is absent (e.g. the app-level bypass exits early on Authorization headers).
     _lb_user = getattr(g, 'current_user', None)
+    if _lb_user is None:
+        try:
+            from auth_decorators import get_current_user as _gcv
+            _lb_user = _gcv()
+        except Exception:
+            _lb_user = None
     _can_view_admin = bool(getattr(_lb_user, 'is_admin', False))
     if not _can_view_admin and _lb_user is not None:
         try:
@@ -2792,6 +2800,12 @@ def get_home_leaderboard():
 
     ranking_raw.sort(key=lambda x: (x.get('score', 0.0), x.get('count', 0)), reverse=True)
 
+    # Sum of individual employee points — used later to keep admin_summary and
+    # team_points consistent with what is actually displayed per employee.
+    _sum_individual_points = sum(
+        max(0, int(it.get('points', 0) or 0)) for it in ranking_raw
+    )
+
     total_score = sum(float(it.get('score') or 0.0) for it in ranking_raw) or 0.0
 
     # ── جلب بيانات الأهداف الشخصية لكل موظف (دفعة واحدة) ─────────────────
@@ -2881,6 +2895,10 @@ def get_home_leaderboard():
         team_weight_g, team_points = metric_obj.compute_team_weight(
             base_filters, points_per_gram, _metric_aux
         )
+        # Override team_points with the sum of individually-computed employee
+        # points so that the progress bar matches the leaderboard cards.
+        if _sum_individual_points > 0:
+            team_points = _sum_individual_points
 
         if settings_row is None:
             try:
@@ -2990,19 +3008,12 @@ def get_home_leaderboard():
         if can_view_total_cash:
             total_sales_amount = round(_to_float(getattr(totals, 'sales_total', 0.0), 0.0), 2)
             total_purchase_amount = round(_to_float(getattr(totals, 'purchase_total', 0.0), 0.0), 2)
-            total_points_value = max(
-                0,
-                int(
-                    round(
-                        _to_float(getattr(totals, 'points_profit_gold_total', 0.0), 0.0)
-                        * points_per_gram
-                    )
-                ),
-            )
             summary_payload['total_cash'] = total_sales_amount
             summary_payload['total_sales_amount'] = total_sales_amount
             summary_payload['total_purchase_amount'] = total_purchase_amount
-            summary_payload['total_points'] = total_points_value
+            # Use sum of individually-computed employee points so the summary
+            # card always matches the visible leaderboard totals.
+            summary_payload['total_points'] = _sum_individual_points
         if can_view_total_profit:
             summary_payload['total_profit'] = round(_to_float(getattr(totals, 'profit_total', 0.0), 0.0), 2)
         payload['admin_summary'] = summary_payload

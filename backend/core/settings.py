@@ -87,6 +87,7 @@ def _get_settings_singleton(create_if_missing: bool = True) -> Settings | None:
                 'password_policy',
                 'disable_startup_bootstrap',
                 'weekly_sales_target_weight',
+                'monthly_sales_target_weight',
                 'sales_race_settings',
             ):
                 try:

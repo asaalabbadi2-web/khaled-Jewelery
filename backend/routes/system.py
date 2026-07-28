@@ -674,6 +674,7 @@ def update_settings():
         'idle_timeout_minutes',
         'allow_partial_invoice_payments',
         'weekly_sales_target_weight',
+        'monthly_sales_target_weight',
         'sales_race_settings',
         'gold_price_auto_update_enabled',
         'gold_price_auto_update_time',
@@ -868,7 +869,38 @@ def update_settings():
     if 'allow_partial_invoice_payments' in data:
         settings.allow_partial_invoice_payments = data['allow_partial_invoice_payments']
 
-    # 🆕 إعدادات الوضع الافتراضي للنظام (أُزيلت إعدادات سباق المبيعات — ثابتة الآن)
+    # 🆕 أهداف المبيعات وإعدادات سباق الأداء
+    if 'weekly_sales_target_weight' in data:
+        try:
+            settings.weekly_sales_target_weight = max(0.0, float(data['weekly_sales_target_weight'] or 0.0))
+        except Exception:
+            pass
+    if 'monthly_sales_target_weight' in data:
+        try:
+            settings.monthly_sales_target_weight = max(0.0, float(data['monthly_sales_target_weight'] or 0.0))
+        except Exception:
+            pass
+    if 'sales_race_settings' in data:
+        race_data = data['sales_race_settings']
+        if isinstance(race_data, str):
+            try:
+                race_data = json.loads(race_data)
+            except Exception:
+                race_data = None
+        if isinstance(race_data, dict):
+            existing_raw = getattr(settings, 'sales_race_settings', None)
+            existing: dict = {}
+            if existing_raw:
+                try:
+                    existing = json.loads(existing_raw) if isinstance(existing_raw, str) else existing_raw
+                    if not isinstance(existing, dict):
+                        existing = {}
+                except Exception:
+                    existing = {}
+            existing.update(race_data)
+            from sqlalchemy.orm.attributes import flag_modified as _flag_modified_race
+            settings.sales_race_settings = json.dumps(existing, ensure_ascii=False)
+            _flag_modified_race(settings, 'sales_race_settings')
 
     # 🆕 تحديث سعر الذهب تلقائياً حسب توقيت معين
     if 'gold_price_auto_update_enabled' in data:
