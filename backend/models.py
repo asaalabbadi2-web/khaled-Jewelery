@@ -5106,3 +5106,38 @@ class HistoricalClearingAdjustment(db.Model):
         }
 
 
+# ── Operational findings (S5) ─────────────────────────────────────────────────
+
+class ReconciliationFinding(db.Model):
+    """Operational findings written by schedulers and reconciliation jobs.
+
+    Shared table — one source of truth for all operational gaps.  Consumers
+    (ops dashboards, alerting queries) read a single table regardless of which
+    job produced the finding.
+
+    Kinds (extensible, add new kinds as new jobs emit here):
+      STALE_SETTLEMENT — no auto_settlement voucher produced within the
+                         expected window; written by ClearingSettlementScheduler.
+
+    Lifecycle: created by the detecting job, resolved manually or by the job
+    itself when the condition clears (resolved_at set to a non-NULL timestamp).
+    check_count is incremented on every detection cycle while the finding
+    remains open, giving ops a sense of how long the gap has persisted.
+    """
+
+    __tablename__ = 'reconciliation_findings'
+
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(50), nullable=False)
+    source = db.Column(db.String(100), nullable=True)
+    detail = db.Column(db.Text, nullable=True)
+    # Incremented on every detection cycle while resolved_at is NULL
+    check_count = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    resolved_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        db.Index('idx_rf_kind_open', 'kind', 'resolved_at'),
+    )
+
+

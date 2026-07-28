@@ -1621,8 +1621,10 @@ def _resolve_account_id_for_amount_type(account_id, amount_type, *, safe_account
 #  GET /clearing/settlements/pending-transactions,
 #  POST /clearing/settlements/auto-run, create_bnpl_settlement)
 
-# Re-export so clearing_settlement_scheduler can do `from routes import _create_clearing_settlement_voucher`
+# Re-exports so clearing_settlement_scheduler can import both helpers from the
+# routes package without knowing the internal sub-module layout.
 from routes.clearing import _create_clearing_settlement_voucher  # noqa: F401
+from routes.clearing import _compute_clearing_due_amount         # noqa: F401
 
 
 # ============================================================================

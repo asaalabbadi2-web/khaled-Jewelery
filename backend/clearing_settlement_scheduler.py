@@ -14,6 +14,9 @@ Important notes:
 
 from __future__ import annotations
 
+import os as _os
+import signal as _signal
+import threading as _threading
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from threading import Thread
@@ -39,6 +42,13 @@ class ClearingSettlementScheduler:
         self.app = app
         self.is_running = False
         self._scheduler = schedule.Scheduler()
+        # S3 — interruptible sleep: stop() sets this so the loop wakes immediately
+        self._stop_event = _threading.Event()
+        # S2 — failure flag: set when the scheduler loop dies unexpectedly;
+        #      run_schedulers.main() reads it to decide the process exit code
+        self._failed = _threading.Event()
+        # S4 — reference kept so run_schedulers.main() can join the thread
+        self._thread: Thread | None = None
 
     def _live_cash_balance_for_safe_box(self, safe_box) -> float:
         account = getattr(safe_box, 'account', None)
@@ -967,12 +977,79 @@ class ClearingSettlementScheduler:
         return settled_count
 
     def setup_schedule(self):
-        # Run every 2 hours so settlements happen throughout the day,
-        # not just once at 04:10.  The process_due_settlements() method
-        # is idempotent (duplicate_reference guard + SettlementLine tracking),
-        # so running more often is safe.
+        # Run every 2 hours so settlements happen throughout the day.
+        # process_due_settlements() is idempotent (ensure_unique_reference +
+        # SettlementLine tracking) so running more often is safe.
         self._scheduler.every(2).hours.do(self.process_due_settlements)
         print('[ClearingSettlementScheduler] ✓ Auto settlement scheduled every 2 hours')
+
+    # ------------------------------------------------------------------
+    # S5 — Business-outcome monitoring
+    # ------------------------------------------------------------------
+
+    def _emit_stale_finding_if_needed(self, threshold_hours: int = 3) -> bool:
+        """Check whether the last auto-settlement voucher is older than
+        threshold_hours.  If so, write a STALE_SETTLEMENT row to
+        reconciliation_findings (or increment its check_count if an open
+        finding already exists).
+
+        Returns True when a NEW finding is created, False otherwise.
+        This is the authoritative signal that settlements have stopped —
+        it catches every failure mode (thread death, all PMs skipped,
+        silent DB errors) because it measures the business OUTCOME, not
+        process state.
+        """
+        from models import ReconciliationFinding, Voucher as _Voucher
+        from datetime import timedelta as _td
+        from sqlalchemy import func as _func
+
+        cutoff = datetime.utcnow() - _td(hours=threshold_hours)
+
+        last = (
+            db.session.query(_func.max(_Voucher.created_at))
+            .filter(
+                _Voucher.reference_type == 'clearing_settlement',
+                _Voucher.notes.like('auto_settlement:%'),
+            )
+            .scalar()
+        )
+
+        if last is not None and last >= cutoff:
+            return False  # fresh enough — no finding needed
+
+        # Stale: check for an existing open finding to avoid duplicate rows
+        existing = (
+            ReconciliationFinding.query
+            .filter_by(kind='STALE_SETTLEMENT', resolved_at=None)
+            .first()
+        )
+        if existing is not None:
+            existing.check_count = (existing.check_count or 1) + 1
+            db.session.commit()
+            return False
+
+        # First detection — create the finding row
+        finding = ReconciliationFinding(
+            kind='STALE_SETTLEMENT',
+            source='clearing_settlement_scheduler',
+            detail=(
+                f'No auto_settlement voucher since '
+                f'{last.isoformat() if last else "never"}; '
+                f'threshold={threshold_hours}h'
+            ),
+        )
+        db.session.add(finding)
+        db.session.commit()
+        print(
+            f'[ClearingSettlementScheduler] ⚠ STALE_SETTLEMENT finding created'
+            f' (last={last})',
+            flush=True,
+        )
+        return True
+
+    # ------------------------------------------------------------------
+    # Scheduler wiring
+    # ------------------------------------------------------------------
 
     def start(self):
         if self.is_running:
@@ -981,6 +1058,7 @@ class ClearingSettlementScheduler:
 
         self.setup_schedule()
         self.is_running = True
+        self._stop_event.clear()
 
         def run_scheduler():
             # Run once immediately on startup so we don't wait 2 hours
@@ -990,19 +1068,44 @@ class ClearingSettlementScheduler:
             except Exception as exc:
                 print(f'[ClearingSettlementScheduler] ⚠ initial run failed: {exc}')
 
-            while self.is_running:
-                self._scheduler.run_pending()
-                # Check every minute
-                import time as _time
+            # S2: loop wrapped in try/except.  Any unhandled exception here is
+            # a fatal event: mark failure, then send SIGTERM so the graceful
+            # shutdown path in run_schedulers.main() runs before the process
+            # exits with code 1.  os._exit() is NOT called here — it is
+            # reserved for the join-timeout case in run_schedulers.main().
+            try:
+                while self.is_running and not self._stop_event.is_set():  # S3
+                    self._scheduler.run_pending()
+                    # S3: interruptible wait — stop() sets _stop_event so
+                    # the thread wakes immediately instead of sleeping 60s
+                    self._stop_event.wait(timeout=60)
+                    # S5: emit stale finding on each cycle inside app context
+                    if self.is_running and not self._stop_event.is_set():
+                        with self.app.app_context():
+                            try:
+                                self._emit_stale_finding_if_needed()
+                            except Exception as _exc:
+                                print(
+                                    f'[ClearingSettlementScheduler] stale check error: {_exc}',
+                                    flush=True,
+                                )
+            except Exception as exc:
+                # S2: graceful-first failure path
+                print(
+                    f'[ClearingSettlementScheduler] ☠ fatal loop error: {exc}',
+                    flush=True,
+                )
+                self._failed.set()
+                _os.kill(_os.getpid(), _signal.SIGTERM)
 
-                _time.sleep(60)
-
-        thread = Thread(target=run_scheduler, daemon=True)
-        thread.start()
+        # S4: store thread reference so run_schedulers.main() can join it
+        self._thread = Thread(target=run_scheduler, daemon=True)
+        self._thread.start()
         print('[ClearingSettlementScheduler] 🚀 started')
 
     def stop(self):
         self.is_running = False
+        self._stop_event.set()  # S3: wake sleeping thread immediately
         self._scheduler.clear()
         print('[ClearingSettlementScheduler] stopped')
 
