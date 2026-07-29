@@ -6,7 +6,7 @@ import os
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from statistics import pstdev
 from sqlalchemy import and_, cast, func, or_
 from sqlalchemy.orm import joinedload

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, date, timedelta
 
-from flask import Blueprint, g, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from sqlalchemy import func, and_, or_, case
 from sqlalchemy.orm import joinedload
 
