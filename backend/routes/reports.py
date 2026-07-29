@@ -4238,7 +4238,18 @@ def get_trial_balance():
         func.sum(JournalEntryLine.debit_24k).label('total_debit_24k'),
         func.sum(JournalEntryLine.credit_24k).label('total_credit_24k')
     ).join(Account).join(JournalEntry)
-    
+
+    # Always restrict to posted, non-deleted entries — same set that
+    # _rebuild_all_account_balances() uses.  Without these filters the
+    # endpoint included soft-deleted JE lines, making the Dr-Cr total
+    # diverge from stored Account.balance_* values by the amount of
+    # those deleted lines (116,378 observed in production July 2026).
+    query = query.filter(
+        JournalEntry.is_posted == True,
+        func.coalesce(JournalEntry.is_deleted, False) == False,
+        func.coalesce(JournalEntryLine.is_deleted, False) == False,
+    )
+
     # Apply date filters if provided
     if start_date:
         try:
