@@ -674,6 +674,23 @@ def repair_safe_box_transactions():
                     })
 
         if not dry_run:
+            # Recompute stored Account.balance_* for accounts in newly-posted
+            # voucher JEs so the trial balance stays in sync.
+            if voucher_je_repairs:
+                try:
+                    from accounting.balances import _recalculate_account_balances_for_accounts
+                    _sb_repair_ids = set()
+                    for _r in voucher_je_repairs:
+                        _rje = JournalEntry.query.get(_r['journal_entry_id'])
+                        if _rje:
+                            _sb_repair_ids.update(
+                                l.account_id for l in (_rje.lines or []) if l.account_id
+                            )
+                    if _sb_repair_ids:
+                        _recalculate_account_balances_for_accounts(list(_sb_repair_ids))
+                except Exception as _rc_exc:
+                    print(f"⚠️ recalculate balances after safe-box repair skipped: {_rc_exc}")
+
             db.session.commit()
 
         return jsonify({

@@ -1235,6 +1235,20 @@ def _post_payroll_accrual_internal(payroll_entry, created_by='system'):
     if not balance_state.get('balanced', True):
         return False, 'فشل ترحيل قيد الاستحقاق بسبب عدم توازن القيد', None
 
+    # Recompute stored Account.balance_* — the payroll JE is created with
+    # is_posted=True directly so the normal approve flow never fires.
+    try:
+        from accounting.balances import _recalculate_account_balances_for_accounts
+        _payroll_affected = {
+            l.account_id
+            for l in JournalEntryLine.query.filter_by(journal_entry_id=journal_entry.id).all()
+            if l.account_id
+        }
+        if _payroll_affected:
+            _recalculate_account_balances_for_accounts(_payroll_affected)
+    except Exception as _rc_exc:
+        print(f"⚠️ recalculate balances after payroll accrual skipped: {_rc_exc}")
+
     return True, None, journal_entry
 
 @employees_bp.route('/payroll/<int:payroll_id>/post-accrual', methods=['POST'])

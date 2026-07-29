@@ -2201,6 +2201,20 @@ def approve_invoice(invoice_id: int):
         except Exception as exc:
             print(f"⚠️ safe-box SBT sync skipped on approve: {exc}")
 
+        # Recompute stored Account.balance_* for every account touched by the
+        # now-posted JEs.  Without this the cached balance never reflects the
+        # newly-posted lines and the trial balance drifts.
+        try:
+            _approve_affected_ids = set()
+            for _aje in linked_jes:
+                _approve_affected_ids.update(
+                    l.account_id for l in (_aje.lines or []) if l.account_id
+                )
+            if _approve_affected_ids:
+                _recalculate_account_balances_for_accounts(_approve_affected_ids)
+        except Exception as _rc_exc:
+            print(f"⚠️ recalculate balances after approve skipped: {_rc_exc}")
+
         db.session.commit()
         return jsonify({'success': True, 'invoice': invoice.to_dict()}), 200
 
@@ -8912,6 +8926,21 @@ def add_invoice():
                 )
         except Exception as exc:
             print(f"⚠️ safe-box SBT sync skipped: {exc}")
+
+        # Recompute stored Account.balance_* for all accounts touched by this
+        # invoice's posted JE lines (POS inline-post path).
+        try:
+            _pos_affected_ids = set()
+            for _pje in JournalEntry.query.filter_by(
+                reference_type='invoice', reference_id=new_invoice.id
+            ).all():
+                _pos_affected_ids.update(
+                    l.account_id for l in (_pje.lines or []) if l.account_id
+                )
+            if _pos_affected_ids:
+                _recalculate_account_balances_for_accounts(_pos_affected_ids)
+        except Exception as _rc_exc:
+            print(f"⚠️ recalculate balances after inline post skipped: {_rc_exc}")
 
         db.session.commit()
         try:

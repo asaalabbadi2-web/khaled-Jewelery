@@ -588,6 +588,18 @@ def settle_office_reservation(reservation_id: int):
         reservation.status = 'completed'
         db.session.add(reservation)
 
+        # Recompute stored Account.balance_* for accounts in the WGT entry.
+        # The WGT JournalEntry is created with is_posted=True directly, so the
+        # normal approve flow never fires — balance recalculation must happen here.
+        try:
+            _settle_affected_ids = {
+                l.account_id for l in (gold_entry.lines or []) if l.account_id
+            }
+            if _settle_affected_ids:
+                _recalculate_account_balances_for_accounts(list(_settle_affected_ids))
+        except Exception as _rc_exc:
+            print(f"⚠️ recalculate balances after settle skipped: {_rc_exc}")
+
         db.session.commit()
 
         response = _serialize_office_reservation(reservation)

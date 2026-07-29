@@ -33,6 +33,7 @@ from accounting.voucher_engine import (
     create_journal_entry_from_voucher,
     _append_safe_transactions_for_voucher,
     _generate_journal_entry_number,
+    _update_account_balances_from_journal_lines,
 )
 from allocation_service import AllocationService
 from accounting.wages import _ensure_gold24k_commission_revenue_account
@@ -929,6 +930,15 @@ def approve_voucher(voucher_id):
         # أنشئ وارحّل قيود عمولة / رسوم فرق العيار
         from posting_routes import _create_and_post_karat_diff_entries_for_voucher
         _create_and_post_karat_diff_entries_for_voucher(voucher, approved_by)
+
+        # Recompute stored Account.balance_* for all accounts in the voucher JE.
+        # create_journal_entry_from_voucher marks the JE posted but never
+        # triggers the recalculation — do it here so the trial balance stays clean.
+        try:
+            if journal_entry:
+                _update_account_balances_from_journal_lines(journal_entry.lines or [])
+        except Exception as _rc_exc:
+            print(f"⚠️ recalculate balances after voucher approve skipped: {_rc_exc}")
 
         # Audit log
         try:

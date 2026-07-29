@@ -1035,6 +1035,16 @@ def update_settings():
                 if not _uje.posted_by:
                     _uje.posted_by = 'system'
                 _bulk_posted_count += 1
+
+        # Recompute balances for all accounts affected by the bulk-posted JEs.
+        if _bulk_posted_count and _unposted_voucher_jes:
+            _bulk_affected = set()
+            for _bje in _unposted_voucher_jes:
+                _bulk_affected.update(
+                    l.account_id for l in (_bje.lines or []) if l.account_id
+                )
+            if _bulk_affected:
+                _recalculate_account_balances_for_accounts(list(_bulk_affected))
     except Exception as _bp_err:
         print(f'[Settings] Bulk-post existing JEs warning: {_bp_err}')
 
