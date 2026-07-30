@@ -4239,16 +4239,19 @@ def get_trial_balance():
         func.sum(JournalEntryLine.credit_24k).label('total_credit_24k')
     ).join(Account).join(JournalEntry)
 
-    # Always restrict to posted, non-deleted entries — same set that
-    # _rebuild_all_account_balances() uses.  Without these filters the
-    # endpoint included soft-deleted JE lines, making the Dr-Cr total
-    # diverge from stored Account.balance_* values by the amount of
-    # those deleted lines (116,378 observed in production July 2026).
-    query = query.filter(
+    # Always restrict to posted, non-deleted, non-draft entries — the same
+    # set that _rebuild_all_account_balances() uses.  Without is_draft=False
+    # the endpoint includes "posted-but-still-draft" JEs whose lines are
+    # unbalanced, causing Dr-Cr to diverge from stored Account.balance_*
+    # values (116,378 divergence observed in production July 2026).
+    je_filters = [
         JournalEntry.is_posted == True,
         func.coalesce(JournalEntry.is_deleted, False) == False,
         func.coalesce(JournalEntryLine.is_deleted, False) == False,
-    )
+    ]
+    if _db_has_column('journal_entry', 'is_draft'):
+        je_filters.append(JournalEntry.is_draft == False)
+    query = query.filter(*je_filters)
 
     # Apply date filters if provided
     if start_date:
