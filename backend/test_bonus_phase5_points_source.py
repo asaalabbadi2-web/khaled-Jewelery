@@ -3,29 +3,39 @@ test_bonus_phase5_points_source.py
 ====================================
 اختبارات Phase 5 — points_source على BonusRule.
 
+بعد المعمارية الجديدة (محرك مشترك — points/engine.py):
+  - points_source على القاعدة يحدد وضع المحرك، لا معادلة مستقلة.
+  - cash_amount_per_point تُقرأ من Settings.sales_race_settings (لا من conditions).
+  - points_source=None يتبع إعدادات سباق الأداء تماماً.
+  - calc_data يحتوي على: points_source (engine mode), cash_amount_per_pt,
+    points_per_gram, raw_points_float, employee_points.
+
 الاختبارات:
-  Route validation (3):
+  Route validation (2):
     1. points_source غير صالح ('silver') → 422 + code=points_source_not_applicable
     2. points_source على rule_type غير points_based → 422
-    3. points_source='cash' بدون conditions.cash_amount_per_point → 422
 
-  Calculator (3):
-    4. points_source='gold' → يستخدم profit_gold × points_per_gram
-    5. points_source=None   → نفس سلوك gold (التوافق الخلفي)
-    6. points_source='cash' → يستخدم profit_cash ÷ cash_amount_per_point
+  Engine mode mapping (2):
+    3. _rule_engine_points_source('gold')  → 'gold_weight'
+    4. _rule_engine_points_source('cash')  → 'profit_cash'
+    5. _rule_engine_points_source(None)    → None (يتبع race settings)
 
-  Snapshots (2):
-    7. rule_snapshot يسجّل points_source
-    8. calculation_snapshot.inputs يسجّل points_source
+  Calculator calc_data (3):
+    6. points_source='gold' → calc_data.points_source == 'gold_weight'
+    7. points_source='cash' → calc_data.points_source == 'profit_cash'
+    8. points_source=None   → calc_data.points_source == race_settings value
+
+  Snapshots (1):
+    9. rule_snapshot يسجّل points_source
 """
 
 import pytest
-from datetime import date, datetime
-from unittest.mock import patch
+from datetime import date
+from unittest.mock import patch, MagicMock
 
 from app import app
 from models import db, Employee, BonusRule, EmployeeBonus, Invoice
-from bonus_calculator import BonusCalculator, _resolve_points_source
+from bonus_calculator import BonusCalculator, _rule_engine_points_source
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -41,17 +51,16 @@ def auth_token():
 
 
 @pytest.fixture
-def points_rule_gold(scope='function'):
-    """BonusRule من نوع points_based + points_source='gold'."""
+def points_rule_gold():
     with app.app_context():
         rule = BonusRule(
             name='test_points_gold',
             rule_type='points_based',
-            bonus_type='points_per_unit',
-            bonus_value=10.0,
+            bonus_type='fixed',
+            bonus_value=100.0,
             is_active=True,
             points_source='gold',
-            conditions={'points_period': 'month'},
+            conditions={'points_period': 'month', 'min_points': 0},
             created_by='test',
         )
         db.session.add(rule)
@@ -65,16 +74,15 @@ def points_rule_gold(scope='function'):
 
 @pytest.fixture
 def points_rule_cash():
-    """BonusRule من نوع points_based + points_source='cash'."""
     with app.app_context():
         rule = BonusRule(
             name='test_points_cash',
             rule_type='points_based',
-            bonus_type='points_per_unit',
-            bonus_value=5.0,
+            bonus_type='fixed',
+            bonus_value=200.0,
             is_active=True,
             points_source='cash',
-            conditions={'cash_amount_per_point': 100.0, 'points_period': 'month'},
+            conditions={'points_period': 'month', 'min_points': 0},
             created_by='test',
         )
         db.session.add(rule)
@@ -88,16 +96,15 @@ def points_rule_cash():
 
 @pytest.fixture
 def points_rule_null_source():
-    """BonusRule من نوع points_based + points_source=None (الافتراضي)."""
     with app.app_context():
         rule = BonusRule(
             name='test_points_null_source',
             rule_type='points_based',
-            bonus_type='points_per_unit',
-            bonus_value=8.0,
+            bonus_type='fixed',
+            bonus_value=50.0,
             is_active=True,
             points_source=None,
-            conditions={'points_period': 'month'},
+            conditions={'points_period': 'month', 'min_points': 0},
             created_by='test',
         )
         db.session.add(rule)
@@ -124,7 +131,7 @@ class TestPointsSourceRouteValidation:
                     'bonus_type': 'points_per_unit',
                     'bonus_value': 10.0,
                     'points_source': 'silver',
-                    'conditions': {'cash_amount_per_point': 100.0},
+                    'conditions': {},
                 },
                 headers={'Authorization': auth_token},
             )
@@ -134,7 +141,7 @@ class TestPointsSourceRouteValidation:
         assert 'silver' in body.get('message', '')
 
     def test_points_source_on_non_points_rule_returns_422(self, auth_token):
-        """points_source='gold' على sales_target → 422 (لا ينطبق إلا على points_based)."""
+        """points_source='gold' على sales_target → 422."""
         with app.test_client() as client:
             resp = client.post(
                 '/api/bonus-rules',
@@ -150,27 +157,33 @@ class TestPointsSourceRouteValidation:
         assert resp.status_code == 422, f"توقعنا 422 — {resp.get_json()}"
         body = resp.get_json()
         assert body.get('code') == 'points_source_not_applicable'
-        assert 'points_based' in body.get('message', '')
 
-    def test_cash_source_without_cash_amount_returns_422(self, auth_token):
-        """points_source='cash' بدون conditions.cash_amount_per_point → 422."""
+    def test_cash_source_without_cash_amount_creates_rule(self, auth_token):
+        """points_source='cash' بدون conditions.cash_amount_per_point → 201.
+        cash_amount_per_point الآن يُقرأ من Settings.sales_race_settings، لا من conditions.
+        """
         with app.test_client() as client:
             resp = client.post(
                 '/api/bonus-rules',
                 json={
-                    'name': 'cash_missing_config_test',
+                    'name': 'cash_no_cond_test',
                     'rule_type': 'points_based',
-                    'bonus_type': 'points_per_unit',
-                    'bonus_value': 5.0,
+                    'bonus_type': 'fixed',
+                    'bonus_value': 100.0,
                     'points_source': 'cash',
-                    'conditions': {'points_period': 'month'},  # بدون cash_amount_per_point
+                    'conditions': {'points_period': 'month'},
                 },
                 headers={'Authorization': auth_token},
             )
-        assert resp.status_code == 422, f"توقعنا 422 — {resp.get_json()}"
-        body = resp.get_json()
-        assert body.get('code') == 'points_source_not_applicable'
-        assert 'cash_amount_per_point' in body.get('message', '')
+        assert resp.status_code == 201, (
+            f'cash بدون conditions.cash_amount_per_point يجب أن يُنشئ القاعدة — '
+            f'{resp.get_json()}'
+        )
+        # Cleanup
+        rule_id = resp.get_json()['rule']['id']
+        with app.app_context():
+            BonusRule.query.filter_by(id=rule_id).delete()
+            db.session.commit()
 
     def test_gold_source_creates_rule_successfully(self, auth_token):
         """points_source='gold' على points_based → 201."""
@@ -190,110 +203,110 @@ class TestPointsSourceRouteValidation:
         assert resp.status_code == 201, f"توقعنا 201 — {resp.get_json()}"
         body = resp.get_json()
         assert body['rule']['points_source'] == 'gold'
+        # Cleanup
+        with app.app_context():
+            BonusRule.query.filter_by(id=body['rule']['id']).delete()
+            db.session.commit()
 
 
-# ── Calculator ────────────────────────────────────────────────────────────────
+# ── Engine Mode Mapping ────────────────────────────────────────────────────────
 
-class TestPointsSourceCalculator:
+class TestEngineModeMappingUnit:
+    """_rule_engine_points_source يُعيّن BonusRule.points_source → وضع المحرك."""
 
-    def test_resolve_points_source_defaults_to_gold_when_null(self):
-        """_resolve_points_source يُعيد 'gold' عند points_source=None."""
-        class _MockRule:
-            points_source = None
-        assert _resolve_points_source(_MockRule()) == 'gold'
+    def test_gold_maps_to_gold_weight(self):
+        """'gold' → 'gold_weight' (profit_gold × points_per_gram لكل الأنواع)."""
+        class _Rule:
+            points_source = 'gold'
+        assert _rule_engine_points_source(_Rule()) == 'gold_weight'
 
-    def test_resolve_points_source_respects_cash(self):
-        """_resolve_points_source يُعيد 'cash' عند points_source='cash'."""
-        class _MockRule:
+    def test_cash_maps_to_profit_cash(self):
+        """'cash' → 'profit_cash' (profit_cash ÷ cpp للبيع، profit_gold × ppg للشراء)."""
+        class _Rule:
             points_source = 'cash'
-        assert _resolve_points_source(_MockRule()) == 'cash'
+        assert _rule_engine_points_source(_Rule()) == 'profit_cash'
 
-    def test_gold_source_reads_profit_gold(self, points_rule_gold):
-        """
-        قاعدة points_source='gold' → الـ inputs يحتوي على total_profit_gold_g و points_per_gram.
-        نتحقق من بنية calculation_snapshot دون الحاجة لفواتير حقيقية (الموظف بدون فواتير).
-        """
+    def test_null_returns_none(self):
+        """None → None (يتبع race settings — BonusCalculator يُحدّد الوضع من Settings)."""
+        class _Rule:
+            points_source = None
+        assert _rule_engine_points_source(_Rule()) is None
+
+    def test_unknown_returns_none(self):
+        """قيمة غير معروفة → None (الافتراضي من race settings)."""
+        class _Rule:
+            points_source = 'silver'
+        assert _rule_engine_points_source(_Rule()) is None
+
+
+# ── Calculator calc_data Structure ────────────────────────────────────────────
+
+class TestPointsSourceCalculatorData:
+    """يتحقق أن calc_data يعكس وضع المحرك الصحيح ومعاملاته."""
+
+    def _calc_data(self, rule_id, race_cfg=None):
+        """يُشغّل calculate_points_bonus ويُعيد calc_data، أو None."""
+        if race_cfg is None:
+            race_cfg = {
+                'points_source':         'profit_cash',
+                'cash_amount_per_point': 50.0,
+                'points_per_gram':       10.0,
+                'point_rules':           None,
+            }
         with app.app_context():
-            emp = Employee.query.filter_by(is_active=True).first()
-            rule = BonusRule.query.get(points_rule_gold)
-
-            # نُعدّل min_points=0 حتى لا يُفلتر بسبب الصفر
-            rule.conditions = {'points_period': 'month', 'min_points': 0}
-            db.session.commit()
-
-            with patch('bonus_calculator.get_race_points_per_gram', return_value=10.0):
+            emp  = Employee.query.filter_by(is_active=True).first()
+            rule = BonusRule.query.get(rule_id)
+            with patch('bonus_calculator.get_race_points_config', return_value=race_cfg):
                 result = BonusCalculator.calculate_points_bonus(
                     emp, rule,
                     date(2026, 6, 1), date(2026, 6, 30),
                 )
+        return result
 
-            # قد يكون None (لا فواتير/لا ربح) — نتحقق من بنية الـ inputs إذا وُجد نتيجة
-            # أو نُنشئ مكافأة ثابتة (fixed) للتحقق من المسار
-            rule.bonus_type = 'fixed'
-            rule.bonus_value = 100.0
-            db.session.commit()
-
-            with patch('bonus_calculator.get_race_points_per_gram', return_value=10.0):
-                result = BonusCalculator.calculate_points_bonus(
-                    emp, rule,
-                    date(2026, 6, 1), date(2026, 6, 30),
-                )
-
-        assert result is not None, 'fixed bonus يجب أن يُنتج نتيجة حتى بدون نقاط'
+    def test_gold_source_engine_mode_in_calc_data(self, points_rule_gold):
+        """points_source='gold' → calc_data['points_source'] == 'gold_weight'."""
+        result = self._calc_data(points_rule_gold)
+        assert result is not None, 'fixed bonus يجب أن ينتج نتيجة'
         _raw, _amt, calc_data, _min, _max = result
-        assert calc_data['points_source'] == 'gold'
+        assert calc_data['points_source'] == 'gold_weight'
         assert 'points_per_gram' in calc_data
-        assert 'total_profit_gold_g' in calc_data
-        assert 'cash_amount_per_point' not in calc_data
+        assert 'raw_points_float' in calc_data
 
-    def test_null_source_behaves_like_gold(self, points_rule_null_source):
-        """
-        قاعدة points_source=None → نفس مفاتيح gold في calculation_data.
-        """
-        with app.app_context():
-            emp = Employee.query.filter_by(is_active=True).first()
-            rule = BonusRule.query.get(points_rule_null_source)
-            rule.bonus_type = 'fixed'
-            rule.bonus_value = 50.0
-            rule.conditions = {'points_period': 'month', 'min_points': 0}
-            db.session.commit()
-
-            with patch('bonus_calculator.get_race_points_per_gram', return_value=10.0):
-                result = BonusCalculator.calculate_points_bonus(
-                    emp, rule,
-                    date(2026, 6, 1), date(2026, 6, 30),
-                )
-
+    def test_cash_source_engine_mode_in_calc_data(self, points_rule_cash):
+        """points_source='cash' → calc_data['points_source'] == 'profit_cash'."""
+        result = self._calc_data(points_rule_cash)
         assert result is not None
         _raw, _amt, calc_data, _min, _max = result
-        assert calc_data['points_source'] == 'gold'
+        assert calc_data['points_source'] == 'profit_cash'
+        assert 'cash_amount_per_pt' in calc_data
         assert 'points_per_gram' in calc_data
-        assert 'cash_amount_per_point' not in calc_data
 
-    def test_cash_source_reads_profit_cash(self, points_rule_cash):
-        """
-        قاعدة points_source='cash' → الـ inputs يحتوي على total_profit_cash و cash_amount_per_point.
-        """
-        with app.app_context():
-            emp = Employee.query.filter_by(is_active=True).first()
-            rule = BonusRule.query.get(points_rule_cash)
-            rule.bonus_type = 'fixed'
-            rule.bonus_value = 200.0
-            rule.conditions = {'cash_amount_per_point': 100.0, 'points_period': 'month', 'min_points': 0}
-            db.session.commit()
-
-            result = BonusCalculator.calculate_points_bonus(
-                emp, rule,
-                date(2026, 6, 1), date(2026, 6, 30),
+    def test_null_source_follows_race_settings(self, points_rule_null_source):
+        """points_source=None → calc_data['points_source'] == race_settings.points_source."""
+        for race_src in ('profit_cash', 'gold_weight'):
+            result = self._calc_data(
+                points_rule_null_source,
+                race_cfg={
+                    'points_source':         race_src,
+                    'cash_amount_per_point': 50.0,
+                    'points_per_gram':       10.0,
+                    'point_rules':           None,
+                },
+            )
+            assert result is not None
+            _raw, _amt, calc_data, _min, _max = result
+            assert calc_data['points_source'] == race_src, (
+                f'points_source=None يجب أن يُنتج {race_src} عند race_settings.points_source={race_src}'
             )
 
+    def test_calc_data_always_has_core_keys(self, points_rule_cash):
+        """calc_data يحتوي دائماً على المفاتيح الأساسية بغض النظر عن الوضع."""
+        result = self._calc_data(points_rule_cash)
         assert result is not None
         _raw, _amt, calc_data, _min, _max = result
-        assert calc_data['points_source'] == 'cash'
-        assert 'cash_amount_per_point' in calc_data
-        assert 'total_profit_cash' in calc_data
-        assert 'points_per_gram' not in calc_data
-        assert 'total_profit_gold_g' not in calc_data
+        for key in ('points_source', 'cash_amount_per_pt', 'points_per_gram',
+                    'raw_points_float', 'employee_points', 'invoice_count'):
+            assert key in calc_data, f'مفتاح "{key}" مفقود من calc_data'
 
 
 # ── Snapshots ─────────────────────────────────────────────────────────────────
@@ -301,31 +314,31 @@ class TestPointsSourceCalculator:
 class TestPointsSourceSnapshots:
 
     def test_rule_snapshot_records_points_source(self, points_rule_cash):
-        """rule_snapshot يحتوي على points_source بقيمته الصحيحة."""
+        """to_snapshot() يُصدّر points_source بقيمته الصحيحة."""
         with app.app_context():
             rule = BonusRule.query.get(points_rule_cash)
             snap = rule.to_snapshot()
-
         assert 'points_source' in snap, 'to_snapshot() يجب أن يُصدّر points_source'
         assert snap['points_source'] == 'cash'
 
-    def test_calculation_snapshot_inputs_record_points_source(self, points_rule_cash):
-        """calculation_snapshot.inputs يسجّل points_source من مسار الاحتساب."""
+    def test_calculation_snapshot_inputs_record_engine_mode(self, points_rule_cash):
+        """bonus.calculation_snapshot.inputs.points_source يعكس وضع المحرك."""
+        race_cfg = {
+            'points_source':         'profit_cash',
+            'cash_amount_per_point': 50.0,
+            'points_per_gram':       10.0,
+            'point_rules':           None,
+        }
         with app.app_context():
-            emp = Employee.query.filter_by(is_active=True).first()
+            emp  = Employee.query.filter_by(is_active=True).first()
             rule = BonusRule.query.get(points_rule_cash)
-            rule.bonus_type = 'fixed'
-            rule.bonus_value = 150.0
-            rule.conditions = {'cash_amount_per_point': 100.0, 'points_period': 'month', 'min_points': 0}
-            db.session.commit()
-
-            bonus = BonusCalculator.calculate_bonus(
-                emp, rule,
-                date(2026, 7, 1), date(2026, 7, 31),
-            )
-
+            with patch('bonus_calculator.get_race_points_config', return_value=race_cfg):
+                bonus = BonusCalculator.calculate_bonus(
+                    emp, rule,
+                    date(2026, 7, 1), date(2026, 7, 31),
+                )
         assert bonus is not None
         snap = bonus.calculation_snapshot
         assert snap is not None
-        assert snap['inputs']['points_source'] == 'cash'
-        assert 'cash_amount_per_point' in snap['inputs']
+        assert snap['inputs']['points_source'] == 'profit_cash'
+        assert 'cash_amount_per_pt' in snap['inputs']

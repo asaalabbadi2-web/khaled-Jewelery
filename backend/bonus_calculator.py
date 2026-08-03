@@ -11,6 +11,8 @@
   للفواتير الجديدة فقط (profit_based + profit_percentage) بدون تعديل المكافأة المعتمدة.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func, or_
@@ -22,6 +24,7 @@ from models import (
     EmployeeBonus,
     Invoice,
     db,
+    get_race_points_config,
     get_race_points_per_gram,
 )
 
@@ -40,10 +43,19 @@ def _apply_limits(rule, raw_amount: float) -> tuple:
     return amount, min_applied, max_applied
 
 
-def _resolve_points_source(rule) -> str:
-    """يُعيد مصدر النقاط الفعلي — gold عند NULL (التوافق الخلفي)."""
+def _rule_engine_points_source(rule) -> str | None:
+    """Map BonusRule.points_source → engine mode, or None to inherit race settings.
+
+    'gold'  → 'gold_weight'   (profit_gold × points_per_gram for all types)
+    'cash'  → 'profit_cash'   (profit_cash ÷ cpp for بيع; profit_gold × ppg for شراء)
+    None    → read from Settings.sales_race_settings (follow race exactly)
+    """
     src = getattr(rule, 'points_source', None)
-    return src if src in ('gold', 'cash') else 'gold'
+    if src == 'gold':
+        return 'gold_weight'
+    if src == 'cash':
+        return 'profit_cash'
+    return None  # caller resolves from race settings
 
 
 def _formula_string(rule) -> str:
@@ -51,10 +63,12 @@ def _formula_string(rule) -> str:
     v = rule.bonus_value
     rt, bt = rule.rule_type, rule.bonus_type
     if rt == 'points_based' and bt == 'points_per_unit':
-        src = _resolve_points_source(rule)
+        src = getattr(rule, 'points_source', None)
         if src == 'cash':
-            return f'profit_cash ÷ cash_amount_per_point → employee_points × {v}'
-        return f'profit_gold_g × points_per_gram → employee_points × {v}'
+            return f'profit_cash ÷ [settings.cash_amount_per_point] → employee_points × {v}'
+        if src == 'gold':
+            return f'profit_gold_g × [settings.points_per_gram] → employee_points × {v}'
+        return f'[settings.points_source] formula → employee_points × {v}'
     templates = {
         ('sales_target',  'percentage'):        f'salary × {v}%',
         ('sales_target',  'fixed'):             f'ثابت: {v}',
@@ -321,12 +335,17 @@ class BonusCalculator:
 
     @staticmethod
     def calculate_points_bonus(employee, rule, period_start, period_end):
-        """حساب مكافأة النقاط (points_based) — gold: profit_gold × points_per_gram / cash: profit_cash ÷ cash_amount_per_point."""
+        """حساب مكافأة النقاط (points_based) — يستهلك محرك سباق الأداء المشترك.
+
+        لا تُوجد معادلة مستقلة هنا: points/engine.compute_invoices_points هو
+        المصدر الوحيد للحقيقة، والإعدادات تُقرأ من Settings.sales_race_settings.
+        """
         from datetime import date as _date
-        conditions = rule.conditions or {}
+        from points.engine import compute_invoices_points
+
+        conditions  = rule.conditions or {}
         points_period = conditions.get("points_period", "month")
-        min_points = float(conditions.get("min_points", 0))
-        points_source = _resolve_points_source(rule)
+        min_points  = float(conditions.get("min_points", 0))
 
         if isinstance(period_start, _date) and not isinstance(period_start, datetime):
             start_dt = datetime.combine(period_start, datetime.min.time())
@@ -338,52 +357,39 @@ class BonusCalculator:
         else:
             end_dt = period_end
 
-        RACE_TYPES = {"بيع", "شراء من عميل"}
-
         username = None
         if hasattr(employee, "user_account") and employee.user_account:
             username = employee.user_account.username
-
-        invoice_filter = and_(
-            Invoice.is_posted.is_(True),
-            Invoice.invoice_type.in_(list(RACE_TYPES)),
-            Invoice.date >= start_dt,
-            Invoice.date <= end_dt,
-        )
 
         if username:
             attr_filter = or_(Invoice.employee_id == employee.id, Invoice.posted_by == username)
         else:
             attr_filter = Invoice.employee_id == employee.id
-        invoices = Invoice.query.filter(and_(invoice_filter, attr_filter)).all()
 
-        if points_source == 'cash':
-            cash_amount_per_point = float(conditions.get('cash_amount_per_point', 1.0))
-            if cash_amount_per_point <= 0:
-                cash_amount_per_point = 1.0
-            total_profit_cash = sum(
-                float(inv.profit_cash or 0.0) for inv in invoices if float(inv.profit_cash or 0.0) > 0
-            )
-            employee_points = int(total_profit_cash / cash_amount_per_point)
-            source_inputs = {
-                "points_source": "cash",
-                "cash_amount_per_point": cash_amount_per_point,
-                "total_profit_cash": total_profit_cash,
-            }
-        else:
-            try:
-                points_per_gram = get_race_points_per_gram()
-            except Exception:
-                points_per_gram = 10.0
-            total_profit_gold = sum(
-                float(inv.profit_gold or 0.0) for inv in invoices if float(inv.profit_gold or 0.0) > 0
-            )
-            employee_points = int(round(total_profit_gold * points_per_gram))
-            source_inputs = {
-                "points_source": "gold",
-                "points_per_gram": points_per_gram,
-                "total_profit_gold_g": total_profit_gold,
-            }
+        invoices = Invoice.query.filter(and_(
+            Invoice.is_posted.is_(True),
+            Invoice.invoice_type.in_(["بيع", "شراء من عميل"]),
+            Invoice.date >= start_dt,
+            Invoice.date <= end_dt,
+            attr_filter,
+        )).all()
+
+        # ── Resolve engine parameters from race settings (single source of truth) ──
+        race_cfg            = get_race_points_config()
+        engine_mode         = _rule_engine_points_source(rule)  # None → inherit settings
+        points_source       = engine_mode or race_cfg['points_source']
+        cash_amount_per_pt  = float(race_cfg['cash_amount_per_point'])
+        points_per_gram     = float(race_cfg['points_per_gram'])
+        point_rules         = race_cfg.get('point_rules') or []
+
+        raw_pts = compute_invoices_points(
+            invoices,
+            points_source=points_source,
+            cash_amount_per_point=cash_amount_per_pt,
+            points_per_gram=points_per_gram,
+            point_rules=point_rules,
+        )
+        employee_points = int(round(raw_pts))
 
         if employee_points < min_points:
             return None
@@ -402,13 +408,16 @@ class BonusCalculator:
             return None
 
         calculation_data = {
-            **source_inputs,
-            "points_period": points_period,
-            "employee_points": employee_points,
-            "min_points": min_points,
-            "bonus_type": rule.bonus_type,
-            "invoice_count": len(invoices),
-            "base_salary": employee.salary,
+            "points_source":       points_source,
+            "cash_amount_per_pt":  cash_amount_per_pt,
+            "points_per_gram":     points_per_gram,
+            "raw_points_float":    round(raw_pts, 4),
+            "employee_points":     employee_points,
+            "points_period":       points_period,
+            "min_points":          min_points,
+            "bonus_type":          rule.bonus_type,
+            "invoice_count":       len(invoices),
+            "base_salary":         employee.salary,
         }
         return raw_amount, amount, calculation_data, min_applied, max_applied
 

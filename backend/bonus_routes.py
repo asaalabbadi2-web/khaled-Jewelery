@@ -83,8 +83,7 @@ def _validate_points_source(points_source, rule_type: str, conditions):
         return 'points_source لا ينطبق إلا على القواعد من نوع points_based'
     if points_source not in _VALID_POINTS_SOURCES:
         return f'قيمة points_source غير صالحة: "{points_source}" — القيم المقبولة: gold, cash'
-    if points_source == 'cash' and not (conditions or {}).get('cash_amount_per_point'):
-        return 'مسار cash يتطلب تحديد conditions.cash_amount_per_point'
+    # cash_amount_per_point is read from Settings.sales_race_settings (not from conditions)
     return None
 
 

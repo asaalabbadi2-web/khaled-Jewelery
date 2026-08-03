@@ -50,6 +50,36 @@ def get_race_points_per_gram() -> float:
     return 10.0
 
 
+def get_race_points_config() -> dict:
+    """Read full points config from Settings.sales_race_settings.
+
+    Single Source of Truth for both Race (PointsMetric) and Bonus (BonusCalculator).
+    Returns a dict with keys: points_source, cash_amount_per_point,
+    points_per_gram, point_rules.
+    """
+    import json as _json
+    cfg: dict = {
+        'points_source':         'gold_weight',
+        'cash_amount_per_point': 100.0,
+        'points_per_gram':       10.0,
+        'point_rules':           None,
+    }
+    try:
+        settings = Settings.query.first()  # type: ignore[name-defined]
+        if settings:
+            raw = getattr(settings, 'sales_race_settings', None)
+            if raw:
+                decoded = _json.loads(raw)
+                if isinstance(decoded, dict):
+                    for k in ('points_source', 'cash_amount_per_point',
+                              'points_per_gram', 'point_rules'):
+                        if k in decoded and decoded[k] is not None:
+                            cfg[k] = decoded[k]
+    except Exception:
+        pass
+    return cfg
+
+
 PAYMENT_METHOD_ALLOWED_INVOICE_TYPES = [
     'بيع',
     'شراء من عميل',

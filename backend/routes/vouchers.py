@@ -189,6 +189,8 @@ def get_vouchers():
     if date_to:
         try:
             date_to_obj = datetime.fromisoformat(date_to)
+            if date_to_obj.hour == 0 and date_to_obj.minute == 0 and date_to_obj.second == 0 and date_to_obj.microsecond == 0:
+                date_to_obj = date_to_obj.replace(hour=23, minute=59, second=59, microsecond=999999)
             query = query.filter(Voucher.date <= date_to_obj)
         except Exception:
             pass

@@ -1758,16 +1758,13 @@ def check_goal_progress():
         # ── قراءة الأهداف: شخصية أولاً، ثم هدف الفريق (وزن شهري/أسبوعي) كاحتياط ──
         settings_row = _get_settings_singleton(create_if_missing=False)
 
-        # معامل تحويل النقاط: نفس ما تستخدمه لوحة المبيعات (points_per_gram)
-        _ppg = 10.0
-        try:
-            _src = settings_row and getattr(settings_row, 'sales_race_settings', None)
-            if _src:
-                _parsed = json.loads(_src) if isinstance(_src, str) else _src
-                _ppg = max(0.001, float(_parsed.get('points_per_gram') or 10.0))
-        except Exception:
-            pass
-        points_per_gram = _ppg
+        # إعدادات النقاط: نفس مصدر الحقيقة الوحيد لسباق الأداء
+        from models import get_race_points_config
+        _race_cfg = get_race_points_config()
+        points_per_gram     = max(0.001, float(_race_cfg.get('points_per_gram') or 10.0))
+        _race_points_source = str(_race_cfg.get('points_source') or 'gold_weight')
+        _race_cpp           = max(0.01,  float(_race_cfg.get('cash_amount_per_point') or 100.0))
+        _race_point_rules   = _race_cfg.get('point_rules') or []
 
         metric = (getattr(employee, 'goal_metric', None) or 'weight').strip().lower()
         if metric not in ('weight', 'points', 'invoices'):
@@ -1877,9 +1874,16 @@ def check_goal_progress():
             if metric == 'invoices':
                 return float(len(invoices))
             if metric == 'points':
-                # نقاط = profit_gold × points_per_gram (نفس حساب لوحة المبيعات)
-                raw = sum(float(getattr(inv, 'profit_gold', 0.0) or 0.0) for inv in invoices)
-                return float(raw * points_per_gram)
+                # نستدعي المحرك المشترك بنفس إعدادات سباق الأداء — Single Source of Truth
+                # يضمن تطابق نقاط الهدف مع نقاط اللوحة تماماً
+                from points.engine import compute_invoices_points
+                return compute_invoices_points(
+                    invoices,
+                    points_source=_race_points_source,
+                    cash_amount_per_point=_race_cpp,
+                    points_per_gram=points_per_gram,
+                    point_rules=_race_point_rules,
+                )
 
             total_w = 0.0
             for inv in invoices:

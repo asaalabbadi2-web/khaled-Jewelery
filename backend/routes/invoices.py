@@ -660,6 +660,11 @@ def get_invoices():
     if date_to_str:
         date_to = _parse_iso_date(date_to_str)
         if date_to is not None:
+            # Date pickers send end-date at 00:00:00 (midnight), which would exclude
+            # every invoice created that day. Extend to 23:59:59.999999 when no
+            # explicit time was provided.
+            if date_to.hour == 0 and date_to.minute == 0 and date_to.second == 0 and date_to.microsecond == 0:
+                date_to = date_to.replace(hour=23, minute=59, second=59, microsecond=999999)
             query = query.filter(Invoice.date <= date_to)
 
     # Sorting

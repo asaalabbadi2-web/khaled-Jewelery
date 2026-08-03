@@ -269,7 +269,10 @@ class _InvoicesListScreenState extends State<InvoicesListScreen>
       'searchType': _tabSearchType[idx],
       'search': _searchControllers[idx].text.trim(),
       'dateFrom': dateRange?.start.toIso8601String(),
-      'dateTo': dateRange?.end.toIso8601String(),
+      'dateTo': dateRange == null
+          ? null
+          : DateTime(dateRange.end.year, dateRange.end.month, dateRange.end.day, 23, 59, 59, 999)
+              .toIso8601String(),
       'invoiceTypes': _invoiceTabs[idx].apiInvoiceTypes,
     });
   }

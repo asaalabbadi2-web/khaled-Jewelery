@@ -1169,7 +1169,10 @@ class ApiService {
       queryParameters['date_from'] = dateFrom.toIso8601String();
     }
     if (dateTo != null) {
-      queryParameters['date_to'] = dateTo.toIso8601String();
+      // Ensure the full end day is included: date pickers return midnight (00:00:00),
+      // which would exclude every invoice created later that day.
+      final endOfDay = DateTime(dateTo.year, dateTo.month, dateTo.day, 23, 59, 59, 999);
+      queryParameters['date_to'] = endOfDay.toIso8601String();
     }
 
     final uri = Uri.parse(
@@ -1712,7 +1715,8 @@ class ApiService {
       queryParameters['date_from'] = dateFrom.toIso8601String();
     }
     if (dateTo != null) {
-      queryParameters['date_to'] = dateTo.toIso8601String();
+      final endOfDay = DateTime(dateTo.year, dateTo.month, dateTo.day, 23, 59, 59, 999);
+      queryParameters['date_to'] = endOfDay.toIso8601String();
     }
 
     final uri = Uri.parse(
@@ -1954,7 +1958,8 @@ class ApiService {
       queryParameters['date_from'] = dateFrom.toIso8601String();
     }
     if (dateTo != null) {
-      queryParameters['date_to'] = dateTo.toIso8601String();
+      final endOfDay = DateTime(dateTo.year, dateTo.month, dateTo.day, 23, 59, 59, 999);
+      queryParameters['date_to'] = endOfDay.toIso8601String();
     }
     if (minCash != null) {
       queryParameters['min_cash'] = minCash.toString();
