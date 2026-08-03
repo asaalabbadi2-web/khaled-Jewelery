@@ -27,6 +27,68 @@ bonus_bp = Blueprint('bonuses', __name__)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Feature Flag Helper
+# ══════════════════════════════════════════════════════════════════════════════
+
+_FLAGGED_TYPES = {
+    'attendance':  ('bonus_attendance_enabled',  'Attendance'),
+    'performance': ('bonus_performance_enabled', 'Performance'),
+}
+
+def _check_bonus_type_flag(rule_type: str):
+    """
+    يتحقق من أن نوع المكافأة مُفعَّل في إعدادات النظام.
+
+    Returns:
+        None          — النوع مسموح (لا قيد عليه، أو مُفعَّل)
+        (False, str)  — النوع محظور؛ الـ str هو رسالة الخطأ للـ route
+    """
+    if rule_type not in _FLAGGED_TYPES:
+        return None
+
+    setting_attr, display_name = _FLAGGED_TYPES[rule_type]
+    try:
+        from models import Settings
+        from core.settings import _get_settings_singleton
+        settings = _get_settings_singleton(create_if_missing=False)
+        if settings and bool(getattr(settings, setting_attr, False)):
+            return None  # مُفعَّل
+    except Exception:
+        pass  # في حالة الخطأ نُطبَّق الرفض الآمن (safe-deny)
+
+    return False, (
+        f'نوع المكافأة "{display_name}" غير مفعّل في إعدادات النظام. '
+        f'فعّله من الإعدادات → المكافآت → {display_name} لتتمكن من استخدامه.'
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# points_source Validation
+# ══════════════════════════════════════════════════════════════════════════════
+
+_VALID_POINTS_SOURCES = frozenset({'gold', 'cash'})
+
+
+def _validate_points_source(points_source, rule_type: str, conditions):
+    """
+    يتحقق من صحة points_source وتوافر إعدادات المسار المختار.
+
+    Returns:
+        None  — صالح (أو لا شيء لفحصه)
+        str   — رسالة الخطأ
+    """
+    if points_source is None:
+        return None
+    if rule_type != 'points_based':
+        return 'points_source لا ينطبق إلا على القواعد من نوع points_based'
+    if points_source not in _VALID_POINTS_SOURCES:
+        return f'قيمة points_source غير صالحة: "{points_source}" — القيم المقبولة: gold, cash'
+    if points_source == 'cash' and not (conditions or {}).get('cash_amount_per_point'):
+        return 'مسار cash يتطلب تحديد conditions.cash_amount_per_point'
+    return None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # دوال البحث المرنة عن حسابات المكافآت
 # ──────────────────────────────────────────────────────────────────────────────
 # تتجنب الأرقام الصلبة حتى تعمل في أي بيئة إنتاج بمخططات حسابات مختلفة.
@@ -298,6 +360,21 @@ def create_bonus_rule():
                     'message': f'الحقل {field} مطلوب'
                 }), 400
         
+        # Feature Flag: attendance و performance محظوران ما لم يُفعَّلا من الإعدادات
+        flag_check = _check_bonus_type_flag(data.get('rule_type', ''))
+        if flag_check is not None:
+            _, msg = flag_check
+            return jsonify({'success': False, 'message': msg, 'code': 'bonus_type_disabled'}), 422
+
+        # points_source: يُقبل فقط على points_based مع اكتمال إعدادات المسار
+        ps_error = _validate_points_source(
+            data.get('points_source'),
+            data.get('rule_type', ''),
+            data.get('conditions'),
+        )
+        if ps_error:
+            return jsonify({'success': False, 'message': ps_error, 'code': 'points_source_not_applicable'}), 422
+
         # تحويل التواريخ
         valid_from = None
         valid_to = None
@@ -305,7 +382,7 @@ def create_bonus_rule():
             valid_from = datetime.strptime(data['valid_from'], '%Y-%m-%d').date()
         if data.get('valid_to'):
             valid_to = datetime.strptime(data['valid_to'], '%Y-%m-%d').date()
-        
+
         # 🔍 التحقق من صحة أنواع الفواتير المحددة
         valid_invoice_types = ['بيع', 'شراء من عميل', 'مرتجع بيع', 'مرتجع شراء', 'شراء', 'مرتجع شراء (مورد)']
         applicable_invoice_types = data.get('applicable_invoice_types')
@@ -331,8 +408,9 @@ def create_bonus_rule():
             max_bonus=data.get('max_bonus'),
             target_departments=data.get('target_departments'),
             target_positions=data.get('target_positions'),
-            target_employee_ids=data.get('target_employee_ids'),  # 🆕
-            applicable_invoice_types=data.get('applicable_invoice_types'),  # 🆕
+            target_employee_ids=data.get('target_employee_ids'),
+            applicable_invoice_types=data.get('applicable_invoice_types'),
+            points_source=data.get('points_source'),
             is_active=data.get('is_active', True),
             valid_from=valid_from,
             valid_to=valid_to,
@@ -364,7 +442,25 @@ def update_bonus_rule(rule_id):
     try:
         rule = BonusRule.query.get_or_404(rule_id)
         data = request.get_json()
-        
+
+        # Feature Flag: الـ rule_type الفعلي بعد التحديث يجب أن يكون مُفعَّلاً
+        effective_type = data.get('rule_type', rule.rule_type)
+        flag_check = _check_bonus_type_flag(effective_type)
+        if flag_check is not None:
+            _, msg = flag_check
+            return jsonify({'success': False, 'message': msg, 'code': 'bonus_type_disabled'}), 422
+
+        # points_source: إذا تم تغييره، تحقق من المسار الفعلي بعد التحديث
+        if 'points_source' in data:
+            effective_conditions = data.get('conditions', rule.conditions)
+            ps_error = _validate_points_source(
+                data['points_source'],
+                effective_type,
+                effective_conditions,
+            )
+            if ps_error:
+                return jsonify({'success': False, 'message': ps_error, 'code': 'points_source_not_applicable'}), 422
+
         # 🔍 التحقق من صحة أنواع الفواتير إذا تم تحديثها
         valid_invoice_types = ['بيع', 'شراء من عميل', 'مرتجع بيع', 'مرتجع شراء', 'شراء', 'مرتجع شراء (مورد)']
         if 'applicable_invoice_types' in data and data['applicable_invoice_types']:
@@ -399,8 +495,10 @@ def update_bonus_rule(rule_id):
             rule.target_positions = data['target_positions']
         if 'target_employee_ids' in data:  # 🆕
             rule.target_employee_ids = data['target_employee_ids']
-        if 'applicable_invoice_types' in data:  # 🆕
+        if 'applicable_invoice_types' in data:
             rule.applicable_invoice_types = data['applicable_invoice_types']
+        if 'points_source' in data:
+            rule.points_source = data['points_source'] or None
         if 'is_active' in data:
             rule.is_active = data['is_active']
         
@@ -706,7 +804,8 @@ def calculate_bonuses():
                 'success': False,
                 'message': 'صيغة التاريخ غير صحيحة، استخدم YYYY-MM-DD'
             }), 400
-        auto_approve = data.get('auto_approve', False)
+        # auto_approve محذوف — الاعتماد يدوي دائماً، Scheduler هو مصدر الحقيقة
+        # (نتجاهل الحقل إن أُرسل للتوافق الخلفي مع clients قديمة)
 
         # دعم employee_ids (list) و employee_id (single) القادم من Flutter
         employee_ids = data.get('employee_ids') if isinstance(data.get('employee_ids'), list) else None
@@ -726,15 +825,32 @@ def calculate_bonuses():
             employee_ids = [self_employee_id]
 
         rule_ids = data.get('rule_ids') if isinstance(data.get('rule_ids'), list) else None
-        
-        # حساب المكافآت
+
+        # حساب المكافآت — جميع النتائج pending، لا اعتماد تلقائي
         bonuses = BonusCalculator.calculate_all_bonuses_for_period(
             period_start=period_start,
             period_end=period_end,
             employee_ids=employee_ids,
             rule_ids=rule_ids,
-            auto_approve=auto_approve
         )
+
+        # سجّل التشغيل اليدوي في bonus_calculation_log
+        try:
+            from models import BonusCalculationLog
+            pending = [b for b in bonuses if b.status == 'pending']
+            log = BonusCalculationLog(
+                period_type='manual',
+                period_start=period_start,
+                period_end=period_end,
+                bonus_count=len(pending),
+                total_amount=round(sum(b.amount for b in pending), 4),
+                status='success',
+                message=f'تشغيل يدوي: {len(pending)} مكافأة بانتظار الاعتماد.',
+            )
+            db.session.add(log)
+            db.session.commit()
+        except Exception:
+            pass  # السجل اختياري — لا يُعطّل الاستجابة
         
         total_amount = sum(b.amount for b in bonuses)
         
@@ -753,53 +869,55 @@ def calculate_bonuses():
         }), 500
 
 
-@bonus_bp.route('/bonuses/<int:bonus_id>/approve', methods=['POST'])
-@require_auth
-@require_permission('bonus.approve')
-def approve_bonus(bonus_id):
+# ══════════════════════════════════════════════════════════════════════════════
+# خدمة الاعتماد الأساسية
+# ══════════════════════════════════════════════════════════════════════════════
+# نقطة الحقيقة الوحيدة لمنطق اعتماد مكافأة فردية.
+# تُستدعى من approve_bonus (route) ومن bulk_approve_bonuses على حدٍّ سواء.
+# كلٌّ من المستدعَيَين يحصل على نفس الحمايات:
+#   - SELECT FOR UPDATE (منع double-approval)
+#   - التحقق من تكرار السند (BAPP-{id})
+#   - القيد المحاسبي الكامل (Dr مصروف / Cr مستحق)
+#   - GoalAchievement للـ overlay الاحتفالية
+# يُدير معاملته الخاصة (commit/rollback) حتى يمكن استدعاؤها في حلقة
+# دون أن يُؤثر فشل عنصر واحد على بقية الدفعة.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _approve_single_bonus(bonus_id: int, approved_by: str) -> tuple:
     """
-    اعتماد مكافأة مع إنشاء قيد محاسبي لإثبات المصروف والالتزام
-    
-    القيد المحاسبي:
-    من ح/ مصروف مكافآت (5450)    مدين
-      إلى ح/ مكافآت مستحقة (2310)  دائن
+    يُنفّذ اعتماد مكافأة واحدة كاملاً مع قيدها المحاسبي.
+
+    Returns:
+        (True,  {'voucher_number': str, 'voucher_id': int, 'amount': float})
+        (False, {'error': str, 'code': str, ...})
     """
     try:
-        # with_for_update() يقفل السطر أثناء القراءة (منع double-approval في قواعد بيانات
-        # تدعم SELECT FOR UPDATE مثل PostgreSQL — في SQLite يعمل كقراءة عادية)
-        bonus = EmployeeBonus.query.with_for_update().get_or_404(bonus_id)
-        data = request.get_json(silent=True) or {}
+        bonus = EmployeeBonus.query.with_for_update().get(bonus_id)
+        if bonus is None:
+            return False, {'error': 'المكافأة غير موجودة', 'code': 'not_found'}
 
         if bonus.status != 'pending':
-            return jsonify({
-                'success': False,
-                'message': f'لا يمكن اعتماد مكافأة بحالة "{bonus.status}"'
-            }), 409
+            return False, {
+                'error': f'لا يمكن اعتماد مكافأة بحالة "{bonus.status}"',
+                'code': 'wrong_status',
+            }
 
-        approved_by = data.get('approved_by', 'system')
-        
-        # البحث عن حساب مصروف المكافآت (مرن — لا يعتمد رقماً صلباً)
         bonus_expense_account = _find_bonus_expense_account()
         if not bonus_expense_account:
-            return jsonify({
-                'success': False,
-                'message': (
+            return False, {
+                'error': (
                     'لم يُعثر على حساب مصروف المكافآت. '
                     'يرجى إنشاء حساب مصروفات باسم يحتوي على "مصروف مكافأ" '
                     'أو تحديد رقمه في الإعدادات (bonus_expense_account_number).'
-                )
-            }), 400
+                ),
+                'code': 'missing_expense_account',
+            }
 
-        # إنشاء سند قيد لإثبات المصروف والالتزام
         employee = Employee.query.get(bonus.employee_id)
+        emp_name = employee.name if employee else str(bonus.employee_id)
 
-        # ── حساب الذمة الدائنة: يُفضَّل الحساب الشخصي للموظف تحت (2410) ──
-        # 2410xxx = ذمم الموظفين - عمولات/مكافآت (حساب خاص لكل موظف)
-        # يُتيح متابعة المكافأة في كشف حساب الموظف مباشرةً.
-        # إن لم يُوجد نستخدم 2310 (مكافآت مستحقة للموظفين) كاحتياط عام.
         bonuses_payable_account = None
         if employee:
-            # الأولوية: 2310xxx (مكافآت مستحقة) الخاص بالموظف
             bonuses_payable_account = (
                 Account.query
                 .filter(
@@ -811,26 +929,24 @@ def approve_bonus(bonus_id):
         if not bonuses_payable_account:
             bonuses_payable_account = _find_bonus_payable_account()
         if not bonuses_payable_account:
-            return jsonify({
-                'success': False,
-                'message': (
-                    'لم يُعثر على حساب مكافآت مستحقة للموظف '
-                    f'({employee.name if employee else bonus.employee_id}). '
-                    'شغّل "إصلاح حسابات الموظف" لإنشاء حساب 2310xxx أو حدد حساب 2310 في الإعدادات.'
-                )
-            }), 400
+            return False, {
+                'error': (
+                    f'لم يُعثر على حساب مكافآت مستحقة للموظف ({emp_name}). '
+                    'شغّل "إصلاح حسابات الموظف" لإنشاء حساب 2310xxx '
+                    'أو حدد حساب 2310 في الإعدادات.'
+                ),
+                'code': 'missing_payable_account',
+            }
+
         voucher_number = f"BAPP-{bonus.id}"
-        
-        # التحقق من عدم وجود سند بنفس الرقم
         existing_voucher = Voucher.query.filter_by(voucher_number=voucher_number).first()
         if existing_voucher:
-            return jsonify({
-                'success': False,
-                'message': f'سند الاعتماد موجود مسبقاً برقم {voucher_number}. لإعادة الاعتماد، يجب حذف السند الموجود أولاً.',
-                'voucher_id': existing_voucher.id
-            }), 409
-        
-        emp_name = employee.name if employee else str(bonus.employee_id)
+            return False, {
+                'error': f'سند الاعتماد موجود مسبقاً برقم {voucher_number}. لإعادة الاعتماد، يجب حذف السند الموجود أولاً.',
+                'code': 'duplicate_voucher',
+                'voucher_id': existing_voucher.id,
+            }
+
         voucher = Voucher(
             voucher_number=voucher_number,
             voucher_type='adjustment',
@@ -840,12 +956,10 @@ def approve_bonus(bonus_id):
             created_by=approved_by,
             approved_by=approved_by,
             amount_cash=float(bonus.amount or 0.0),
-            # الطرف: الموظف المستفيد
             party_type='employee',
             employee_id=bonus.employee_id,
             party_name=emp_name,
             receiver_name=emp_name,
-            # مرجع المكافأة
             reference_type='bonus',
             reference_id=bonus.id,
             reference_number=f'BONUS-{bonus.id}',
@@ -853,78 +967,98 @@ def approve_bonus(bonus_id):
         db.session.add(voucher)
         db.session.flush()
 
-        # السطر المدين: مصروف المكافآت
-        debit_line = VoucherAccountLine(
+        db.session.add(VoucherAccountLine(
             voucher_id=voucher.id,
             account_id=bonus_expense_account.id,
             line_type='debit',
             amount_type='cash',
-            description=f"مصروف مكافأة {employee.name if employee else ''}",
+            description=f"مصروف مكافأة {emp_name}",
             amount=bonus.amount,
-        )
-        db.session.add(debit_line)
-        
-        # السطر الدائن: مكافآت مستحقة
-        credit_line = VoucherAccountLine(
+        ))
+        db.session.add(VoucherAccountLine(
             voucher_id=voucher.id,
             account_id=bonuses_payable_account.id,
             line_type='credit',
             amount_type='cash',
-            description=f"استحقاق مكافأة {employee.name if employee else ''}",
+            description=f"استحقاق مكافأة {emp_name}",
             amount=bonus.amount,
-        )
-        db.session.add(credit_line)
-        
-        # إنشاء القيد المحاسبي من السند — يُرحّل المصروف والالتزام إلى الـ GL
+        ))
+
         try:
             from routes import create_journal_entry_from_voucher
-            journal_entry = create_journal_entry_from_voucher(voucher)
-            if journal_entry:
-                voucher.journal_entry_id = journal_entry.id
+            je = create_journal_entry_from_voucher(voucher)
+            if je:
+                voucher.journal_entry_id = je.id
                 db.session.add(voucher)
         except Exception as _je_err:
-            # لا نوقف الاعتماد إذا فشل القيد — يُسجَّل للمراجعة
             import traceback
-            print(f'[approve_bonus] ⚠️ فشل إنشاء قيد السند: {_je_err}')
+            print(f'[_approve_single_bonus] ⚠️ فشل إنشاء قيد السند BAPP-{bonus.id}: {_je_err}')
             traceback.print_exc()
 
-        # اعتماد المكافأة
         bonus.approve(approved_by)
-        bonus.payment_reference = voucher_number  # حفظ رقم سند الاستحقاق
-
-        # 🎉 إنشاء سجل إنجاز تلقائي ليظهر للموظف كـ overlay احتفالية
+        bonus.payment_reference = voucher_number
         _create_achievement_for_bonus(bonus, employee)
-        
+
         try:
             db.session.commit()
         except IntegrityError:
             db.session.rollback()
-            existing_voucher = Voucher.query.filter_by(voucher_number=voucher_number).first()
-            if existing_voucher:
-                return jsonify({
-                    'success': False,
-                    'message': f'سند الاعتماد موجود مسبقاً برقم {voucher_number}. لإعادة الاعتماد، يجب حذف السند الموجود أولاً.',
-                    'voucher_id': existing_voucher.id
-                }), 409
+            ev = Voucher.query.filter_by(voucher_number=voucher_number).first()
+            if ev:
+                return False, {
+                    'error': f'سند الاعتماد موجود مسبقاً (race condition): {voucher_number}',
+                    'code': 'duplicate_voucher',
+                    'voucher_id': ev.id,
+                }
             raise
-        
-        return jsonify({
-            'success': True,
-            'message': 'تم اعتماد المكافأة وإثبات المصروف بنجاح',
-            'bonus': bonus.to_dict(include_employee=True, include_rule=True),
-            'voucher': {
-                'id': voucher.id,
-                'voucher_number': voucher_number,
-                'amount': bonus.amount
-            }
-        }), 200
-        
-    except Exception as e:
+
+        return True, {
+            'voucher_number': voucher_number,
+            'voucher_id': voucher.id,
+            'amount': bonus.amount,
+        }
+
+    except Exception as exc:
         db.session.rollback()
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
+        import traceback
+        traceback.print_exc()
+        return False, {'error': str(exc), 'code': 'exception'}
+
+
+@bonus_bp.route('/bonuses/<int:bonus_id>/approve', methods=['POST'])
+@require_auth
+@require_permission('bonus.approve')
+def approve_bonus(bonus_id):
+    """
+    اعتماد مكافأة مع إنشاء قيد محاسبي لإثبات المصروف والالتزام.
+
+    القيد المحاسبي:
+    من ح/ مصروف مكافآت (5401)    مدين
+      إلى ح/ مكافآت مستحقة (2310)  دائن
+    سند: BAPP-{bonus_id}
+    """
+    data = request.get_json(silent=True) or {}
+    approved_by = data.get('approved_by') or getattr(g, 'username', None) or 'system'
+
+    ok, payload = _approve_single_bonus(bonus_id, approved_by)
+
+    if not ok:
+        code = payload.get('code', 'error')
+        if code in ('wrong_status', 'duplicate_voucher'):
+            http_status = 409
+        elif code == 'not_found':
+            http_status = 404
+        else:
+            http_status = 400
+        return jsonify({'success': False, 'message': payload['error'], **payload}), http_status
+
+    bonus = EmployeeBonus.query.get(bonus_id)
+    return jsonify({
+        'success': True,
+        'message': 'تم اعتماد المكافأة وإثبات المصروف بنجاح',
+        'bonus': bonus.to_dict(include_employee=True, include_rule=True) if bonus else None,
+        'voucher': payload,
+    }), 200
 
 
 def _create_achievement_for_bonus(bonus: EmployeeBonus, employee):
@@ -992,39 +1126,50 @@ def _bonus_type_label(bonus_type: str) -> str:
 @require_auth
 @require_permission('bonus.approve')
 def bulk_approve_bonuses():
-    """اعتماد عدة مكافآت معلقة دفعة واحدة"""
-    try:
-        data = request.get_json(silent=True) or {}
-        ids = data.get('ids') or data.get('bonus_ids') or []
-        approved_by = data.get('approved_by', 'system')
+    """
+    اعتماد عدة مكافآت معلقة دفعة واحدة.
 
-        if not isinstance(ids, list) or not ids:
-            return jsonify({'success': False, 'message': 'قائمة المعرفات مطلوبة'}), 400
+    كل مكافأة تُعتمد عبر _approve_single_bonus في معاملة مستقلة:
+    فشل مكافأة واحدة لا يُلغي بقية الدفعة.
+    كل اعتماد ناجح يُنشئ قيده المحاسبي (BAPP-{id}) تماماً كما يفعل
+    approve_bonus الفردي.
 
-        bonuses = EmployeeBonus.query.filter(EmployeeBonus.id.in_(ids)).all()
-        approved, skipped = [], []
+    Response:
+        approved: [{id, voucher_number, amount}]   — نجحت
+        failed:   [{id, error, code}]               — فشلت (حالة خاطئة / حسابات مفقودة / ...)
+    """
+    data = request.get_json(silent=True) or {}
+    ids = data.get('ids') or data.get('bonus_ids') or []
+    approved_by = data.get('approved_by') or getattr(g, 'username', None) or 'system'
 
-        for bonus in bonuses:
-            if bonus.status == 'pending':
-                employee = Employee.query.get(bonus.employee_id)
-                bonus.approve(approved_by)
-                _create_achievement_for_bonus(bonus, employee)
-                approved.append(bonus.id)
-            else:
-                skipped.append({'id': bonus.id, 'status': bonus.status})
+    if not isinstance(ids, list) or not ids:
+        return jsonify({'success': False, 'message': 'قائمة المعرفات مطلوبة'}), 400
 
-        db.session.commit()
+    approved = []
+    failed = []
 
-        return jsonify({
-            'success': True,
-            'approved_ids': approved,
-            'skipped': skipped,
-            'count': len(approved)
-        }), 200
+    for bonus_id in ids:
+        ok, payload = _approve_single_bonus(int(bonus_id), approved_by)
+        if ok:
+            approved.append({
+                'id': bonus_id,
+                'voucher_number': payload['voucher_number'],
+                'amount': payload['amount'],
+            })
+        else:
+            failed.append({'id': bonus_id, **payload})
 
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'success': False, 'message': str(e)}), 500
+    return jsonify({
+        'success': True,
+        'approved': approved,
+        'failed': failed,
+        'approved_count': len(approved),
+        'failed_count': len(failed),
+        # حقول توافق خلفي مع المستدعين القدامى
+        'approved_ids': [a['id'] for a in approved],
+        'skipped': [f for f in failed if f.get('code') == 'wrong_status'],
+        'count': len(approved),
+    }), 200
 
 
 @bonus_bp.route('/bonuses/<int:bonus_id>/reject', methods=['POST'])
@@ -2208,3 +2353,357 @@ def mark_goal_achievement_seen(achievement_id):
         db.session.rollback()
         return jsonify({'success': False, 'message': 'فشل الحفظ'}), 500
     return jsonify({'success': True}), 200
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — Reversal & Clawback Candidates
+# ══════════════════════════════════════════════════════════════════════════════
+
+@bonus_bp.route('/bonuses/<int:bonus_id>/reverse', methods=['POST'])
+@require_auth
+@require_permission('bonus.approve')
+def reverse_bonus(bonus_id):
+    """
+    POST /api/bonuses/{id}/reverse
+    عكس مكافأة معتمدة: ينشئ سند BREV-{id} (Dr 2310 / Cr 5401) ويُحوِّل الحالة إلى reversed.
+
+    Body (JSON, اختياري):
+        reversed_by  str   — المستخدم المنفِّذ (default: g.username)
+        reason       str   — سبب العكس
+
+    Responses:
+        200 — نجاح: {success, message, bonus, voucher}
+        404 — المكافأة غير موجودة
+        409 — سند BREV موجود مسبقاً (idempotency guard)
+        422 — مكافأة مدفوعة (paid_bonus_reversal_policy_not_configured)
+        400 — حالة خاطئة أو بيانات ناقصة
+        500 — خطأ غير متوقع
+    """
+    from bonus_reversal_service import BonusReversalService
+    from models import BonusClawbackCandidate
+
+    data = request.get_json(silent=True) or {}
+    reversed_by = (
+        data.get('reversed_by')
+        or getattr(g, 'username', None)
+        or 'system'
+    )
+    reason = data.get('reason') or None
+
+    ok, payload = BonusReversalService.reverse(bonus_id, reversed_by, reason)
+
+    if not ok:
+        code = payload.get('code', 'error')
+        if code == 'not_found':
+            return jsonify({'success': False, **payload}), 404
+        if code == 'paid_bonus_reversal_policy_not_configured':
+            return jsonify({'success': False, **payload}), 422
+        if code == 'duplicate_voucher':
+            return jsonify({'success': False, **payload}), 409
+        return jsonify({'success': False, **payload}), 400
+
+    bonus = EmployeeBonus.query.get(bonus_id)
+
+    # إغلاق أي مرشحات clawback مفتوحة مرتبطة بهذه المكافأة
+    try:
+        open_candidates = (
+            BonusClawbackCandidate.query
+            .filter_by(bonus_id=bonus_id, status='open')
+            .all()
+        )
+        for c in open_candidates:
+            c.status = 'actioned'
+        if open_candidates:
+            db.session.commit()
+    except Exception as _cl_err:
+        print(f'[reverse_bonus] ⚠️ فشل إغلاق clawback candidates: {_cl_err}')
+
+    return jsonify({
+        'success': True,
+        'message': f'تم عكس المكافأة #{bonus_id} بنجاح',
+        'bonus': bonus.to_dict(include_employee=True),
+        'voucher': payload,
+    }), 200
+
+
+@bonus_bp.route('/bonuses/clawback-candidates', methods=['GET'])
+@require_auth
+@require_permission('bonus.approve')
+def list_clawback_candidates():
+    """
+    GET /api/bonuses/clawback-candidates
+    يُعيد قائمة مرشحات clawback (إخبارية).
+
+    Query params:
+        status   str   — open | dismissed | actioned | all (default: open)
+        page     int   — رقم الصفحة (default: 1)
+        per_page int   — عدد السجلات (default: 50)
+    """
+    from models import BonusClawbackCandidate
+
+    status_filter = request.args.get('status', 'open')
+    page = int(request.args.get('page', 1))
+    per_page = min(int(request.args.get('per_page', 50)), 200)
+
+    q = BonusClawbackCandidate.query
+    if status_filter != 'all':
+        q = q.filter_by(status=status_filter)
+
+    q = q.order_by(BonusClawbackCandidate.created_at.desc())
+    pagination = q.paginate(page=page, per_page=per_page, error_out=False)
+
+    return jsonify({
+        'success': True,
+        'candidates': [c.to_dict() for c in pagination.items],
+        'total': pagination.total,
+        'page': page,
+        'per_page': per_page,
+        'pages': pagination.pages,
+    }), 200
+
+
+@bonus_bp.route('/bonuses/clawback-candidates/<int:candidate_id>/dismiss', methods=['POST'])
+@require_auth
+@require_permission('bonus.approve')
+def dismiss_clawback_candidate(candidate_id):
+    """
+    POST /api/bonuses/clawback-candidates/{id}/dismiss
+    يرفض مرشح clawback دون اتخاذ أي إجراء مالي.
+
+    Body (JSON, اختياري):
+        dismissed_by  str   — المستخدم (default: g.username)
+    """
+    from models import BonusClawbackCandidate
+
+    candidate = BonusClawbackCandidate.query.get_or_404(candidate_id)
+
+    data = request.get_json(silent=True) or {}
+    dismissed_by = (
+        data.get('dismissed_by')
+        or getattr(g, 'username', None)
+        or 'system'
+    )
+
+    try:
+        candidate.dismiss(dismissed_by)
+        db.session.commit()
+    except ValueError as ve:
+        return jsonify({'success': False, 'message': str(ve)}), 409
+    except Exception:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': 'فشل الحفظ'}), 500
+
+    return jsonify({
+        'success': True,
+        'message': 'تم رفض المرشح',
+        'candidate': candidate.to_dict(),
+    }), 200
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Pending Summary & Calculation Logs — Dashboard Support
+# ══════════════════════════════════════════════════════════════════════════════
+
+@bonus_bp.route('/bonuses/pending-summary', methods=['GET'])
+@require_auth
+@require_any_permission('bonus.approve', 'bonus.calculate', 'bonus_rule.view')
+def bonuses_pending_summary():
+    """
+    GET /api/bonuses/pending-summary
+
+    ملخص المكافآت pending لفترة معينة — يدعم شاشة "مكافآت الشهر".
+
+    Query params:
+        period_start  YYYY-MM-DD  (اختياري — الشهر الحالي افتراضياً)
+        period_end    YYYY-MM-DD  (اختياري)
+    """
+    import calendar as _cal
+
+    today = date.today()
+    start_str = request.args.get('period_start')
+    end_str = request.args.get('period_end')
+
+    try:
+        period_start = datetime.strptime(start_str, '%Y-%m-%d').date() if start_str else today.replace(day=1)
+        period_end = (
+            datetime.strptime(end_str, '%Y-%m-%d').date()
+            if end_str
+            else today.replace(day=_cal.monthrange(today.year, today.month)[1])
+        )
+    except ValueError:
+        return jsonify({'success': False, 'message': 'صيغة التاريخ غير صحيحة، استخدم YYYY-MM-DD'}), 400
+
+    base_q = EmployeeBonus.query.filter(
+        EmployeeBonus.period_start >= period_start,
+        EmployeeBonus.period_end <= period_end,
+    )
+
+    pending   = base_q.filter_by(status='pending').all()
+    approved  = base_q.filter_by(status='approved').all()
+    paid      = base_q.filter_by(status='paid').all()
+
+    return jsonify({
+        'success': True,
+        'period': {
+            'start': period_start.isoformat(),
+            'end':   period_end.isoformat(),
+        },
+        'pending': {
+            'count':  len(pending),
+            'total':  round(sum(b.amount for b in pending), 4),
+        },
+        'approved': {
+            'count':  len(approved),
+            'total':  round(sum(b.amount for b in approved), 4),
+        },
+        'paid': {
+            'count':  len(paid),
+            'total':  round(sum(b.amount for b in paid), 4),
+        },
+    }), 200
+
+
+@bonus_bp.route('/bonuses/calculation-logs', methods=['GET'])
+@require_auth
+@require_any_permission('bonus.approve', 'bonus.calculate', 'bonus_rule.view')
+def list_calculation_logs():
+    """
+    GET /api/bonuses/calculation-logs
+
+    آخر تشغيلات المجدول — يُعرض في الواجهة كإشعار داخلي.
+
+    Query params:
+        limit    int  (افتراضي 20)
+        status   success | failed
+    """
+    from models import BonusCalculationLog
+
+    limit = min(int(request.args.get('limit', 20)), 100)
+    status_filter = request.args.get('status')
+
+    q = BonusCalculationLog.query.order_by(BonusCalculationLog.run_at.desc())
+    if status_filter:
+        q = q.filter_by(status=status_filter)
+
+    logs = q.limit(limit).all()
+
+    return jsonify({
+        'success': True,
+        'logs': [log.to_dict() for log in logs],
+        'count': len(logs),
+    }), 200
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Bonus Estimate — Read-Only Preview
+# ══════════════════════════════════════════════════════════════════════════════
+
+@bonus_bp.route('/invoices/<int:invoice_id>/bonus-estimate', methods=['GET'])
+@require_auth
+@require_any_permission('bonus.calculate', 'bonus.approve', 'bonus_rule.view')
+def bonus_estimate_for_invoice(invoice_id):
+    """
+    GET /api/invoices/<invoice_id>/bonus-estimate
+
+    تقدير المكافأة المتوقعة لفاتورة بعينها — Read Only.
+    لا يُنشئ EmployeeBonus ولا قيوداً محاسبية ولا يُنفّذ أي commit.
+
+    منطق تحديد الموظف:
+      1. invoice.employee_id (الأساسي)
+      2. invoice.posted_by → AppUser.username → Employee (للتوافق الخلفي فقط)
+
+    الفترة = الشهر الكامل الذي تقع فيه invoice.date.
+    """
+    import calendar
+    from bonus_calculator import _formula_string
+
+    # 1. الفاتورة
+    invoice = Invoice.query.get(invoice_id)
+    if invoice is None:
+        return jsonify({'success': False, 'error': 'الفاتورة غير موجودة'}), 404
+
+    # 2. الموظف
+    employee = None
+    if invoice.employee_id:
+        employee = Employee.query.get(invoice.employee_id)
+
+    if employee is None and invoice.posted_by:
+        from models import AppUser
+        app_user = AppUser.query.filter_by(username=invoice.posted_by).first()
+        if app_user:
+            employee = app_user.employee
+
+    if employee is None:
+        return jsonify({
+            'success': False,
+            'error': 'لا يوجد موظف مرتبط بهذه الفاتورة',
+            'code': 'no_employee_linked',
+        }), 400
+
+    # 3. الفترة — الشهر الكامل لتاريخ الفاتورة
+    inv_date = invoice.date.date() if hasattr(invoice.date, 'date') else invoice.date
+    period_start = inv_date.replace(day=1)
+    period_end = inv_date.replace(day=calendar.monthrange(inv_date.year, inv_date.month)[1])
+
+    # 4. الاحتساب — لا يُنفَّذ أي commit
+    rules = BonusRule.query.filter_by(is_active=True).all()
+    estimates = []
+
+    for rule in rules:
+        if not rule.is_valid_for_employee(employee):
+            continue
+        if not BonusCalculator._is_rule_type_enabled(rule.rule_type):
+            continue
+
+        result = None
+        if rule.rule_type == 'sales_target':
+            result = BonusCalculator.calculate_sales_bonus(employee, rule, period_start, period_end)
+        elif rule.rule_type == 'profit_based':
+            result = BonusCalculator.calculate_profit_bonus(employee, rule, period_start, period_end)
+        elif rule.rule_type == 'fixed':
+            result = BonusCalculator.calculate_fixed_bonus(employee, rule, period_start, period_end)
+        elif rule.rule_type == 'points_based':
+            result = BonusCalculator.calculate_points_bonus(employee, rule, period_start, period_end)
+        elif rule.rule_type == 'attendance':
+            result = BonusCalculator.calculate_attendance_bonus(employee, rule, period_start, period_end)
+        elif rule.rule_type == 'performance':
+            result = BonusCalculator.calculate_performance_bonus(employee, rule, period_start, period_end)
+
+        if result is None:
+            continue
+
+        raw_amount, amount, calculation_data, min_applied, max_applied = result
+        formula = _formula_string(rule)
+
+        estimates.append({
+            'rule_id': rule.id,
+            'rule_name': rule.name,
+            'rule_type': rule.rule_type,
+            'estimated_bonus': round(amount, 4),
+            'formula': formula,
+            'calculation_detail': {
+                'inputs': calculation_data,
+                'calculation': {
+                    'rule_type': rule.rule_type,
+                    'formula': formula,
+                    'raw_amount': round(raw_amount, 4),
+                    'min_bonus_applied': min_applied,
+                    'max_bonus_applied': max_applied,
+                },
+                'result': {
+                    'final_bonus': round(amount, 4),
+                },
+            },
+        })
+
+    return jsonify({
+        'success': True,
+        'invoice_id': invoice_id,
+        'employee_id': employee.id,
+        'period': {
+            'start': period_start.isoformat(),
+            'end': period_end.isoformat(),
+        },
+        'estimates': estimates,
+        'note': 'هذا تقدير فقط، والاحتساب الرسمي يتم تلقائياً بواسطة Scheduler في نهاية الفترة.',
+    }), 200

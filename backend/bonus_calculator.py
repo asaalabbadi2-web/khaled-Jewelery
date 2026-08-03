@@ -20,11 +20,58 @@ from models import (
     BonusRule,
     Employee,
     EmployeeBonus,
-    GoalAchievement,
     Invoice,
     db,
     get_race_points_per_gram,
 )
+
+
+def _apply_limits(rule, raw_amount: float) -> tuple:
+    """يُطبّق min_bonus / max_bonus ويُعيد (final_amount, min_applied, max_applied)."""
+    amount = raw_amount
+    min_applied = False
+    max_applied = False
+    if rule.min_bonus is not None and rule.min_bonus > 0 and amount < rule.min_bonus:
+        amount = rule.min_bonus
+        min_applied = True
+    if rule.max_bonus is not None and rule.max_bonus > 0 and amount > rule.max_bonus:
+        amount = rule.max_bonus
+        max_applied = True
+    return amount, min_applied, max_applied
+
+
+def _resolve_points_source(rule) -> str:
+    """يُعيد مصدر النقاط الفعلي — gold عند NULL (التوافق الخلفي)."""
+    src = getattr(rule, 'points_source', None)
+    return src if src in ('gold', 'cash') else 'gold'
+
+
+def _formula_string(rule) -> str:
+    """صيغة قابلة للقراءة تُحفظ في calculation_snapshot.calculation.formula."""
+    v = rule.bonus_value
+    rt, bt = rule.rule_type, rule.bonus_type
+    if rt == 'points_based' and bt == 'points_per_unit':
+        src = _resolve_points_source(rule)
+        if src == 'cash':
+            return f'profit_cash ÷ cash_amount_per_point → employee_points × {v}'
+        return f'profit_gold_g × points_per_gram → employee_points × {v}'
+    templates = {
+        ('sales_target',  'percentage'):        f'salary × {v}%',
+        ('sales_target',  'fixed'):             f'ثابت: {v}',
+        ('sales_target',  'sales_percentage'):  f'total_sales × {v}%',
+        ('attendance',    'percentage'):        f'salary × {v}%',
+        ('attendance',    'fixed'):             f'ثابت: {v}',
+        ('performance',   'percentage'):        f'salary × {v}%',
+        ('performance',   'fixed'):             f'ثابت: {v}',
+        ('fixed',         'percentage'):        f'salary × {v}%',
+        ('fixed',         'fixed'):             f'ثابت: {v}',
+        ('profit_based',  'percentage'):        f'salary × {v}%',
+        ('profit_based',  'fixed'):             f'ثابت: {v}',
+        ('profit_based',  'profit_percentage'): f'target_profit × {v}%',
+        ('points_based',  'fixed'):             f'ثابت: {v}',
+        ('points_based',  'percentage'):        f'salary × {v}%',
+    }
+    return templates.get((rt, bt), f'{bt} × {v}')
 
 
 class BonusCalculator:
@@ -66,18 +113,15 @@ class BonusCalculator:
         if total_sales < sales_target:
             return None
 
-        amount = 0.0
+        raw_amount = 0.0
         if rule.bonus_type == "percentage":
-            amount = employee.salary * (rule.bonus_value / 100)
+            raw_amount = employee.salary * (rule.bonus_value / 100)
         elif rule.bonus_type == "fixed":
-            amount = rule.bonus_value
+            raw_amount = rule.bonus_value
         elif rule.bonus_type == "sales_percentage":
-            amount = total_sales * (rule.bonus_value / 100)
+            raw_amount = total_sales * (rule.bonus_value / 100)
 
-        if rule.min_bonus is not None and rule.min_bonus > 0:
-            amount = max(amount, rule.min_bonus)
-        if rule.max_bonus is not None and rule.max_bonus > 0:
-            amount = min(amount, rule.max_bonus)
+        amount, min_applied, max_applied = _apply_limits(rule, raw_amount)
 
         calculation_data = {
             "sales_amount": total_sales,
@@ -85,7 +129,7 @@ class BonusCalculator:
             "achievement_percentage": (total_sales / sales_target * 100) if sales_target > 0 else 0,
             "base_salary": employee.salary,
         }
-        return amount, calculation_data
+        return raw_amount, amount, calculation_data, min_applied, max_applied
 
     @staticmethod
     def calculate_attendance_bonus(employee, rule, period_start, period_end):
@@ -96,23 +140,20 @@ class BonusCalculator:
         if actual_attendance < required_attendance:
             return None
 
-        amount = 0.0
+        raw_amount = 0.0
         if rule.bonus_type == "percentage":
-            amount = employee.salary * (rule.bonus_value / 100)
+            raw_amount = employee.salary * (rule.bonus_value / 100)
         elif rule.bonus_type == "fixed":
-            amount = rule.bonus_value
+            raw_amount = rule.bonus_value
 
-        if rule.min_bonus is not None and rule.min_bonus > 0:
-            amount = max(amount, rule.min_bonus)
-        if rule.max_bonus is not None and rule.max_bonus > 0:
-            amount = min(amount, rule.max_bonus)
+        amount, min_applied, max_applied = _apply_limits(rule, raw_amount)
 
         calculation_data = {
             "attendance_percentage": actual_attendance,
             "required_attendance": required_attendance,
             "base_salary": employee.salary,
         }
-        return amount, calculation_data
+        return raw_amount, amount, calculation_data, min_applied, max_applied
 
     @staticmethod
     def calculate_performance_bonus(employee, rule, period_start, period_end):
@@ -123,40 +164,34 @@ class BonusCalculator:
         if actual_rating < required_rating:
             return None
 
-        amount = 0.0
+        raw_amount = 0.0
         if rule.bonus_type == "percentage":
-            amount = employee.salary * (rule.bonus_value / 100)
+            raw_amount = employee.salary * (rule.bonus_value / 100)
         elif rule.bonus_type == "fixed":
-            amount = rule.bonus_value
+            raw_amount = rule.bonus_value
 
-        if rule.min_bonus is not None and rule.min_bonus > 0:
-            amount = max(amount, rule.min_bonus)
-        if rule.max_bonus is not None and rule.max_bonus > 0:
-            amount = min(amount, rule.max_bonus)
+        amount, min_applied, max_applied = _apply_limits(rule, raw_amount)
 
         calculation_data = {
             "performance_rating": actual_rating,
             "required_rating": required_rating,
             "base_salary": employee.salary,
         }
-        return amount, calculation_data
+        return raw_amount, amount, calculation_data, min_applied, max_applied
 
     @staticmethod
     def calculate_fixed_bonus(employee, rule, period_start, period_end):
         """حساب مكافأة ثابتة (fixed)."""
-        amount = 0.0
+        raw_amount = 0.0
         if rule.bonus_type == "percentage":
-            amount = employee.salary * (rule.bonus_value / 100)
+            raw_amount = employee.salary * (rule.bonus_value / 100)
         elif rule.bonus_type == "fixed":
-            amount = rule.bonus_value
+            raw_amount = rule.bonus_value
 
-        if rule.min_bonus is not None and rule.min_bonus > 0:
-            amount = max(amount, rule.min_bonus)
-        if rule.max_bonus is not None and rule.max_bonus > 0:
-            amount = min(amount, rule.max_bonus)
+        amount, min_applied, max_applied = _apply_limits(rule, raw_amount)
 
         calculation_data = {"bonus_type": "fixed", "base_salary": employee.salary}
-        return amount, calculation_data
+        return raw_amount, amount, calculation_data, min_applied, max_applied
 
     @staticmethod
     def calculate_profit_bonus(employee, rule, period_start, period_end):
@@ -259,18 +294,15 @@ class BonusCalculator:
         if target_profit <= 0 or target_profit < min_profit:
             return None
 
-        amount = 0.0
+        raw_amount = 0.0
         if rule.bonus_type == "percentage":
-            amount = employee.salary * (rule.bonus_value / 100)
+            raw_amount = employee.salary * (rule.bonus_value / 100)
         elif rule.bonus_type == "fixed":
-            amount = rule.bonus_value
+            raw_amount = rule.bonus_value
         elif rule.bonus_type == "profit_percentage":
-            amount = target_profit * (rule.bonus_value / 100)
+            raw_amount = target_profit * (rule.bonus_value / 100)
 
-        if rule.min_bonus is not None and rule.min_bonus > 0:
-            amount = max(amount, rule.min_bonus)
-        if rule.max_bonus is not None and rule.max_bonus > 0:
-            amount = min(amount, rule.max_bonus)
+        amount, min_applied, max_applied = _apply_limits(rule, raw_amount)
 
         calculation_data = {
             "total_profit_cash": total_profit_cash,
@@ -285,20 +317,17 @@ class BonusCalculator:
             "invoice_ids": invoice_ids,
             "per_invoice_profit": per_invoice_profit,
         }
-        return amount, calculation_data
+        return raw_amount, amount, calculation_data, min_applied, max_applied
 
     @staticmethod
     def calculate_points_bonus(employee, rule, period_start, period_end):
-        """حساب مكافأة النقاط (points_based) — تعتمد على نقاط سباق المبيعات."""
+        """حساب مكافأة النقاط (points_based) — gold: profit_gold × points_per_gram / cash: profit_cash ÷ cash_amount_per_point."""
         from datetime import date as _date
         conditions = rule.conditions or {}
         points_period = conditions.get("points_period", "month")
         min_points = float(conditions.get("min_points", 0))
+        points_source = _resolve_points_source(rule)
 
-        # استخدام الفترة الممررة مباشرة — هي الصحيحة دائماً:
-        # - عند استدعاء المجدول الشهري: period_start/end = الشهر المنتهي
-        # - عند استدعاء اليومي/الأسبوعي: period_start/end = الفترة المنتهية
-        # - عند الاستدعاء اليدوي: period_start/end = ما اختاره المستخدم
         if isinstance(period_start, _date) and not isinstance(period_start, datetime):
             start_dt = datetime.combine(period_start, datetime.min.time())
         else:
@@ -309,16 +338,8 @@ class BonusCalculator:
         else:
             end_dt = period_end
 
-        # جلب معدل النقاط للجرام
-        try:
-            points_per_gram = get_race_points_per_gram()
-        except Exception:
-            points_per_gram = 10.0
-
-        # نفس منطق اللوحة: بيع + شراء من عميل، profit_gold فقط
         RACE_TYPES = {"بيع", "شراء من عميل"}
 
-        # ربط الموظف بالفواتير عبر employee_id أو user_account.username
         username = None
         if hasattr(employee, "user_account") and employee.user_account:
             username = employee.user_account.username
@@ -330,52 +351,91 @@ class BonusCalculator:
             Invoice.date <= end_dt,
         )
 
-        # ابحث بـ employee_id والـ posted_by معاً (OR) حتى لا تُفقد الفواتير التي
-        # تحمل أحدهما فقط — نفس منهجية لوحة المبيعات.
         if username:
             attr_filter = or_(Invoice.employee_id == employee.id, Invoice.posted_by == username)
         else:
             attr_filter = Invoice.employee_id == employee.id
         invoices = Invoice.query.filter(and_(invoice_filter, attr_filter)).all()
 
-        total_profit_gold = sum(float(inv.profit_gold or 0.0) for inv in invoices if float(inv.profit_gold or 0.0) > 0)
-        employee_points = int(round(total_profit_gold * points_per_gram))
+        if points_source == 'cash':
+            cash_amount_per_point = float(conditions.get('cash_amount_per_point', 1.0))
+            if cash_amount_per_point <= 0:
+                cash_amount_per_point = 1.0
+            total_profit_cash = sum(
+                float(inv.profit_cash or 0.0) for inv in invoices if float(inv.profit_cash or 0.0) > 0
+            )
+            employee_points = int(total_profit_cash / cash_amount_per_point)
+            source_inputs = {
+                "points_source": "cash",
+                "cash_amount_per_point": cash_amount_per_point,
+                "total_profit_cash": total_profit_cash,
+            }
+        else:
+            try:
+                points_per_gram = get_race_points_per_gram()
+            except Exception:
+                points_per_gram = 10.0
+            total_profit_gold = sum(
+                float(inv.profit_gold or 0.0) for inv in invoices if float(inv.profit_gold or 0.0) > 0
+            )
+            employee_points = int(round(total_profit_gold * points_per_gram))
+            source_inputs = {
+                "points_source": "gold",
+                "points_per_gram": points_per_gram,
+                "total_profit_gold_g": total_profit_gold,
+            }
 
         if employee_points < min_points:
             return None
 
-        amount = 0.0
+        raw_amount = 0.0
         if rule.bonus_type == "points_per_unit":
-            amount = employee_points * rule.bonus_value
+            raw_amount = employee_points * rule.bonus_value
         elif rule.bonus_type == "fixed":
-            amount = rule.bonus_value
+            raw_amount = rule.bonus_value
         elif rule.bonus_type == "percentage":
-            amount = employee.salary * (rule.bonus_value / 100)
+            raw_amount = employee.salary * (rule.bonus_value / 100)
 
-        if rule.min_bonus is not None and rule.min_bonus > 0:
-            amount = max(amount, rule.min_bonus)
-        if rule.max_bonus is not None and rule.max_bonus > 0:
-            amount = min(amount, rule.max_bonus)
+        amount, min_applied, max_applied = _apply_limits(rule, raw_amount)
 
         if amount <= 0:
             return None
 
         calculation_data = {
+            **source_inputs,
             "points_period": points_period,
-            "points_per_gram": points_per_gram,
-            "total_profit_gold_g": total_profit_gold,
             "employee_points": employee_points,
             "min_points": min_points,
             "bonus_type": rule.bonus_type,
             "invoice_count": len(invoices),
             "base_salary": employee.salary,
         }
-        return amount, calculation_data
+        return raw_amount, amount, calculation_data, min_applied, max_applied
+
+    @staticmethod
+    def _is_rule_type_enabled(rule_type: str) -> bool:
+        """يتحقق من Feature Flag للأنواع التي تعتمد على بيانات غير مكتملة."""
+        _flagged = {
+            'attendance':  'bonus_attendance_enabled',
+            'performance': 'bonus_performance_enabled',
+        }
+        if rule_type not in _flagged:
+            return True
+        try:
+            from core.settings import _get_settings_singleton
+            settings = _get_settings_singleton(create_if_missing=False)
+            return bool(settings and getattr(settings, _flagged[rule_type], False))
+        except Exception:
+            return False  # safe-deny عند أي خطأ في قراءة الإعدادات
 
     @staticmethod
     def calculate_bonus(employee, rule, period_start, period_end):
         """حساب المكافأة بناءً على نوع القاعدة."""
         if not rule.is_active or not rule.is_valid_for_employee(employee):
+            return None
+
+        # Feature Flag: تجاوز القواعد ذات الأنواع غير المُفعَّلة
+        if not BonusCalculator._is_rule_type_enabled(rule.rule_type):
             return None
 
         result = None
@@ -395,7 +455,22 @@ class BonusCalculator:
         if not result:
             return None
 
-        amount, calculation_data = result
+        raw_amount, amount, calculation_data, min_applied, max_applied = result
+
+        calculation_snapshot = {
+            "inputs": calculation_data,
+            "calculation": {
+                "rule_type": rule.rule_type,
+                "formula": _formula_string(rule),
+                "raw_amount": round(raw_amount, 4),
+                "min_bonus_applied": min_applied,
+                "max_bonus_applied": max_applied,
+            },
+            "result": {
+                "final_bonus": round(amount, 4),
+            },
+        }
+
         bonus = EmployeeBonus(
             employee_id=employee.id,
             bonus_rule_id=rule.id,
@@ -404,13 +479,24 @@ class BonusCalculator:
             period_start=period_start,
             period_end=period_end,
             calculation_data=calculation_data,
+            rule_snapshot=rule.to_snapshot(),
+            calculation_snapshot=calculation_snapshot,
             status="pending",
             created_at=datetime.now(),
         )
         return bonus
 
     @staticmethod
-    def calculate_all_bonuses_for_period(period_start, period_end, employee_ids=None, rule_ids=None, auto_approve=False, refresh_results=True, goal_period_filter=None):
+    def calculate_all_bonuses_for_period(period_start, period_end, employee_ids=None, rule_ids=None, refresh_results=True, goal_period_filter=None):
+        """
+        الاحتساب التلقائي للمكافآت — Scheduler هو المصدر الوحيد لاستدعاء هذه الدالة.
+
+        قواعد الحماية الصارمة:
+          • مكافأة معتمدة (approved) أو مدفوعة (paid) → غير قابلة للإعادة. لا تُمس.
+          • مكافأة مرفوضة (rejected) → قرار إداري معتمد. لا تُعاد.
+          • مكافأة معلقة (pending) → يُعاد احتسابها (تحديث للمبلغ).
+          • جميع المكافآت الجديدة تُنشأ بحالة pending دائماً.
+        """
         bonuses = []
         processed_bonus_ids = []
 
@@ -457,28 +543,25 @@ class BonusCalculator:
                     period_end=period_end,
                 ).all()
 
-                # إذا وجد مكافأة معتمدة/مدفوعة مسبقاً لنفس الفترة، لا نعدلها
-                # فقط نُعيدها في النتيجة
-                immutable_existing = next((b for b in existing_bonuses if b.status in ("approved", "paid")), None)
-                if immutable_existing and not auto_approve:
+                # حماية غير قابلة للكسر: approved/paid لا تُعاد أبداً
+                if any(b.status in ('approved', 'paid') for b in existing_bonuses):
                     for b in existing_bonuses:
                         processed_bonus_ids.append(b.id)
                         bonuses.append(b)
                     continue
 
-                # السلوك الافتراضي السابق: إذا يوجد مكافأة مرفوضة، لا تغيّرها
-                if existing_bonuses and not auto_approve and any(b.status == "rejected" for b in existing_bonuses):
+                # قرار إداري: rejected لا تُعاد (تتطلب reversal ثم دورة جديدة)
+                if existing_bonuses and any(b.status == 'rejected' for b in existing_bonuses):
                     for b in existing_bonuses:
                         processed_bonus_ids.append(b.id)
                         bonuses.append(b)
                     continue
 
-                # إذا كانت هناك مكافآت معلقة متعددة، نحذف القديمة ونحتفظ بواحدة فقط
+                # pending متعددة: نحذف القديمة ونحتفظ بالأحدث
                 if len(existing_bonuses) > 1:
-                    # نحذف جميع المكافآت المعلقة ما عدا الأحدث
                     existing_bonuses.sort(key=lambda x: x.id, reverse=True)
                     for old_bonus in existing_bonuses[1:]:
-                        if old_bonus.status == "pending":
+                        if old_bonus.status == 'pending':
                             db.session.delete(old_bonus)
 
                 existing = existing_bonuses[0] if existing_bonuses else None
@@ -486,34 +569,31 @@ class BonusCalculator:
                 if not bonus:
                     continue
 
-                target_status = "approved" if auto_approve else "pending"
-
                 if existing:
+                    # تحديث المكافأة المعلقة بالنتيجة الجديدة
                     existing.amount = bonus.amount
                     existing.calculation_data = bonus.calculation_data
-                    existing.status = target_status
-                    if auto_approve:
-                        existing.approved_by = "system"
-                        existing.approved_at = datetime.now()
+                    existing.status = 'pending'
 
-                    invoice_ids = bonus.calculation_data.get("invoice_ids") if bonus.calculation_data else None
+                    # rule_snapshot و calculation_snapshot: write-once
+                    if existing.rule_snapshot is None:
+                        existing.rule_snapshot = bonus.rule_snapshot
+                    if existing.calculation_snapshot is None:
+                        existing.calculation_snapshot = bonus.calculation_snapshot
+
+                    invoice_ids = bonus.calculation_data.get('invoice_ids') if bonus.calculation_data else None
                     if invoice_ids is not None:
                         _sync_invoice_links(existing, invoice_ids)
 
                     processed_bonus_ids.append(existing.id)
                     bonuses.append(existing)
                 else:
-                    if auto_approve:
-                        bonus.approve("system")
                     db.session.add(bonus)
                     db.session.flush()
 
-                    invoice_ids = bonus.calculation_data.get("invoice_ids") if bonus.calculation_data else None
+                    invoice_ids = bonus.calculation_data.get('invoice_ids') if bonus.calculation_data else None
                     if invoice_ids is not None:
                         _sync_invoice_links(bonus, invoice_ids)
-
-                    if auto_approve:
-                        _auto_create_achievement(bonus, employee, rule)
 
                     processed_bonus_ids.append(bonus.id)
                     bonuses.append(bonus)
@@ -621,53 +701,6 @@ class BonusCalculator:
 # ──────────────────────────────────────────────────────────────────────────────
 # Private helpers
 # ──────────────────────────────────────────────────────────────────────────────
-
-def _auto_create_achievement(bonus: EmployeeBonus, employee: Employee, rule: BonusRule):
-    """
-    ينشئ GoalAchievement تلقائياً عند اعتماد مكافأة بدون انتظار موافقة يدوية.
-    لا يُنشئ إنجازاً مكرراً لنفس المكافأة.
-    يُستدعى من calculate_all_bonuses_for_period عندما auto_approve=True.
-    """
-    try:
-        if GoalAchievement.query.filter_by(bonus_id=bonus.id).first():
-            return  # مكرر
-
-        calc = bonus.calculation_data or {}
-
-        # ── بناء الـ metrics من calculation_data ──
-        _METRIC_KEYS = {
-            'points': 'points',
-            'invoice_count': 'invoices',
-            'invoices': 'invoices',
-            'rank': 'rank',
-            'sales_amount': 'sales',
-            'total_profit_cash': 'amount',
-            'achievement_percentage': 'percentage',
-        }
-        metrics = {}
-        for src_key, display_key in _METRIC_KEYS.items():
-            val = calc.get(src_key)
-            if val is not None and display_key not in metrics:
-                metrics[display_key] = round(float(val), 2) if isinstance(val, float) else val
-
-        goal_name = rule.name if rule else _bonus_type_label(bonus.bonus_type)
-        goal_description = rule.description if rule else None
-
-        achievement = GoalAchievement(
-            employee_id=bonus.employee_id,
-            bonus_rule_id=bonus.bonus_rule_id,
-            bonus_id=bonus.id,
-            goal_name=goal_name,
-            goal_description=goal_description,
-            bonus_amount=bonus.amount,
-            metrics=metrics,
-            achieved_at=bonus.approved_at or datetime.now(),
-        )
-        db.session.add(achievement)
-    except Exception:
-        import traceback
-        traceback.print_exc()  # non-fatal
-
 
 def _bonus_type_label(bonus_type: str) -> str:
     return {

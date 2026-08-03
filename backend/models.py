@@ -2242,6 +2242,11 @@ class Settings(db.Model):
     bonus_expense_account_number = db.Column(db.String(20), nullable=True)
     bonus_payable_account_number = db.Column(db.String(20), nullable=True)
 
+    # Feature Flags — أنواع مكافآت تعتمد على مصادر بيانات لم تُكتمل بعد
+    # default=False: يمنع إنشاء قواعد تُنتج نتائج وهمية في الإنتاج
+    bonus_attendance_enabled  = db.Column(db.Boolean, nullable=False, default=False)
+    bonus_performance_enabled = db.Column(db.Boolean, nullable=False, default=False)
+
     # إعدادات الضريبة
     tax_rate = db.Column(db.Float, default=0.15)  # 15%
     tax_enabled = db.Column(db.Boolean, default=True)
@@ -2502,6 +2507,10 @@ class Settings(db.Model):
             'idle_timeout_enabled': bool(getattr(self, 'idle_timeout_enabled', True)),
             'idle_timeout_minutes': int(getattr(self, 'idle_timeout_minutes', 30) or 30),
             'allow_partial_invoice_payments': bool(self.allow_partial_invoice_payments),
+
+            # Feature Toggles — أنواع مكافآت (attendance/performance غير مفعّلَين افتراضياً)
+            'bonus_attendance_enabled':  bool(getattr(self, 'bonus_attendance_enabled', False)),
+            'bonus_performance_enabled': bool(getattr(self, 'bonus_performance_enabled', False)),
 
             # 🆕 Feature Toggles (مسار خزائن الموظفين)
             'employee_cash_safes_enabled': bool(getattr(self, 'employee_cash_safes_enabled', False)),
@@ -4395,6 +4404,9 @@ class Permission(db.Model):
 
 class BonusRule(db.Model):
     __tablename__ = 'bonus_rule'
+    __table_args__ = (
+        db.CheckConstraint("points_source IN ('gold', 'cash')", name='ck_bonus_rule_points_source'),
+    )
 
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(200), nullable=False)
@@ -4409,6 +4421,8 @@ class BonusRule(db.Model):
     target_positions = db.Column(db.JSON)
     target_employee_ids = db.Column(db.JSON)
     applicable_invoice_types = db.Column(db.JSON)
+    # NULL = مسار gold (التوافق الخلفي) — 'gold' أو 'cash' عند points_based فقط
+    points_source = db.Column(db.String(10), nullable=True)
     is_active = db.Column(db.Boolean, default=True)
     valid_from = db.Column(db.Date)
     valid_to = db.Column(db.Date)
@@ -4451,11 +4465,29 @@ class BonusRule(db.Model):
             'target_positions': self.target_positions,
             'target_employee_ids': self.target_employee_ids,
             'applicable_invoice_types': self.applicable_invoice_types,
+            'points_source': self.points_source,
             'is_active': self.is_active,
             'valid_from': self.valid_from.isoformat() if self.valid_from else None,
             'valid_to': self.valid_to.isoformat() if self.valid_to else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'created_by': self.created_by,
+        }
+
+    def to_snapshot(self) -> dict:
+        """نسخة ثابتة للتدقيق — مستقلة عن to_dict() الذي قد يتغير لأسباب API."""
+        return {
+            'id': self.id,
+            'name': self.name,
+            'rule_type': self.rule_type,
+            'bonus_type': self.bonus_type,
+            'bonus_value': self.bonus_value,
+            'min_bonus': self.min_bonus,
+            'max_bonus': self.max_bonus,
+            'conditions': self.conditions,
+            'applicable_invoice_types': self.applicable_invoice_types,
+            'points_source': self.points_source,
+            'valid_from': self.valid_from.isoformat() if self.valid_from else None,
+            'valid_to': self.valid_to.isoformat() if self.valid_to else None,
         }
 
 
@@ -4467,7 +4499,7 @@ class EmployeeBonus(db.Model):
     bonus_rule_id = db.Column(db.Integer, db.ForeignKey('bonus_rule.id'), nullable=True)
     bonus_type = db.Column(db.String(50), nullable=False)
     amount = db.Column(db.Float, nullable=False, default=0.0)
-    status = db.Column(db.String(20), default='pending')  # pending, approved, rejected, paid
+    status = db.Column(db.String(20), default='pending')  # pending, approved, rejected, paid, reversed
     period_start = db.Column(db.Date)
     period_end = db.Column(db.Date)
     calculation_data = db.Column(db.JSON)
@@ -4480,6 +4512,13 @@ class EmployeeBonus(db.Model):
     rejected_by  = db.Column(db.String(100))
     paid_at      = db.Column(db.DateTime)
     paid_by      = db.Column(db.String(100))
+    reversed_at  = db.Column(db.DateTime)
+    reversed_by  = db.Column(db.String(100))
+    reversal_reason = db.Column(db.Text)
+
+    # ── Snapshots (write-once عند الإنشاء — لا يُعاد كتابتهما أبداً) ──────
+    rule_snapshot        = db.Column(db.JSON)  # نسخة BonusRule.to_snapshot() لحظة الحساب
+    calculation_snapshot = db.Column(db.JSON)  # {inputs, calculation, result}
 
     # ربط مع الخزينة عند الدفع
     office_id = db.Column(db.Integer, db.ForeignKey('office.id'), nullable=True)
@@ -4489,14 +4528,17 @@ class EmployeeBonus(db.Model):
     office   = db.relationship('Office', backref=db.backref('bonus_payments', lazy=True))
 
     # ─── State Machine ────────────────────────────────────────────────────
-    # الانتقالات المسموحة فقط:  pending → approved | rejected
-    #                            approved → paid
-    #                            rejected, paid → لا شيء (حالات نهائية)
+    # الانتقالات المسموحة فقط:  pending  → approved | rejected
+    #                            approved → paid | reversed
+    #                            paid, rejected, reversed → لا شيء (حالات نهائية)
+    # ملاحظة: paid → reversed ممنوع بقرار السياسة (422 في طبقة الخدمة)؛
+    #          state machine لا يُدرجه لأن القرار المحاسبي لم يُحسم بعد.
     _VALID_TRANSITIONS: dict = {
         'pending':  {'approved', 'rejected'},
-        'approved': {'paid'},
+        'approved': {'paid', 'reversed'},
         'rejected': set(),
         'paid':     set(),
+        'reversed': set(),
     }
 
     def _transition(self, new_status: str) -> None:
@@ -4529,6 +4571,14 @@ class EmployeeBonus(db.Model):
         if reference:
             self.payment_reference = reference
 
+    def reverse(self, reversed_by: str = 'system', reason: str = None) -> None:
+        """يُعكس مكافأة معتمدة فقط. المكافآت المدفوعة تُرفض من طبقة الخدمة."""
+        self._transition('reversed')
+        self.reversed_by = reversed_by
+        self.reversed_at = datetime.now()
+        if reason:
+            self.reversal_reason = reason
+
     def to_dict(self, include_employee=False, include_rule=False):
         result = {
             'id': self.id,
@@ -4549,6 +4599,11 @@ class EmployeeBonus(db.Model):
             'rejected_by':  self.rejected_by,
             'paid_at':      self.paid_at.isoformat()      if self.paid_at      else None,
             'paid_by':      self.paid_by,
+            'reversed_at':  self.reversed_at.isoformat()  if self.reversed_at  else None,
+            'reversed_by':  self.reversed_by,
+            'reversal_reason': self.reversal_reason,
+            'rule_snapshot':         self.rule_snapshot,
+            'calculation_snapshot':  self.calculation_snapshot,
             'office_id':    self.office_id,
             'office_name':  self.office.name if self.office else None,
         }
@@ -4633,6 +4688,91 @@ class GoalAchievement(db.Model):
             'seen_by_user': bool(self.seen_by_user),
             'seen_at': self.seen_at.isoformat() if self.seen_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class BonusClawbackCandidate(db.Model):
+    """سجل إخباري: فاتورة مرتجع بيع رُحِّلت وقد تستوجب عكس مكافأة مرتبطة.
+
+    لا يُنشئ قيوداً محاسبية. القرار المالي يبقى يدوياً عبر
+    POST /bonuses/{id}/reverse. الـ Posting Pipeline يكتب هنا فقط.
+    """
+
+    __tablename__ = 'bonus_clawback_candidate'
+    __table_args__ = (
+        # يمنع إنشاء مرشح مكرر لنفس (مكافأة × مرتجع) عند الإعادة أو التزامن
+        db.UniqueConstraint('bonus_id', 'return_invoice_id',
+                            name='uq_clawback_bonus_return_invoice'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    bonus_id = db.Column(db.Integer,
+                         db.ForeignKey('employee_bonus.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    return_invoice_id = db.Column(db.Integer,
+                                  db.ForeignKey('invoice.id', ondelete='SET NULL'),
+                                  nullable=True, index=True)
+    original_invoice_id = db.Column(db.Integer,
+                                    db.ForeignKey('invoice.id', ondelete='SET NULL'),
+                                    nullable=True)
+    reason = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(20), nullable=False, default='open')  # open | dismissed | actioned
+    dismissed_by = db.Column(db.String(100), nullable=True)
+    dismissed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=db.func.now(), nullable=False)
+
+    bonus = db.relationship('EmployeeBonus',
+                            backref=db.backref('clawback_candidates', lazy=True))
+
+    def dismiss(self, dismissed_by: str) -> None:
+        if self.status != 'open':
+            raise ValueError(f'لا يمكن رفض مرشح بحالة "{self.status}"')
+        self.status = 'dismissed'
+        self.dismissed_by = dismissed_by
+        self.dismissed_at = datetime.now()
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'bonus_id': self.bonus_id,
+            'return_invoice_id': self.return_invoice_id,
+            'original_invoice_id': self.original_invoice_id,
+            'reason': self.reason,
+            'status': self.status,
+            'dismissed_by': self.dismissed_by,
+            'dismissed_at': self.dismissed_at.isoformat() if self.dismissed_at else None,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class BonusCalculationLog(db.Model):
+    """سجل كل تشغيلة للمجدول — يُعرض في الواجهة كإشعار داخلي بعد الاحتساب التلقائي."""
+
+    __tablename__ = 'bonus_calculation_log'
+
+    id = db.Column(db.Integer, primary_key=True)
+    run_at = db.Column(db.DateTime, nullable=False, default=datetime.now)
+    # daily | weekly | monthly | manual
+    period_type = db.Column(db.String(20), nullable=False)
+    period_start = db.Column(db.Date, nullable=False)
+    period_end = db.Column(db.Date, nullable=False)
+    bonus_count = db.Column(db.Integer, nullable=False, default=0)
+    total_amount = db.Column(db.Float, nullable=False, default=0.0)
+    # success | failed
+    status = db.Column(db.String(20), nullable=False, default='success')
+    message = db.Column(db.Text, nullable=True)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'run_at': self.run_at.isoformat() if self.run_at else None,
+            'period_type': self.period_type,
+            'period_start': self.period_start.isoformat() if self.period_start else None,
+            'period_end': self.period_end.isoformat() if self.period_end else None,
+            'bonus_count': self.bonus_count,
+            'total_amount': self.total_amount,
+            'status': self.status,
+            'message': self.message,
         }
 
 

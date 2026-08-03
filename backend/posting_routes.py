@@ -2132,7 +2132,42 @@ def post_invoice(invoice_id):
                 _je2.posted_by = posted_by
 
         db.session.commit()
-        
+
+        # 📋 Clawback candidates — مرتجع بيع قد يستوجب عكس مكافأة (إخباري فقط)
+        # لا يُنشئ قيوداً محاسبية. القرار المالي يبقى يدوياً.
+        # الفشل لا يُوقف الترحيل — المستطيل مستقل تماماً.
+        if getattr(invoice, 'invoice_type', None) == 'مرتجع بيع':
+            try:
+                from models import BonusClawbackCandidate, BonusInvoiceLink
+                original_invoice_id = getattr(invoice, 'original_invoice_id', None)
+                if original_invoice_id:
+                    bonus_links = (
+                        BonusInvoiceLink.query
+                        .filter_by(invoice_id=original_invoice_id)
+                        .all()
+                    )
+                    for link in bonus_links:
+                        already = BonusClawbackCandidate.query.filter_by(
+                            bonus_id=link.bonus_id,
+                            return_invoice_id=invoice_id,
+                        ).first()
+                        if not already:
+                            db.session.add(BonusClawbackCandidate(
+                                bonus_id=link.bonus_id,
+                                return_invoice_id=invoice_id,
+                                original_invoice_id=original_invoice_id,
+                                reason=(
+                                    f'ترحيل مرتجع بيع #{invoice_id} مرتبط '
+                                    f'بفاتورة #{original_invoice_id} المرتبطة بالمكافأة #{link.bonus_id}'
+                                ),
+                                status='open',
+                            ))
+                    if bonus_links:
+                        db.session.commit()
+            except Exception as _claw_err:
+                db.session.rollback()
+                print(f'[post_invoice] ⚠️ فشل تسجيل clawback candidates: {_claw_err}')
+
         # 📋 تسجيل في Audit Log
         try:
             details = json.dumps({
