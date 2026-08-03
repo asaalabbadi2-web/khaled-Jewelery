@@ -36,18 +36,11 @@ def _configured_main_karat_f() -> float:
 
 def get_race_points_per_gram() -> float:
     """Return points_per_gram from سباق الأداء settings (dynamic, not hardcoded)."""
-    import json as _json
     try:
-        settings = Settings.query.first()  # type: ignore[name-defined]
-        if settings:
-            raw = getattr(settings, 'sales_race_settings', None)
-            if raw:
-                cfg = _json.loads(raw)
-                if isinstance(cfg, dict) and 'points_per_gram' in cfg:
-                    return max(0.0, float(cfg['points_per_gram']))
+        cfg = get_race_points_config()
+        return max(0.0, float(cfg['points_per_gram']))
     except Exception:
-        pass
-    return 10.0
+        return 10.0
 
 
 def get_race_points_config() -> dict:
@@ -58,6 +51,7 @@ def get_race_points_config() -> dict:
     points_per_gram, point_rules.
     """
     import json as _json
+    import sys as _sys
     cfg: dict = {
         'points_source':         'gold_weight',
         'cash_amount_per_point': 100.0,
@@ -65,18 +59,22 @@ def get_race_points_config() -> dict:
         'point_rules':           None,
     }
     try:
-        settings = Settings.query.first()  # type: ignore[name-defined]
+        # Use the same canonical row picker as the settings API
+        # (lazy import to avoid circular dependency at module load time)
+        from core.settings import _get_settings_singleton as _gss
+        settings = _gss(create_if_missing=False)
         if settings:
             raw = getattr(settings, 'sales_race_settings', None)
             if raw:
-                decoded = _json.loads(raw)
+                # handle both db.Text (str) and already-decoded dict
+                decoded = _json.loads(raw) if isinstance(raw, str) else raw
                 if isinstance(decoded, dict):
                     for k in ('points_source', 'cash_amount_per_point',
                               'points_per_gram', 'point_rules'):
                         if k in decoded and decoded[k] is not None:
                             cfg[k] = decoded[k]
-    except Exception:
-        pass
+    except Exception as _e:
+        print(f"[get_race_points_config] ERROR reading settings: {_e}", file=_sys.stderr)
     return cfg
 
 
