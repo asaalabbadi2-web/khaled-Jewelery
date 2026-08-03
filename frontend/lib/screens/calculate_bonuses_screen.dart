@@ -137,7 +137,7 @@ class _AutoCalculateContent extends StatefulWidget {
 }
 
 class _AutoCalculateContentState extends State<_AutoCalculateContent> {
-  DateTime _periodStart = DateTime.now().subtract(const Duration(days: 30));
+  DateTime _periodStart = DateTime(DateTime.now().year, DateTime.now().month, 1);
   DateTime _periodEnd = DateTime.now();
   List<Map<String, dynamic>>? _results;
   bool _loading = false;
