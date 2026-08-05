@@ -7006,17 +7006,18 @@ class ApiService {
     );
     if (response.statusCode != 200) {
       final bodyText = utf8.decode(response.bodyBytes);
+      String? cleanMessage;
       try {
         final decoded = json.decode(bodyText);
         if (decoded is Map) {
-          final message = decoded['message'] ?? decoded['error'];
-          if (message != null) throw Exception(message.toString());
+          final msg = decoded['message'] ?? decoded['error'];
+          if (msg != null) cleanMessage = msg.toString();
         }
       } catch (_) {
-        // ignore JSON parsing errors and fall back to raw text
+        // ignore JSON parsing errors
       }
       throw Exception(
-        bodyText.isNotEmpty ? bodyText : 'فشل في الموافقة على المكافأة',
+        cleanMessage ?? (bodyText.isNotEmpty ? bodyText : 'فشل في الموافقة على المكافأة'),
       );
     }
   }
@@ -7029,16 +7030,19 @@ class ApiService {
     );
     if (response.statusCode != 200) {
       final bodyText = utf8.decode(response.bodyBytes);
+      String? cleanMessage;
       try {
         final decoded = json.decode(bodyText);
         if (decoded is Map) {
-          final message = decoded['message'] ?? decoded['error'];
-          if (message != null) throw Exception(message.toString());
+          final msg = decoded['message'] ?? decoded['error'];
+          if (msg != null) cleanMessage = msg.toString();
         }
       } catch (_) {
-        // ignore JSON parsing errors and fall back to raw text
+        // ignore JSON parsing errors
       }
-      throw Exception(bodyText.isNotEmpty ? bodyText : 'فشل في رفض المكافأة');
+      throw Exception(
+        cleanMessage ?? (bodyText.isNotEmpty ? bodyText : 'فشل في رفض المكافأة'),
+      );
     }
   }
 
@@ -7054,21 +7058,24 @@ class ApiService {
       body: json.encode({
         'safe_box_id': safeBoxId,
         'payment_method': paymentMethod,
-        'created_by': 'admin', // You may want to use actual username from auth
+        'created_by': 'admin',
       }),
     );
     if (response.statusCode != 200) {
       final bodyText = utf8.decode(response.bodyBytes);
+      String? cleanMessage;
       try {
         final decoded = json.decode(bodyText);
         if (decoded is Map) {
-          final message = decoded['message'] ?? decoded['error'];
-          if (message != null) throw Exception(message.toString());
+          final msg = decoded['message'] ?? decoded['error'];
+          if (msg != null) cleanMessage = msg.toString();
         }
       } catch (_) {
-        // ignore JSON parsing errors and fall back to raw text
+        // ignore JSON parsing errors
       }
-      throw Exception(bodyText.isNotEmpty ? bodyText : 'فشل في صرف المكافأة');
+      throw Exception(
+        cleanMessage ?? (bodyText.isNotEmpty ? bodyText : 'فشل في صرف المكافأة'),
+      );
     }
   }
 

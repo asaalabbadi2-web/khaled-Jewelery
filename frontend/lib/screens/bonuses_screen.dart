@@ -200,10 +200,7 @@ class _BonusesScreenState extends State<BonusesScreen>
       final all = await widget.api.getSafeBoxes(
           isActive: true, includeBalance: true, includeAccount: false);
       safeBoxes = all
-          .where((s) =>
-              s.safeType == 'cash' ||
-              s.safeType == 'bank' ||
-              s.safeType == 'clearing')
+          .where((s) => s.safeType == 'cash' || s.safeType == 'bank')
           .toList();
     } catch (e) {
       _snack('${isAr ? 'فشل تحميل الخزائن' : 'Failed to load safes'}: $e',

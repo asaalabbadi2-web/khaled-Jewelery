@@ -21,6 +21,7 @@ from datetime import datetime, date, timedelta
 from auth_decorators import require_auth, require_permission, require_any_permission
 from sqlalchemy import or_, func
 from sqlalchemy.exc import IntegrityError
+from werkzeug.exceptions import HTTPException
 from services.live_balances import live_balances_by_account_ids
 
 bonus_bp = Blueprint('bonuses', __name__)
@@ -232,7 +233,9 @@ def get_employee(employee_id):
             'success': True,
             'employee': employee.to_dict(include_bonuses=include_bonuses)
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         return jsonify({
             'success': False,
@@ -279,7 +282,9 @@ def update_employee(employee_id):
             'message': 'تم تحديث بيانات الموظف بنجاح',
             'employee': employee.to_dict()
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({
@@ -334,7 +339,9 @@ def get_bonus_rule(rule_id):
             'success': True,
             'rule': rule.to_dict()
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         return jsonify({
             'success': False,
@@ -513,7 +520,9 @@ def update_bonus_rule(rule_id):
             'message': 'تم تحديث قاعدة المكافأة بنجاح',
             'rule': rule.to_dict()
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({
@@ -537,7 +546,9 @@ def delete_bonus_rule(rule_id):
             'success': True,
             'message': 'تم حذف قاعدة المكافأة بنجاح'
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({
@@ -689,7 +700,9 @@ def get_bonus(bonus_id):
             'success': True,
             'bonus': bonus.to_dict(include_employee=True, include_rule=True)
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         return jsonify({
             'success': False,
@@ -758,6 +771,8 @@ def update_bonus(bonus_id):
             'bonus': bonus.to_dict(include_employee=True, include_rule=True)
         }), 200
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({
@@ -1200,7 +1215,9 @@ def reject_bonus(bonus_id):
             'message': 'تم رفض المكافأة',
             'bonus': bonus.to_dict(include_employee=True, include_rule=True)
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({
@@ -1590,7 +1607,9 @@ def pay_bonus(bonus_id):
             },
             **({'safe_box': safe_box_payload} if safe_box is not None else {'office': office_payload})
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({
@@ -1776,7 +1795,9 @@ def assign_employee_to_invoice(invoice_id):
             'message': f'تم تعيين الموظف {employee.name} للفاتورة رقم {invoice_id}',
             'invoice': invoice.to_dict()
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({
@@ -2094,7 +2115,9 @@ def employee_bonus_summary(employee_id):
             },
             'bonuses': [b.to_dict(include_rule=True) for b in bonuses]
         }), 200
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         return jsonify({
             'success': False,
@@ -2240,6 +2263,8 @@ def update_employee_goals(employee_id):
         db.session.commit()
         return jsonify({'employee': employee.to_dict(include_details=True)}), 200
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
