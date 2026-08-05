@@ -20,6 +20,7 @@ from models import (
     JournalEntry,
     JournalEntryLine,
     Payroll,
+    SafeBox,
     Voucher,
     VoucherAccountLine,
 )
