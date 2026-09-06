@@ -482,7 +482,11 @@ def _expand_dual_account_lines(lines_data):
             for f in _CASH_FIELDS:
                 line[f] = 0
 
-        result.append(line)
+        # Keep the original line only if it still carries values after routing.
+        # A gold-only line on a cash account becomes fully empty after its weights
+        # are moved to the memo account — drop it to avoid phantom zero lines.
+        if any(line.get(f, 0) for f in _GOLD_FIELDS + _CASH_FIELDS):
+            result.append(line)
 
     return result + extra
 
