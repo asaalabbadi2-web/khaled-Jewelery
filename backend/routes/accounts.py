@@ -1110,6 +1110,15 @@ def add_account():
                     gold_parent_id = None
                     if parent_account is not None and parent_account.memo_account_id:
                         gold_parent_id = parent_account.memo_account_id
+                    elif parent_account is not None:
+                        # أب النقدي ليس له حساب ذهبي صريح — ابحث بالاتفاقية (7 + رقم الأب).
+                        _p_digits = ''.join(ch for ch in str(parent_account.account_number or '') if ch.isdigit())
+                        if _p_digits:
+                            _gold_parent_candidate = Account.query.filter_by(
+                                account_number=f'7{_p_digits}'
+                            ).first()
+                            if _gold_parent_candidate:
+                                gold_parent_id = _gold_parent_candidate.id
                     gold_account = Account(
                         account_number=parallel_number,
                         name=f'{name} وزني',

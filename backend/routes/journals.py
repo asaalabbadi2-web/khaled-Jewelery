@@ -413,6 +413,80 @@ def get_journal_entries():
         'available_entry_types': [{'name': name} for name in available_entry_types],
     })
 
+_GOLD_FIELDS = ('debit_18k', 'credit_18k', 'debit_21k', 'credit_21k',
+                'debit_22k', 'credit_22k', 'debit_24k', 'credit_24k')
+_CASH_FIELDS = ('cash_debit', 'cash_credit')
+
+
+def _expand_dual_account_lines(lines_data):
+    """Split mixed-value lines on dual-account pairs into type-pure lines.
+
+    For each cash account that carries gold values and has a memo_account_id pointing
+    to a gold account, this function:
+      - moves the gold values onto a new line for the memo (gold) account
+      - zeroes out the gold fields on the original cash-account line
+
+    The reverse (gold account carrying cash, with a memo cash account) is handled
+    symmetrically.  This implements the background auto-routing that keeps account
+    balances correct without requiring the user to know about parallel accounts.
+
+    Only runs if the target memo account is not already present in the JE —
+    if the user explicitly added both sides, we leave them untouched.
+    """
+    existing_ids = {line.get('account_id') for line in lines_data if line.get('account_id')}
+    result = []
+    extra = []
+
+    for line in lines_data:
+        acc_id = line.get('account_id')
+        if not acc_id:
+            result.append(line)
+            continue
+
+        acc = Account.query.get(acc_id)
+        if not acc or not acc.memo_account_id or acc.memo_account_id in existing_ids:
+            result.append(line)
+            continue
+
+        memo_acc = Account.query.get(acc.memo_account_id)
+        if not memo_acc:
+            result.append(line)
+            continue
+
+        acc_type = (acc.transaction_type or '').lower()
+        memo_type = (memo_acc.transaction_type or '').lower()
+        has_gold = any(line.get(f, 0) for f in _GOLD_FIELDS)
+        has_cash = any(line.get(f, 0) for f in _CASH_FIELDS)
+
+        if acc_type == 'cash' and memo_type == 'gold' and has_gold:
+            memo_line = {'account_id': acc.memo_account_id}
+            for f in _GOLD_FIELDS:
+                memo_line[f] = line.get(f, 0)
+            for f in _CASH_FIELDS:
+                memo_line[f] = 0
+            extra.append(memo_line)
+            existing_ids.add(acc.memo_account_id)
+            line = {**line}
+            for f in _GOLD_FIELDS:
+                line[f] = 0
+
+        elif acc_type == 'gold' and memo_type == 'cash' and has_cash:
+            memo_line = {'account_id': acc.memo_account_id}
+            for f in _CASH_FIELDS:
+                memo_line[f] = line.get(f, 0)
+            for f in _GOLD_FIELDS:
+                memo_line[f] = 0
+            extra.append(memo_line)
+            existing_ids.add(acc.memo_account_id)
+            line = {**line}
+            for f in _CASH_FIELDS:
+                line[f] = 0
+
+        result.append(line)
+
+    return result + extra
+
+
 @journals_bp.route('/journal_entries', methods=['POST'])
 @require_permission('journal.create')
 def add_journal_entry():
@@ -473,6 +547,9 @@ def add_journal_entry():
         ])
         if has_values and not line.get('account_id'):
             return jsonify({'error': 'Each line must have an associated account.'}), 400
+
+    # Auto-route: split mixed-value lines for dual-account pairs (cash↔gold).
+    lines_data = _expand_dual_account_lines(lines_data)
 
     if not requested_is_draft:
         if not lines_data or len(lines_data) < 2:
@@ -699,6 +776,9 @@ def update_journal_entry(id):
         ])
         if has_values and not line.get('account_id'):
             return jsonify({'error': 'Each line must have an associated account.'}), 400
+
+    # Auto-route: split mixed-value lines for dual-account pairs (cash↔gold).
+    incoming_lines = _expand_dual_account_lines(incoming_lines)
 
     if not target_is_draft:
         if not incoming_lines or len(incoming_lines) < 2:

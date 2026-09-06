@@ -900,6 +900,9 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
       if (account == null) continue;
       final type = (account['transaction_type'] ?? '').toString().toLowerCase();
       if (type == 'both') continue; // safe-box-linked, real custody — exempt
+      // Dual-account pair member (cash↔gold): backend auto-routes mismatched
+      // values to the correct parallel account — no user action needed.
+      if (account['memo_account_id'] != null) continue;
 
       final hasCash =
           (double.tryParse(line.cashDebitController.text) ?? 0.0) != 0.0 ||
@@ -938,12 +941,12 @@ class _AddEditJournalEntryScreenState extends State<AddEditJournalEntryScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('الرجوع والمراجعة'),
-          ),
-          TextButton(
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('نعم، متابعة'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('الرجوع والمراجعة'),
           ),
         ],
       ),

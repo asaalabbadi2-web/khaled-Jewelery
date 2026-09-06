@@ -80,22 +80,29 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
     _showAccountDialog(parentAccount: parentAccount);
   }
 
+  int _numericOrder(String n) {
+    final s = n.replaceAll(RegExp(r'[^0-9]'), '');
+    return s.isEmpty ? 0 : (int.tryParse(s) ?? 0);
+  }
+
   /// Flatten account tree into a list for filtering/search
   List<Map<String, dynamic>> _flattenAccountTree() {
     final result = <Map<String, dynamic>>[];
-    
+
     void addAccountAndChildren(Map<String, dynamic> account) {
       result.add(account);
       final children = _accounts.where((acc) => acc['parent_id'] == account['id']).toList();
-      children.sort((a, b) => (a['account_number'] as String).compareTo(b['account_number'] as String));
+      children.sort((a, b) => _numericOrder(a['account_number'] as String)
+          .compareTo(_numericOrder(b['account_number'] as String)));
       for (final child in children) {
         addAccountAndChildren(child);
       }
     }
-    
+
     // Get all root accounts
     final roots = _accounts.where((acc) => acc['parent_id'] == null).toList();
-    roots.sort((a, b) => (a['account_number'] as String).compareTo(b['account_number'] as String));
+    roots.sort((a, b) => _numericOrder(a['account_number'] as String)
+        .compareTo(_numericOrder(b['account_number'] as String)));
     
     for (final root in roots) {
       addAccountAndChildren(root);

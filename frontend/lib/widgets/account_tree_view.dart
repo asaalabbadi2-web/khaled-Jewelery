@@ -15,17 +15,21 @@ class AccountNode {
     : children = children ?? [];
 }
 
+int _accountNumberOrder(String n) {
+  final s = n.replaceAll(RegExp(r'[^0-9]'), '');
+  return s.isEmpty ? 0 : (int.tryParse(s) ?? 0);
+}
+
 // 2. buildAccountTree Function
 List<AccountNode> buildAccountTree(List<dynamic> accounts) {
   final nodes = <int, AccountNode>{};
   final roots = <AccountNode>[];
   final allNodeIds = accounts.map<int>((acc) => acc['id'] as int).toSet();
 
-  // Sort accounts by account_number to ensure correct child order
+  // Numeric sort so "2" < "11" < "100" instead of lexicographic "100" < "11" < "2".
   accounts.sort(
-    (a, b) => (a['account_number'] as String).compareTo(
-      b['account_number'] as String,
-    ),
+    (a, b) => _accountNumberOrder(a['account_number'] as String)
+        .compareTo(_accountNumberOrder(b['account_number'] as String)),
   );
 
   for (var acc in accounts) {
