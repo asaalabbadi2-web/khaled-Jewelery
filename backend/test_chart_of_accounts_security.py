@@ -303,7 +303,7 @@ class TestParallelAccountWarning:
             assert 'warning' not in body
 
     def test_create_parallel_creates_gold_account_and_links(self, admin_headers):
-        """create_parallel=True → creates 7xxx gold account and links both via link_accounts()."""
+        """create_parallel=True on a root account → gold account created at root (no parent)."""
         with app.test_client() as c:
             r = c.post(
                 '/api/accounts',
@@ -320,19 +320,60 @@ class TestParallelAccountWarning:
             assert body['tracks_weight'] is False
             assert body['transaction_type'] == 'cash'
             assert 'parallel_account' in body
-            parallel = body['parallel_account']
-            assert parallel['account_number'] == '79935'
-            assert parallel['transaction_type'] == 'gold'
+            assert body['parallel_account']['account_number'] == '79935'
+            assert body['parallel_account']['transaction_type'] == 'gold'
 
         with app.app_context():
             cash_acc = Account.query.filter_by(account_number='9935').first()
             gold_acc = Account.query.filter_by(account_number='79935').first()
-            assert cash_acc is not None
-            assert gold_acc is not None
-            assert cash_acc.memo_account_id == gold_acc.id, 'cash→gold link must be bidirectional'
-            assert gold_acc.memo_account_id == cash_acc.id, 'gold→cash link must be bidirectional'
+            assert cash_acc.memo_account_id == gold_acc.id
+            assert gold_acc.memo_account_id == cash_acc.id
             assert gold_acc.tracks_weight is True
-            assert gold_acc.transaction_type == 'gold'
+            assert gold_acc.parent_id is None  # root cash → root gold
+
+    def test_create_parallel_inherits_gold_parent(self, admin_headers):
+        """Gold parallel of a child account must be nested under the parent's gold parallel.
+
+        Convention: 3-digit parent → 4-digit children (account_number_generator rule).
+        Tree: cash_parent(993) + gold_parent(7993) as linked pair.
+              cash_child(9930) added with create_parallel=True.
+              → gold_child(79930) must have parent_id = gold_parent.id
+        """
+        from account_pair_service import link_accounts
+        with app.app_context():
+            # Use 556/7556 range — isolated from all other test account numbers
+            cash_parent = Account(account_number='556', name='أب نقدي', type='Liability',
+                                  transaction_type='cash', tracks_weight=False)
+            gold_parent = Account(account_number='7556', name='أب ذهبي', type='Liability',
+                                  transaction_type='gold', tracks_weight=True)
+            db.session.add_all([cash_parent, gold_parent])
+            db.session.flush()
+            link_accounts(cash_parent, gold_parent, created_by='test')
+            db.session.commit()
+            cash_parent_id = cash_parent.id
+            gold_parent_id = gold_parent.id
+
+        with app.test_client() as c:
+            # 3-digit parent → 4-digit child (account_number_generator convention)
+            r = c.post(
+                '/api/accounts',
+                json={
+                    'account_number': '5560',
+                    'name': 'ابن نقدي',
+                    'type': 'Liability',
+                    'parent_id': cash_parent_id,
+                    'create_parallel': True,
+                },
+                headers=admin_headers,
+            )
+            assert r.status_code == 201, r.get_json()
+
+        with app.app_context():
+            gold_child = Account.query.filter_by(account_number='75560').first()
+            assert gold_child is not None, 'Gold child (75560) must be created'
+            assert gold_child.parent_id == gold_parent_id, (
+                f'Gold child parent must be gold_parent id={gold_parent_id}, got {gold_child.parent_id}'
+            )
 
     def test_create_parallel_ignored_for_7xxx_accounts(self, admin_headers):
         """create_parallel=True on a 7xxx (gold) account is silently ignored — already the memo side."""

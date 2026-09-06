@@ -1105,12 +1105,18 @@ def add_account():
                 parallel_number = f'7{account_number}'
                 gold_account = Account.query.filter_by(account_number=parallel_number).first()
                 if gold_account is None:
+                    # أب الحساب الذهبي = memo_account_id لأب الحساب النقدي.
+                    # الإنفاريانت: أب(gold) = gold_parallel(أب(cash)).
+                    gold_parent_id = None
+                    if parent_account is not None and parent_account.memo_account_id:
+                        gold_parent_id = parent_account.memo_account_id
                     gold_account = Account(
                         account_number=parallel_number,
                         name=f'{name} وزني',
                         type=account_type,
                         transaction_type='gold',
                         tracks_weight=True,
+                        parent_id=gold_parent_id,
                     )
                     db.session.add(gold_account)
                     db.session.flush()
