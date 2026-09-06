@@ -1900,12 +1900,16 @@ class ApiService {
     }
   }
 
-  Future<void> deleteAccount(int id) async {
-    final response = await _authedDelete(Uri.parse('$_baseUrl/accounts/$id'));
+  Future<Map<String, dynamic>> deleteAccount(int id, {bool? deleteParallel}) async {
+    Uri uri = Uri.parse('$_baseUrl/accounts/$id');
+    if (deleteParallel != null) {
+      uri = uri.replace(queryParameters: {'delete_parallel': deleteParallel.toString()});
+    }
+    final response = await _authedDelete(uri);
     if (response.statusCode != 200) {
-      // Changed from 204 to 200
       throw Exception(_errorMessageFromResponse(response));
     }
+    return json.decode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
   }
 
   // Journal Entry Methods

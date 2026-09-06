@@ -5,11 +5,19 @@ from datetime import datetime, date, time
 
 from flask import Blueprint, request, jsonify
 
+import logging
+
+from sqlalchemy.exc import IntegrityError
+
 from models import db, Account, AccountingMapping, JournalEntry, JournalEntryLine, SafeBox
-from account_pair_service import link_accounts, unlink_account
+from account_pair_service import link_accounts, unlink_account, AccountPairLinkError
 from core.database import _db_has_column
 from core.responses import _wrap_api_exceptions
 from auth_decorators import require_permission
+
+_log = logging.getLogger(__name__)
+
+_VALID_ACCOUNT_TYPES = frozenset({'Asset', 'Liability', 'Equity', 'Revenue', 'Expense'})
 from pricing.gold_price_service import get_current_gold_price
 from pricing.karat_service import convert_to_main_karat, get_main_karat
 from services.live_balances import live_balances_by_account_ids
@@ -932,6 +940,7 @@ def get_accounts_hierarchy():
     })
 
 @accounts_bp.route('/accounts/next-number/<parent_number>', methods=['GET'])
+@require_permission('accounts.view')
 def get_next_account_number_api(parent_number):
     """API endpoint للحصول على رقم الحساب التالي المتاح"""
     try:
@@ -954,6 +963,7 @@ def get_next_account_number_api(parent_number):
         }), 400
 
 @accounts_bp.route('/accounts/validate-number', methods=['POST'])
+@require_permission('accounts.view')
 def validate_account_number_api():
     """API endpoint للتحقق من صحة رقم حساب"""
     try:
@@ -1002,62 +1012,129 @@ def get_account_capacity_api(category_number):
         }), 400
 
 @accounts_bp.route('/accounts', methods=['POST'])
+@require_permission('accounts.create')
 def add_account():
-    """إضافة حساب جديد مع إنشاء حساب موازي تلقائياً"""
+    """إضافة حساب جديد مع إنشاء حساب موازي تلقائياً.
+
+    قاعدة tracks_weight: مشتقة من رقم الحساب (7xxx → ذهبي/وزني، غيره → نقدي).
+    لا يُقبل tracks_weight من المستخدم مباشرة — الـ Backend هو مصدر الحقيقة.
+    """
     data = request.get_json(silent=True) or {}
 
-    raw_account_number = str(data.get('account_number', '')).strip()
+    # ── Validate required fields ─────────────────────────────────────────────
+    raw_account_number = str(data.get('account_number', '') or '').strip()
     account_number = ''.join(ch for ch in raw_account_number if ch.isdigit())
-
     if not account_number:
-        return jsonify({'error': 'رقم الحساب مطلوب'}), 400
+        return jsonify({'error': 'MISSING_ACCOUNT_NUMBER', 'message': 'رقم الحساب مطلوب'}), 400
 
+    name = str(data.get('name', '') or '').strip()
+    if not name:
+        return jsonify({'error': 'MISSING_NAME', 'message': 'اسم الحساب مطلوب'}), 400
+
+    account_type = str(data.get('type', '') or '').strip()
+    if not account_type:
+        return jsonify({'error': 'MISSING_TYPE', 'message': 'نوع الحساب مطلوب'}), 400
+    if account_type not in _VALID_ACCOUNT_TYPES:
+        return jsonify({
+            'error': 'INVALID_TYPE',
+            'message': f'نوع الحساب غير صالح. القيم المقبولة: {", ".join(sorted(_VALID_ACCOUNT_TYPES))}'
+        }), 400
+
+    # ── Validate parent ──────────────────────────────────────────────────────
     parent_id = data.get('parent_id')
     parent_account = None
     if parent_id is not None:
         parent_account = Account.query.get(parent_id)
         if not parent_account:
-            return jsonify({'error': 'الحساب الأب غير موجود'}), 400
+            return jsonify({'error': 'PARENT_NOT_FOUND', 'message': 'الحساب الأب غير موجود'}), 404
 
         from account_number_generator import validate_account_number
-
         validation = validate_account_number(account_number, parent_account.account_number)
         if not validation.get('is_valid'):
-            return jsonify({'error': validation.get('message', 'رقم الحساب غير صالح')}), 400
+            return jsonify({
+                'error': 'INVALID_ACCOUNT_NUMBER',
+                'message': validation.get('message', 'رقم الحساب غير صالح')
+            }), 400
 
+    # ── Derive tracks_weight and transaction_type from account number ──────────
+    # 7xxx → gold + weight-tracking (True). All others → cash + no-weight (False).
+    # tracks_weight is a derived field — never accepted from user input.
     is_memo_account = account_number.startswith('7')
-    desired_transaction_type = 'gold' if is_memo_account else 'cash'
-    desired_tracks_weight = True if is_memo_account else False
+    derived_transaction_type = 'gold' if is_memo_account else 'cash'
+    derived_tracks_weight = is_memo_account
 
     if parent_account is not None:
         parent_is_memo = str(parent_account.account_number or '').startswith('7')
         if parent_is_memo != is_memo_account:
-            return jsonify({'error': 'رقم الحساب يجب أن يتبع نفس مخطط الأب (مالي/مذكرة)'}), 400
+            return jsonify({
+                'error': 'MEMO_MISMATCH',
+                'message': 'رقم الحساب يجب أن يتبع نفس مخطط الأب (مالي/مذكرة)'
+            }), 400
 
-    new_account = Account(
-        account_number=account_number,
-        name=data['name'],
-        type=data['type'],
-        parent_id=parent_id,
-        transaction_type=desired_transaction_type,
-        bank_name=data.get('bank_name'),
-        account_number_external=data.get('account_number_external'),
-        account_type=data.get('account_type'),
-        tracks_weight=bool(desired_tracks_weight),
-        include_in_gram_profit=bool(data.get('include_in_gram_profit', False)),
-        exclude_from_gram_profit=bool(data.get('exclude_from_gram_profit', False)),
-    )
-    db.session.add(new_account)
-    db.session.flush()
+    # ── Early duplicate check (best-effort before DB round-trip) ────────────
+    if Account.query.filter_by(account_number=account_number).first():
+        return jsonify({
+            'error': 'ACCOUNT_NUMBER_EXISTS',
+            'message': f'رقم الحساب {account_number} مستخدم بالفعل'
+        }), 409
 
-    parallel_account = None
-    if data.get('create_parallel', True):
-        try:
-            parallel_account = new_account.create_parallel_account()
-        except Exception as e:
-            print(f"⚠️  تعذر إنشاء حساب موازي: {e}")
+    try:
+        new_account = Account(
+            account_number=account_number,
+            name=name,
+            type=account_type,
+            parent_id=parent_id,
+            transaction_type=derived_transaction_type,
+            bank_name=data.get('bank_name'),
+            account_number_external=data.get('account_number_external'),
+            account_type=data.get('account_type'),
+            tracks_weight=derived_tracks_weight,
+            include_in_gram_profit=bool(data.get('include_in_gram_profit', False)),
+            exclude_from_gram_profit=bool(data.get('exclude_from_gram_profit', False)),
+        )
+        db.session.add(new_account)
+        db.session.flush()
 
-    db.session.commit()
+        parallel_account = None
+        parallel_warning = None
+        # create_parallel is user opt-in for cash accounts only. Gold accounts (7xxx)
+        # ARE the parallel side — creating another parallel from them would be circular.
+        # Must use link_accounts() — the only approved path for memo_account_id writes.
+        if data.get('create_parallel', False) and not is_memo_account:
+            try:
+                parallel_number = f'7{account_number}'
+                gold_account = Account.query.filter_by(account_number=parallel_number).first()
+                if gold_account is None:
+                    gold_account = Account(
+                        account_number=parallel_number,
+                        name=f'{name} وزني',
+                        type=account_type,
+                        transaction_type='gold',
+                        tracks_weight=True,
+                    )
+                    db.session.add(gold_account)
+                    db.session.flush()
+                link_accounts(new_account, gold_account, created_by='add_account')
+                parallel_account = gold_account
+            except AccountPairLinkError as _pair_err:
+                _log.warning('parallel_link_failed account=%s error=%s', account_number, _pair_err)
+                parallel_warning = str(_pair_err)
+            except Exception as _par_err:
+                _log.warning('parallel_account_failed account=%s error=%s', account_number, _par_err)
+                parallel_warning = str(_par_err)
+
+        db.session.commit()
+
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            'error': 'ACCOUNT_NUMBER_EXISTS',
+            'message': f'رقم الحساب {account_number} مستخدم بالفعل'
+        }), 409
+    except Exception:
+        db.session.rollback()
+        _log.exception('add_account failed account=%s', account_number)
+        return jsonify({'error': 'SERVER_ERROR', 'message': 'فشل حفظ الحساب في قاعدة البيانات'}), 500
 
     result = new_account.to_dict()
     if parallel_account:
@@ -1065,25 +1142,53 @@ def add_account():
             'id': parallel_account.id,
             'account_number': parallel_account.account_number,
             'name': parallel_account.name,
-            'transaction_type': parallel_account.transaction_type
+            'transaction_type': parallel_account.transaction_type,
         }
+    if parallel_warning:
+        result['warning'] = f'تم حفظ الحساب، لكن تعذر إنشاء الحساب الموازي: {parallel_warning}'
 
     return jsonify(result), 201
 
+
 @accounts_bp.route('/accounts/<int:id>', methods=['PUT'])
+@require_permission('accounts.edit')
 def update_account(id):
-    account = Account.query.get_or_404(id)
+    """تعديل حساب موجود.
+
+    قاعدة tracks_weight: مشتقة من رقم الحساب — لا تُقبل من المستخدم مباشرة.
+    """
+    account = Account.query.get(id)
+    if not account:
+        return jsonify({'error': 'ACCOUNT_NOT_FOUND', 'message': 'الحساب غير موجود'}), 404
+
     data = request.get_json(silent=True) or {}
 
+    # account_number (optional update)
     if 'account_number' in data and data.get('account_number') is not None:
-        raw_account_number = str(data.get('account_number', '')).strip()
-        normalized = ''.join(ch for ch in raw_account_number if ch.isdigit())
-        if normalized:
+        raw = str(data['account_number']).strip()
+        normalized = ''.join(ch for ch in raw if ch.isdigit())
+        if normalized and normalized != account.account_number:
+            if Account.query.filter(Account.account_number == normalized, Account.id != id).first():
+                return jsonify({
+                    'error': 'ACCOUNT_NUMBER_EXISTS',
+                    'message': f'رقم الحساب {normalized} مستخدم بالفعل'
+                }), 409
             account.account_number = normalized
-    account.name = data.get('name', account.name)
-    account.type = data.get('type', account.type)
-    account.parent_id = data.get('parent_id', account.parent_id)
 
+    if 'name' in data:
+        name = str(data.get('name', '') or '').strip()
+        if not name:
+            return jsonify({'error': 'MISSING_NAME', 'message': 'اسم الحساب مطلوب'}), 400
+        account.name = name
+
+    if 'type' in data:
+        account_type = str(data.get('type', '') or '').strip()
+        if account_type not in _VALID_ACCOUNT_TYPES:
+            return jsonify({'error': 'INVALID_TYPE', 'message': 'نوع الحساب غير صالح'}), 400
+        account.type = account_type
+
+    if 'parent_id' in data:
+        account.parent_id = data['parent_id']
     if 'bank_name' in data:
         account.bank_name = data['bank_name']
     if 'account_number_external' in data:
@@ -1095,26 +1200,152 @@ def update_account(id):
     if 'exclude_from_gram_profit' in data:
         account.exclude_from_gram_profit = bool(data['exclude_from_gram_profit'])
 
+    # tracks_weight is always derived from account number — never accepted from user input.
+    # 7xxx → gold + True. All others → cash + False.
     is_memo_account = str(account.account_number or '').startswith('7')
     account.transaction_type = 'gold' if is_memo_account else 'cash'
-    account.tracks_weight = True if is_memo_account else False
+    account.tracks_weight = is_memo_account
 
     if account.parent_id is not None:
         parent = Account.query.get(account.parent_id)
         if parent is not None:
             parent_is_memo = str(parent.account_number or '').startswith('7')
             if parent_is_memo != is_memo_account:
-                return jsonify({'error': 'لا يمكن نقل الحساب بين المالي والمذكرة عبر parent_id'}), 400
-            account.tracks_weight = bool(parent.tracks_weight)
+                return jsonify({
+                    'error': 'MEMO_MISMATCH',
+                    'message': 'لا يمكن نقل الحساب بين المالي والمذكرة عبر parent_id'
+                }), 400
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({
+            'error': 'ACCOUNT_NUMBER_EXISTS',
+            'message': 'رقم الحساب مستخدم بالفعل'
+        }), 409
+    except Exception:
+        db.session.rollback()
+        _log.exception('update_account failed id=%s', id)
+        return jsonify({'error': 'SERVER_ERROR', 'message': 'فشل تحديث الحساب'}), 500
+
     return jsonify(account.to_dict())
 
+
+def _account_has_deletion_dependencies(account_id: int) -> bool:
+    """True إذا كان الحساب له أي تبعية تمنع حذفه فيزيائياً."""
+    from models import VoucherAccountLine, Invoice, Settings, Customer, Supplier, Office, Employee
+    from sqlalchemy import or_
+    if Account.query.filter_by(parent_id=account_id).first():
+        return True
+    if JournalEntryLine.query.filter_by(account_id=account_id).first():
+        return True
+    if VoucherAccountLine.query.filter_by(account_id=account_id).first():
+        return True
+    if Invoice.query.filter_by(wage_inventory_account_id=account_id).first():
+        return True
+    if SafeBox.query.filter_by(account_id=account_id).first():
+        return True
+    if AccountingMapping.query.filter_by(account_id=account_id).first():
+        return True
+    settings = Settings.query.first()
+    if settings and (
+        settings.stones_pending_account_id == account_id
+        or settings.stones_display_revenue_account_id == account_id
+    ):
+        return True
+    if Customer.query.filter(
+        or_(Customer.account_id == account_id, Customer.account_category_id == account_id)
+    ).first():
+        return True
+    if Supplier.query.filter(
+        or_(Supplier.account_id == account_id, Supplier.account_category_id == account_id)
+    ).first():
+        return True
+    if Office.query.filter_by(account_category_id=account_id).first():
+        return True
+    if Employee.query.filter_by(account_id=account_id).first():
+        return True
+    return False
+
+
 @accounts_bp.route('/accounts/<int:id>', methods=['DELETE'])
+@require_permission('accounts.delete')
 def delete_account(id):
-    account = Account.query.get_or_404(id)
-    db.session.delete(account)
-    db.session.commit()
+    """حذف حساب — يرفض الحذف عند أي تبعية نشطة.
+
+    إذا كان للحساب شريك موازي (memo_account_id) بلا تبعيات:
+      - بدون ?delete_parallel → يُعيد confirm_required ليختار المستخدم.
+      - ?delete_parallel=true  → يحذف الاثنين في معاملة واحدة.
+      - ?delete_parallel=false → يفسخ الربط ويحذف هذا الحساب فقط.
+    """
+    account = Account.query.get(id)
+    if not account:
+        return jsonify({'error': 'ACCOUNT_NOT_FOUND', 'message': 'الحساب غير موجود'}), 404
+
+    # ── Guards على الحساب الرئيسي ──────────────────────────────────────────
+    if Account.query.filter_by(parent_id=id).first():
+        return jsonify({'error': 'HAS_CHILDREN', 'message': 'لا يمكن حذف حساب له حسابات فرعية'}), 409
+    if JournalEntryLine.query.filter_by(account_id=id).first():
+        return jsonify({'error': 'HAS_TRANSACTIONS', 'message': 'لا يمكن حذف حساب له حركات محاسبية'}), 409
+
+    from models import VoucherAccountLine, Invoice, Settings, Customer, Supplier, Office, Employee
+    from sqlalchemy import or_
+    if VoucherAccountLine.query.filter_by(account_id=id).first():
+        return jsonify({'error': 'HAS_TRANSACTIONS', 'message': 'لا يمكن حذف حساب له حركات في سندات القبض أو الصرف'}), 409
+    if Invoice.query.filter_by(wage_inventory_account_id=id).first():
+        return jsonify({'error': 'HAS_TRANSACTIONS', 'message': 'لا يمكن حذف حساب مستخدم في فواتير'}), 409
+    if SafeBox.query.filter_by(account_id=id).first():
+        return jsonify({'error': 'IS_SAFEBOX_ACCOUNT', 'message': 'لا يمكن حذف حساب مرتبط بخزينة'}), 409
+    if AccountingMapping.query.filter_by(account_id=id).first():
+        return jsonify({'error': 'HAS_ACCOUNTING_MAPPING', 'message': 'لا يمكن حذف حساب مستخدم في ربط محاسبي تلقائي'}), 409
+    system_settings = Settings.query.first()
+    if system_settings and (
+        system_settings.stones_pending_account_id == id
+        or system_settings.stones_display_revenue_account_id == id
+    ):
+        return jsonify({'error': 'HAS_SYSTEM_CONFIG', 'message': 'لا يمكن حذف حساب مستخدم في إعدادات النظام'}), 409
+    if Customer.query.filter(or_(Customer.account_id == id, Customer.account_category_id == id)).first():
+        return jsonify({'error': 'HAS_ENTITY_LINK', 'message': 'لا يمكن حذف حساب مرتبط بعميل'}), 409
+    if Supplier.query.filter(or_(Supplier.account_id == id, Supplier.account_category_id == id)).first():
+        return jsonify({'error': 'HAS_ENTITY_LINK', 'message': 'لا يمكن حذف حساب مرتبط بمورد'}), 409
+    if Office.query.filter_by(account_category_id=id).first():
+        return jsonify({'error': 'HAS_ENTITY_LINK', 'message': 'لا يمكن حذف حساب مرتبط بمكتب'}), 409
+    if Employee.query.filter_by(account_id=id).first():
+        return jsonify({'error': 'HAS_ENTITY_LINK', 'message': 'لا يمكن حذف حساب مرتبط بموظف'}), 409
+
+    # ── الحساب الشريك (memo pair) ─────────────────────────────────────────
+    parallel = Account.query.get(account.memo_account_id) if account.memo_account_id else None
+    delete_parallel = request.args.get('delete_parallel')  # 'true' | 'false' | None
+
+    if parallel and delete_parallel is None:
+        # لم يحدد المستخدم بعد ماذا يريد — تحقق إن كان الشريك قابل للحذف
+        if not _account_has_deletion_dependencies(parallel.id):
+            return jsonify({
+                'result': 'confirm_required',
+                'message': 'الحساب مرتبط بحساب موازي بدون حركات. هل تريد حذفه أيضاً؟',
+                'parallel_account': {
+                    'id': parallel.id,
+                    'account_number': parallel.account_number,
+                    'name': parallel.name,
+                },
+            }), 200
+        # الشريك له تبعيات — نفسخ الربط فقط ونكمل
+
+    try:
+        if account.memo_account_id:
+            unlink_account(account, created_by='delete_account', auto_commit=False)
+
+        if parallel and delete_parallel == 'true' and not _account_has_deletion_dependencies(parallel.id):
+            db.session.delete(parallel)
+
+        db.session.delete(account)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        _log.exception('delete_account failed id=%s', id)
+        return jsonify({'error': 'SERVER_ERROR', 'message': 'فشل حذف الحساب'}), 500
+
     return jsonify({'result': 'success'})
 
 # ---------------------------------------------------------------------------

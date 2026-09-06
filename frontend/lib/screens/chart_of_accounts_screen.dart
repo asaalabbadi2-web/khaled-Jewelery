@@ -170,11 +170,11 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
   }
 
   void _deleteAccount(int accountId) {
-    // Prevent deletion if account has children
-    bool hasChildren = _accounts.any((acc) => acc['parent_id'] == accountId);
+    // Client-side children guard (fast path — avoids unnecessary round-trip)
+    final hasChildren = _accounts.any((acc) => acc['parent_id'] == accountId);
     if (hasChildren) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('لا يمكن حذف حساب لديه حسابات فرعية.')),
+        const SnackBar(content: Text('لا يمكن حذف حساب لديه حسابات فرعية.')),
       );
       return;
     }
@@ -182,36 +182,82 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('تأكيد الحذف'),
-        content: Text(
+        title: const Text('تأكيد الحذف'),
+        content: const Text(
           'هل أنت متأكد من رغبتك في حذف هذا الحساب؟ لا يمكن التراجع عن هذا الإجراء.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(),
-            child: Text('إلغاء'),
+            child: const Text('إلغاء'),
           ),
           ElevatedButton(
-            onPressed: () async {
-              try {
-                await ApiService().deleteAccount(accountId);
-                if (!mounted) return;
-                Navigator.of(context).pop();
-                _fetchAccounts(); // Refresh the tree
-              } catch (e) {
-                if (!mounted) return;
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Failed to delete account: $e')),
-                );
-              }
+            onPressed: () {
+              Navigator.of(context).pop();
+              _doDeleteAccount(accountId);
             },
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            child: Text('حذف'),
+            child: const Text('حذف'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _doDeleteAccount(int accountId, {bool? deleteParallel}) async {
+    try {
+      final result = await ApiService().deleteAccount(accountId, deleteParallel: deleteParallel);
+
+      if (result['result'] == 'confirm_required') {
+        // Backend found a deletable parallel account — ask the user
+        final parallel = result['parallel_account'] as Map<String, dynamic>;
+        if (!mounted) return;
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('حذف الحساب الموازي'),
+            content: Text(
+              'الحساب مرتبط بحساب موازي:\n'
+              '${parallel['account_number']} — ${parallel['name']}\n\n'
+              'هل تريد حذف الاثنين معاً؟',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('إلغاء'),
+              ),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _doDeleteAccount(accountId, deleteParallel: false);
+                },
+                child: const Text('حذف هذا فقط'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  Navigator.of(context).pop();
+                  _doDeleteAccount(accountId, deleteParallel: true);
+                },
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                child: const Text('حذف الاثنين'),
+              ),
+            ],
+          ),
+        );
+        return;
+      }
+
+      // Success
+      if (!mounted) return;
+      _fetchAccounts();
+    } catch (e) {
+      if (!mounted) return;
+      final raw = e.toString();
+      final msg = raw.startsWith('Exception: ') ? raw.substring('Exception: '.length) : raw;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: Colors.red.shade700),
+      );
+    }
   }
 
   void _showAccountDialog({
@@ -230,9 +276,8 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
         ? editingAccount['parent_id']
         : parentAccount?['id'];
 
-    bool tracksWeight = isEditing
-      ? (editingAccount['tracks_weight'] == true)
-      : (parentAccount != null ? parentAccount['tracks_weight'] == true : false);
+    // Parallel account toggle: user opt-in only (not shown when editing).
+    bool createParallel = false;
 
     bool includeInGramProfit = isEditing
       ? (editingAccount['include_in_gram_profit'] == true)
@@ -258,8 +303,6 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
 
         // When adding a child, inherit the parent's type
         type = parentAcc['type'];
-        // Child accounts always inherit tracks_weight from parent
-        tracksWeight = parentAcc['tracks_weight'] == true;
 
         setState(() {
           isSuggestingNumber = true;
@@ -394,6 +437,7 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                           NormalizeNumberFormatter(),
                           FilteringTextInputFormatter.digitsOnly,
                         ],
+                        onChanged: (_) => setState(() {}),
                         validator: (value) => value == null || value.isEmpty
                             ? 'الرجاء إدخال رقم'
                             : null,
@@ -423,27 +467,6 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                             }
                           },
                         ),
-                      const SizedBox(height: 8),
-                      if (parentId == null)
-                        SwitchListTile.adaptive(
-                          contentPadding: EdgeInsets.zero,
-                          value: tracksWeight,
-                          title: const Text('يتتبع الوزن (حساب وزني)'),
-                          subtitle: const Text(
-                            'يمكن تعديلها يدويًا للحسابات الرئيسية فقط',
-                          ),
-                          onChanged: (v) => setState(() => tracksWeight = v),
-                        )
-                      else
-                        ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: const Text('تتبع الوزن'),
-                          subtitle: Text(
-                            tracksWeight
-                                ? 'يتبع الأب: يتتبع الوزن'
-                                : 'يتبع الأب: لا يتتبع الوزن',
-                          ),
-                        ),
                       const SizedBox(height: 4),
                       SwitchListTile.adaptive(
                         contentPadding: EdgeInsets.zero,
@@ -454,6 +477,27 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                         ),
                         onChanged: (v) => setState(() => includeInGramProfit = v),
                       ),
+                      if (!isEditing)
+                        Builder(builder: (context) {
+                          final isMemoAccount =
+                              accountNumberController.text.startsWith('7');
+                          if (isMemoAccount) return const SizedBox.shrink();
+                          return Column(
+                            children: [
+                              const Divider(height: 24),
+                              SwitchListTile.adaptive(
+                                contentPadding: EdgeInsets.zero,
+                                value: createParallel,
+                                title: const Text('إنشاء حساب موازي وزني'),
+                                subtitle: const Text(
+                                  'يُنشئ حساباً بالرقم نفسه مسبوقاً بـ 7 لتتبع العمليات بالجرام',
+                                ),
+                                onChanged: (v) =>
+                                    setState(() => createParallel = v),
+                              ),
+                            ],
+                          );
+                        }),
                     ],
                   ),
                 ),
@@ -508,13 +552,8 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                       'include_in_gram_profit': includeInGramProfit,
                     };
 
-                    if (parentId != null) {
-                      final parentAcc = _accounts.firstWhere(
-                        (acc) => acc['id'] == parentId,
-                      );
-                      data['tracks_weight'] = parentAcc['tracks_weight'] == true;
-                    } else {
-                      data['tracks_weight'] = tracksWeight;
+                    if (!isEditing) {
+                      data['create_parallel'] = createParallel;
                     }
 
                     if (isEditing) {
@@ -531,9 +570,16 @@ class _ChartOfAccountsScreenState extends State<ChartOfAccountsScreen> {
                     _fetchAccounts();
                   } catch (e) {
                     if (!mounted) return;
-                    Navigator.of(context).pop(); // Close dialog on error
+                    // Do NOT close the dialog on error — user keeps their input.
+                    final rawMsg = e.toString();
+                    final msg = rawMsg.startsWith('Exception: ')
+                        ? rawMsg.substring('Exception: '.length)
+                        : rawMsg;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to save account: $e')),
+                      SnackBar(
+                        content: Text(msg),
+                        backgroundColor: Colors.red.shade700,
+                      ),
                     );
                   }
                 }
