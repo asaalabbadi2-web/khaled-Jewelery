@@ -113,81 +113,65 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
     db = current_app.extensions['sqlalchemy']
 
     # ─────────────────────────────────────────────────────────────────────
-    # حارس الفصل بين الحساب النقدي والوزني (آلية الإعادة التوجيه التلقائية)
-    # يُنفَّذ قبل أي منطق آخر لضمان عدم تخزين قيم خاطئة.
+    # توزيع القيم المختلطة عبر dual_distribution_service — المحرك المركزي
+    # الوحيد لمنطق التوجيه. نفس الخوارزمية المستخدمة في journals.py.
     # ─────────────────────────────────────────────────────────────────────
-    _has_weight = any([weight_18k_debit, weight_18k_credit,
-                       weight_21k_debit, weight_21k_credit,
-                       weight_22k_debit, weight_22k_credit,
-                       weight_24k_debit, weight_24k_credit])
-    _has_cash = bool(cash_debit or cash_credit)
+    from dual_distribution_service import distribute_line as _distribute_line
+    import logging as _logging
+    _dds_log = _logging.getLogger('dual_distribution_service')
 
-    if _has_weight or _has_cash:
-        try:
-            _guard_acc = db.session.query(Account).filter_by(id=account_id).first()
-            if _guard_acc:
-                _tx_type = (getattr(_guard_acc, 'transaction_type', None) or 'cash').lower()
-                _memo_id = getattr(_guard_acc, 'memo_account_id', None)
+    _input_line = {
+        'account_id': account_id,
+        'cash_debit': cash_debit, 'cash_credit': cash_credit,
+        'debit_18k': weight_18k_debit, 'credit_18k': weight_18k_credit,
+        'debit_21k': weight_21k_debit, 'credit_21k': weight_21k_credit,
+        'debit_22k': weight_22k_debit, 'credit_22k': weight_22k_credit,
+        'debit_24k': weight_24k_debit, 'credit_24k': weight_24k_credit,
+    }
+    _distributed = _distribute_line(_input_line)
 
-                # حساب نقدي يتلقى قيماً وزنية → أعد التوجيه للحساب الوزني
-                if _tx_type == 'cash' and _has_weight and _memo_id:
-                    _memo_acc = db.session.query(Account).get(int(_memo_id))
-                    if _memo_acc and (getattr(_memo_acc, 'transaction_type', '') or '').lower() == 'gold':
-                        import sys
-                        print(
-                            f"[GUARD] Redirecting weight from cash account "
-                            f"[{_guard_acc.account_number}] → gold account [{_memo_acc.account_number}]  "
-                            f"JE={journal_entry_id}",
-                            file=sys.stderr,
-                        )
-                        # استدعاء نفسنا بالحساب الصحيح للأوزان (بدون نقد)
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry_id,
-                            account_id=int(_memo_id),
-                            weight_18k_debit=weight_18k_debit, weight_18k_credit=weight_18k_credit,
-                            weight_21k_debit=weight_21k_debit, weight_21k_credit=weight_21k_credit,
-                            weight_22k_debit=weight_22k_debit, weight_22k_credit=weight_22k_credit,
-                            weight_24k_debit=weight_24k_debit, weight_24k_credit=weight_24k_credit,
-                            description=description,
-                            customer_id=customer_id, supplier_id=supplier_id,
-                            apply_golden_rule=False,
-                            exclude_from_ledger=exclude_from_ledger,
-                        )
-                        # استمر بالحساب النقدي للنقد فقط (إذا وُجد)
-                        if not _has_cash:
-                            return
-                        weight_18k_debit = weight_18k_credit = 0
-                        weight_21k_debit = weight_21k_credit = 0
-                        weight_22k_debit = weight_22k_credit = 0
-                        weight_24k_debit = weight_24k_credit = 0
-
-                # حساب وزني يتلقى قيماً نقدية → أعد التوجيه للحساب النقدي
-                elif _tx_type == 'gold' and _has_cash and _memo_id:
-                    _memo_acc = db.session.query(Account).get(int(_memo_id))
-                    if _memo_acc and (getattr(_memo_acc, 'transaction_type', '') or '').lower() == 'cash':
-                        import sys
-                        print(
-                            f"[GUARD] Redirecting cash from gold account "
-                            f"[{_guard_acc.account_number}] → cash account [{_memo_acc.account_number}]  "
-                            f"JE={journal_entry_id}",
-                            file=sys.stderr,
-                        )
-                        create_dual_journal_entry(
-                            journal_entry_id=journal_entry_id,
-                            account_id=int(_memo_id),
-                            cash_debit=cash_debit, cash_credit=cash_credit,
-                            description=description,
-                            customer_id=customer_id, supplier_id=supplier_id,
-                            apply_golden_rule=False,
-                            exclude_from_ledger=exclude_from_ledger,
-                        )
-                        # استمر بالحساب الوزني للوزن فقط (إذا وُجد)
-                        if not _has_weight:
-                            return
-                        cash_debit = cash_credit = 0
-        except Exception as _guard_err:
-            import sys
-            print(f"[GUARD] Error in type-segregation guard: {_guard_err}", file=sys.stderr)
+    if len(_distributed) > 1 or (_distributed and _distributed[0].get('account_id') != account_id):
+        # جرى توزيع — أنشئ سطراً للحسابات الإضافية (الجانب الموازي)
+        for _dl in _distributed:
+            if _dl.get('account_id') != account_id:
+                _dds_log.debug(
+                    'dual_distribution: redirect JE=%s acc=%s → acc=%s',
+                    journal_entry_id, account_id, _dl['account_id'],
+                )
+                create_dual_journal_entry(
+                    journal_entry_id=journal_entry_id,
+                    account_id=_dl['account_id'],
+                    cash_debit=_dl.get('cash_debit', 0),
+                    cash_credit=_dl.get('cash_credit', 0),
+                    weight_18k_debit=_dl.get('debit_18k', 0),
+                    weight_18k_credit=_dl.get('credit_18k', 0),
+                    weight_21k_debit=_dl.get('debit_21k', 0),
+                    weight_21k_credit=_dl.get('credit_21k', 0),
+                    weight_22k_debit=_dl.get('debit_22k', 0),
+                    weight_22k_credit=_dl.get('credit_22k', 0),
+                    weight_24k_debit=_dl.get('debit_24k', 0),
+                    weight_24k_credit=_dl.get('credit_24k', 0),
+                    description=description,
+                    customer_id=customer_id, supplier_id=supplier_id,
+                    apply_golden_rule=False,
+                    exclude_from_ledger=exclude_from_ledger,
+                )
+        # حدّث args الحساب الحالي بالقيم المتبقية بعد التوزيع
+        _my_line = next(
+            (_dl for _dl in _distributed if _dl.get('account_id') == account_id), None
+        )
+        if _my_line is None:
+            return  # الحساب الحالي لم يبقَ له قيم — لا سطر يُنشأ
+        cash_debit = _my_line.get('cash_debit', 0)
+        cash_credit = _my_line.get('cash_credit', 0)
+        weight_18k_debit = _my_line.get('debit_18k', 0)
+        weight_18k_credit = _my_line.get('credit_18k', 0)
+        weight_21k_debit = _my_line.get('debit_21k', 0)
+        weight_21k_credit = _my_line.get('credit_21k', 0)
+        weight_22k_debit = _my_line.get('debit_22k', 0)
+        weight_22k_credit = _my_line.get('credit_22k', 0)
+        weight_24k_debit = _my_line.get('debit_24k', 0)
+        weight_24k_credit = _my_line.get('credit_24k', 0)
     # ─────────────────────────────────────────────────────────────────────
 
     if account_id is None:

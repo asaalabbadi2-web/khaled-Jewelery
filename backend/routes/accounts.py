@@ -947,6 +947,15 @@ def get_next_account_number_api(parent_number):
         from account_number_generator import suggest_account_number_with_validation
 
         result = suggest_account_number_with_validation(parent_number)
+        # أضف معلومات الزوج الموازي للأب حتى تعرف Flutter الافتراضي الصحيح
+        # عند عرض نموذج إضافة حساب ابن.
+        parent_acc = Account.query.filter_by(account_number=parent_number).first()
+        if parent_acc is not None:
+            result['parent_has_parallel'] = parent_acc.memo_account_id is not None
+            if not parent_number.startswith('7') and result.get('suggested_number'):
+                result['suggested_parallel_number'] = f'7{result["suggested_number"]}'
+            else:
+                result['suggested_parallel_number'] = None
         return jsonify(result), 200
 
     except ValueError as e:
@@ -1097,10 +1106,22 @@ def add_account():
 
         parallel_account = None
         parallel_warning = None
-        # create_parallel is user opt-in for cash accounts only. Gold accounts (7xxx)
-        # ARE the parallel side — creating another parallel from them would be circular.
-        # Must use link_accounts() — the only approved path for memo_account_id writes.
-        if data.get('create_parallel', False) and not is_memo_account:
+        # create_parallel: التمييز بين "الحقل محذوف" و"الحقل = false" صريح.
+        #   - حقل محذوف → ارث من الأب: إذا كان للأب حساب موازٍ، الافتراضي True.
+        #   - false صريح → احترم اختيار المستخدم بغضّ النظر عن الأب.
+        #   - true صريح → أنشئ الموازي دائماً (إذا كان الحساب ماليًا).
+        # لا يجوز إنشاء موازٍ لحساب 7xxx — هو نفسه الجانب الوزني.
+        _cp_explicit = 'create_parallel' in data
+        if _cp_explicit:
+            _create_parallel = bool(data['create_parallel'])
+        else:
+            _create_parallel = (
+                not is_memo_account
+                and parent_account is not None
+                and parent_account.memo_account_id is not None
+            )
+
+        if _create_parallel and not is_memo_account:
             try:
                 parallel_number = f'7{account_number}'
                 gold_account = Account.query.filter_by(account_number=parallel_number).first()
@@ -1161,6 +1182,9 @@ def add_account():
         }
     if parallel_warning:
         result['warning'] = f'تم حفظ الحساب، لكن تعذر إنشاء الحساب الموازي: {parallel_warning}'
+    # يساعد Flutter على عرض الاقتراح الصحيح عند إضافة حساب ابن لاحقاً:
+    result['parent_has_parallel'] = parent_account is not None and parent_account.memo_account_id is not None
+    result['suggested_parallel_number'] = f'7{account_number}' if not is_memo_account else None
 
     return jsonify(result), 201
 
@@ -1221,6 +1245,7 @@ def update_account(id):
     account.transaction_type = 'gold' if is_memo_account else 'cash'
     account.tracks_weight = is_memo_account
 
+    # فحص الأب أولاً (early return) — قبل أي تعديل على قاعدة البيانات.
     if account.parent_id is not None:
         parent = Account.query.get(account.parent_id)
         if parent is not None:
@@ -1232,6 +1257,14 @@ def update_account(id):
                 }), 400
 
     try:
+        # إذا تغيّر رقم الحساب وقلَب tracks_weight (مثال: 4100→74100 أو العكس)،
+        # يصبح الزوج الموجود مخالفاً للإنفاريانت (cash↔cash أو gold↔gold).
+        # نفسخه داخل نفس المعاملة لضمان الـ Atomicity:
+        # إما أن ينجح التعديل والفسخ معاً، أو يُرجعان معاً.
+        if account.memo_account_id is not None:
+            _partner = Account.query.get(account.memo_account_id)
+            if _partner is not None and bool(account.tracks_weight) == bool(_partner.tracks_weight):
+                unlink_account(account, created_by='update_account:number_change')
         db.session.commit()
     except IntegrityError:
         db.session.rollback()
@@ -1362,6 +1395,46 @@ def delete_account(id):
         return jsonify({'error': 'SERVER_ERROR', 'message': 'فشل حذف الحساب'}), 500
 
     return jsonify({'result': 'success'})
+
+
+@accounts_bp.route('/accounts/<int:id>/remove-parallel', methods=['POST'])
+@require_permission('accounts.delete')
+def remove_parallel(id):
+    """يُزيل الحساب الموازي (memo) للحساب المُحدَّد مع الحفاظ على الحساب الأساسي.
+
+    يختلف عن DELETE: هنا نُزيل الحساب الموازي فقط، لا الحساب نفسه.
+    العملية atomic: الفسخ + الحذف يحدثان في معاملة واحدة أو لا يحدثان.
+
+    Errors (409): PARALLEL_HAS_CHILDREN, PARALLEL_HAS_JE_LINES,
+                  PARALLEL_HAS_VOUCHER_LINES, PARALLEL_HAS_INVOICE_REF,
+                  PARALLEL_IS_SAFEBOX, PARALLEL_HAS_ACCOUNTING_MAPPING,
+                  PARALLEL_HAS_SYSTEM_CONFIG, PARALLEL_HAS_ENTITY_LINK,
+                  PARALLEL_NOT_FOUND
+    Errors (404): ACCOUNT_NOT_FOUND, NO_PARALLEL
+    """
+    from account_pair_service import AccountPairRemovalError, remove_parallel_account
+
+    account = Account.query.get(id)
+    if not account:
+        return jsonify({'error': 'ACCOUNT_NOT_FOUND', 'message': 'الحساب غير موجود'}), 404
+
+    try:
+        removed = remove_parallel_account(account, created_by='remove_parallel_endpoint')
+        db.session.commit()
+    except AccountPairRemovalError as exc:
+        db.session.rollback()
+        status = 404 if exc.code == 'NO_PARALLEL' else 409
+        return jsonify({'error': exc.code, 'message': str(exc)}), status
+    except Exception:
+        db.session.rollback()
+        _log.exception('remove_parallel failed id=%s', id)
+        return jsonify({'error': 'SERVER_ERROR', 'message': 'فشل إزالة الحساب الموازي'}), 500
+
+    return jsonify({
+        'result': 'success',
+        'removed_parallel': removed,
+    })
+
 
 # ---------------------------------------------------------------------------
 # Account ledger

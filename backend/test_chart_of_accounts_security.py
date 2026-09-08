@@ -606,3 +606,390 @@ class TestHappyPath:
             r = c.put(f'/api/accounts/{a_id}', json={'name': 'جديد'}, headers=admin_headers)
             assert r.status_code == 200
             assert r.get_json()['name'] == 'جديد'
+
+
+# ── 9. توريث create_parallel من الأب (القاعدة 4/6/8) ───────────────────────
+
+class TestParallelInheritance:
+    """إذا كان للأب حساب موازٍ وأُضيف ابن بدون إرسال create_parallel،
+    يجب أن ينشئ Backend الموازي تلقائياً (الإرث). الإرسال الصريح لـ false
+    يلغي الإرث. الأب بلا موازٍ يعني الافتراضي false."""
+
+    def _make_linked_pair(self, cash_num: str, gold_num: str, *, name: str, acc_type: str = 'Asset'):
+        from account_pair_service import link_accounts
+        cash = Account(account_number=cash_num, name=f'{name} نقدي',
+                       type=acc_type, transaction_type='cash', tracks_weight=False)
+        gold = Account(account_number=gold_num, name=f'{name} ذهبي',
+                       type=acc_type, transaction_type='gold', tracks_weight=True)
+        db.session.add_all([cash, gold])
+        db.session.flush()
+        link_accounts(cash, gold, created_by='test')
+        db.session.commit()
+        return cash, gold
+
+    def test_field_omitted_inherits_true_when_parent_has_parallel(self, admin_headers):
+        """create_parallel محذوف + الأب لديه موازٍ → يُنشأ موازٍ تلقائياً."""
+        with app.app_context():
+            parent, _ = self._make_linked_pair('559', '7559', name='أب اختبار إرث')
+            parent_id = parent.id
+
+        with app.test_client() as c:
+            r = c.post('/api/accounts', json={
+                'account_number': '5590',
+                'name': 'ابن موروث',
+                'type': 'Asset',
+                'parent_id': parent_id,
+                # create_parallel محذوف عمداً
+            }, headers=admin_headers)
+            assert r.status_code == 201, r.get_json()
+            body = r.get_json()
+            assert body.get('parallel_account') is not None, (
+                'يجب إنشاء موازٍ تلقائياً — create_parallel محذوف والأب لديه موازٍ'
+            )
+            assert body['parallel_account']['account_number'] == '75590'
+
+        with app.app_context():
+            # تحقق من الربط الثنائي وسلامة الإنفاريانت
+            child = Account.query.filter_by(account_number='5590').first()
+            gold_child = Account.query.filter_by(account_number='75590').first()
+            assert child is not None and gold_child is not None
+            assert child.memo_account_id == gold_child.id
+            assert gold_child.memo_account_id == child.id
+            from account_pair_invariants import classify as _classify
+            violations = _classify(Account.query.all())['decisions']
+            assert len(violations) == 0, f'Invariant violations: {violations}'
+
+    def test_explicit_false_overrides_inherited_default(self, admin_headers):
+        """create_parallel=false صريح يلغي الإرث حتى لو كان الأب لديه موازٍ."""
+        with app.app_context():
+            parent, _ = self._make_linked_pair('558', '7558', name='أب اختبار إلغاء إرث')
+            parent_id = parent.id
+
+        with app.test_client() as c:
+            r = c.post('/api/accounts', json={
+                'account_number': '5580',
+                'name': 'ابن بلا موازٍ',
+                'type': 'Asset',
+                'parent_id': parent_id,
+                'create_parallel': False,  # صريح — يلغي الإرث
+            }, headers=admin_headers)
+            assert r.status_code == 201, r.get_json()
+            body = r.get_json()
+            assert body.get('parallel_account') is None, (
+                'create_parallel=false يجب أن يُلغي الإرث'
+            )
+
+        with app.app_context():
+            assert Account.query.filter_by(account_number='75580').first() is None
+
+    def test_parent_without_parallel_defaults_to_no_parallel(self, admin_headers):
+        """الأب بلا موازٍ + create_parallel محذوف → لا ينشئ موازياً."""
+        with app.app_context():
+            parent = Account(account_number='557', name='أب بلا موازٍ',
+                             type='Asset', transaction_type='cash', tracks_weight=False)
+            db.session.add(parent)
+            db.session.commit()
+            parent_id = parent.id
+
+        with app.test_client() as c:
+            r = c.post('/api/accounts', json={
+                'account_number': '5570',
+                'name': 'ابن بلا إرث',
+                'type': 'Asset',
+                'parent_id': parent_id,
+                # create_parallel محذوف والأب بلا موازٍ → الافتراضي false
+            }, headers=admin_headers)
+            assert r.status_code == 201, r.get_json()
+            body = r.get_json()
+            assert body.get('parallel_account') is None
+
+        with app.app_context():
+            assert Account.query.filter_by(account_number='75570').first() is None
+
+    def test_7xxx_account_never_creates_extra_parallel(self, admin_headers):
+        """الحساب 7xxx هو نفسه الجانب الوزني — لا ينشئ موازياً إضافياً أبداً."""
+        with app.test_client() as c:
+            r = c.post('/api/accounts', json={
+                'account_number': '75590',  # 7xxx بدون create_parallel
+                'name': 'ذهبي اختبار',
+                'type': 'Asset',
+                # لا create_parallel
+            }, headers=admin_headers)
+            # 75590 قد يكون موجوداً بالفعل من الاختبار الأول — نتحقق من الحالتين
+            if r.status_code == 201:
+                body = r.get_json()
+                assert body.get('parallel_account') is None
+                assert body['tracks_weight'] is True
+                assert body['transaction_type'] == 'gold'
+            else:
+                assert r.status_code == 409  # مكرر — مقبول هنا
+
+    def test_next_number_returns_parent_has_parallel_and_suggested_number(self, admin_headers):
+        """GET /next-number/<parent> يُعيد parent_has_parallel وsuggested_parallel_number."""
+        with app.app_context():
+            # تأكد أن 559/7559 موجودان ومرتبطان (أُنشئا في الاختبار الأول)
+            parent = Account.query.filter_by(account_number='559').first()
+            assert parent is not None and parent.memo_account_id is not None, (
+                'يجب أن يكون 559 مرتبطاً بـ 7559 من اختبار سابق'
+            )
+
+        with app.test_client() as c:
+            r = c.get('/api/accounts/next-number/559', headers=admin_headers)
+            assert r.status_code == 200
+            body = r.get_json()
+            assert body.get('parent_has_parallel') is True, (
+                f'parent_has_parallel يجب أن يكون True لـ 559، الرد: {body}'
+            )
+            assert body.get('suggested_parallel_number', '').startswith('7'), (
+                f'suggested_parallel_number يجب أن يبدأ بـ 7، الرد: {body}'
+            )
+
+    def test_next_number_parent_without_parallel_returns_false(self, admin_headers):
+        """الأب بلا موازٍ → parent_has_parallel=False في رد next-number."""
+        with app.test_client() as c:
+            r = c.get('/api/accounts/next-number/557', headers=admin_headers)
+            assert r.status_code == 200
+            body = r.get_json()
+            assert body.get('parent_has_parallel') is False, (
+                f'parent_has_parallel يجب أن يكون False لـ 557، الرد: {body}'
+            )
+
+
+# ── 10. update_account: إبطال رابط memo عند تغيير رقم الحساب ───────────────
+
+class TestUpdateAccountMemoRevalidation:
+    """تغيير رقم الحساب بما يقلب tracks_weight يجب أن يُبطل رابط memo_account_id
+    عبر unlink_account() — الطريق الوحيد المعتمد."""
+
+    def _make_linked_pair(self, cash_num: str, gold_num: str, *, name: str):
+        from account_pair_service import link_accounts
+        cash = Account(account_number=cash_num, name=f'{name} نقدي',
+                       type='Asset', transaction_type='cash', tracks_weight=False)
+        gold = Account(account_number=gold_num, name=f'{name} ذهبي',
+                       type='Asset', transaction_type='gold', tracks_weight=True)
+        db.session.add_all([cash, gold])
+        db.session.flush()
+        link_accounts(cash, gold, created_by='test')
+        db.session.commit()
+        return cash, gold
+
+    def test_number_change_to_7xxx_unlinks_memo(self, admin_headers):
+        """نقدي مرتبط بذهبي → تغيير رقمه لـ 7xxx يقلب tracks_weight ويُبطل الرابط."""
+        with app.app_context():
+            cash, gold = self._make_linked_pair('446', '7446', name='اختبار قلب النوع')
+            cash_id, gold_id = cash.id, gold.id
+
+        with app.test_client() as c:
+            r = c.put(f'/api/accounts/{cash_id}',
+                      json={'account_number': '74460'}, headers=admin_headers)
+            assert r.status_code == 200, r.get_json()
+            body = r.get_json()
+            assert body['tracks_weight'] is True, 'يجب أن يصبح True بعد تغيير الرقم لـ 7xxx'
+
+        with app.app_context():
+            updated = Account.query.get(cash_id)
+            partner = Account.query.get(gold_id)
+            assert updated.memo_account_id is None, (
+                'الرابط يجب أن يُبطَل — الحسابان أصبحا كلاهما gold'
+            )
+            assert partner.memo_account_id is None, (
+                'الشريك يجب أن يُفسَخ ربطه أيضاً عبر unlink_account()'
+            )
+
+    def test_name_change_preserves_memo_link(self, admin_headers):
+        """تغيير الاسم فقط لا يُبطل رابط memo_account_id."""
+        with app.app_context():
+            cash, gold = self._make_linked_pair('445', '7445', name='اختبار تغيير الاسم')
+            cash_id, gold_id = cash.id, gold.id
+
+        with app.test_client() as c:
+            r = c.put(f'/api/accounts/{cash_id}',
+                      json={'name': 'اسم جديد'}, headers=admin_headers)
+            assert r.status_code == 200
+
+        with app.app_context():
+            updated = Account.query.get(cash_id)
+            assert updated.memo_account_id == gold_id, (
+                'تغيير الاسم يجب ألا يُبطل الرابط'
+            )
+
+    def test_number_change_same_type_preserves_memo_link(self, admin_headers):
+        """تغيير الرقم مع بقاء النوع نقدياً (non-7xxx) لا يُبطل الرابط."""
+        with app.app_context():
+            cash, gold = self._make_linked_pair('444', '7444', name='اختبار بقاء الرابط')
+            cash_id, gold_id = cash.id, gold.id
+
+        with app.test_client() as c:
+            # 444 → 4441 كلاهما non-7xxx، tracks_weight يبقى False
+            r = c.put(f'/api/accounts/{cash_id}',
+                      json={'account_number': '4441'}, headers=admin_headers)
+            assert r.status_code == 200
+
+        with app.app_context():
+            updated = Account.query.get(cash_id)
+            assert updated.memo_account_id == gold_id, (
+                'تغيير الرقم مع بقاء non-7xxx لا يُبطل الرابط'
+            )
+
+
+class TestRemoveParallel:
+    """POST /accounts/<id>/remove-parallel — عملية تجارية مستقلة:
+    تُزيل الحساب الموازي فقط مع الحفاظ على الحساب الأساسي."""
+
+    def _make_linked_pair(self, cash_num: str, gold_num: str, *, name: str):
+        from account_pair_service import link_accounts
+        cash = Account(account_number=cash_num, name=f'{name} نقدي',
+                       type='Asset', transaction_type='cash', tracks_weight=False)
+        gold = Account(account_number=gold_num, name=f'{name} ذهبي',
+                       type='Asset', transaction_type='gold', tracks_weight=True)
+        db.session.add_all([cash, gold])
+        db.session.flush()
+        link_accounts(cash, gold, created_by='test')
+        db.session.commit()
+        return cash, gold
+
+    # ── happy path ────────────────────────────────────────────────────────────
+
+    def test_remove_parallel_deletes_gold_account(self, admin_headers):
+        """الحالة النظيفة: حساب نقدي مرتبط بذهبي، الذهبي بلا تبعيات."""
+        with app.app_context():
+            cash, gold = self._make_linked_pair('3881', '73881', name='إزالة موازي - سعيدة')
+            cash_id, gold_id = cash.id, gold.id
+
+        with app.test_client() as c:
+            r = c.post(f'/api/accounts/{cash_id}/remove-parallel',
+                       headers=admin_headers)
+            assert r.status_code == 200, r.get_json()
+            body = r.get_json()
+            assert body['result'] == 'success'
+            assert body['removed_parallel']['id'] == gold_id
+            assert body['removed_parallel']['account_number'] == '73881'
+
+        with app.app_context():
+            primary = Account.query.get(cash_id)
+            assert primary is not None, 'الحساب الأساسي يجب أن يبقى'
+            assert primary.memo_account_id is None, 'الرابط يجب أن يُفسَخ'
+            assert Account.query.get(gold_id) is None, 'الحساب الموازي يجب أن يُحذَف'
+
+    def test_remove_parallel_is_bidirectional_unlink(self, admin_headers):
+        """يتحقق من فسخ الربط من الطرفين (unlink_account() ثنائي الاتجاه)."""
+        with app.app_context():
+            cash, gold = self._make_linked_pair('3882', '73882', name='إزالة موازي - ثنائي')
+            cash_id, gold_id = cash.id, gold.id
+
+        with app.test_client() as c:
+            r = c.post(f'/api/accounts/{cash_id}/remove-parallel',
+                       headers=admin_headers)
+            assert r.status_code == 200
+
+        with app.app_context():
+            primary = Account.query.get(cash_id)
+            assert primary.memo_account_id is None
+            assert Account.query.get(gold_id) is None
+
+    # ── رفض — لا موازي ───────────────────────────────────────────────────────
+
+    def test_no_parallel_returns_404(self, admin_headers):
+        """حساب بدون memo_account_id → 404."""
+        with app.app_context():
+            solo = Account(account_number='3883', name='حساب منفرد اختبار',
+                           type='Asset', transaction_type='cash', tracks_weight=False)
+            db.session.add(solo)
+            db.session.commit()
+            solo_id = solo.id
+
+        with app.test_client() as c:
+            r = c.post(f'/api/accounts/{solo_id}/remove-parallel',
+                       headers=admin_headers)
+            assert r.status_code == 404
+            assert r.get_json()['error'] == 'NO_PARALLEL'
+
+    def test_nonexistent_account_returns_404(self, admin_headers):
+        """معرف حساب غير موجود → 404."""
+        with app.test_client() as c:
+            r = c.post('/api/accounts/999999987/remove-parallel',
+                       headers=admin_headers)
+            assert r.status_code == 404
+
+    # ── رفض — تبعيات الموازي ─────────────────────────────────────────────────
+
+    def test_parallel_with_je_lines_returns_409(self, admin_headers):
+        """الحساب الموازي له سطور قيد → 409 PARALLEL_HAS_JE_LINES."""
+        from models import JournalEntry, JournalEntryLine
+        import datetime
+
+        with app.app_context():
+            cash, gold = self._make_linked_pair('3884', '73884', name='موازي له قيود')
+            cash_id, gold_id = cash.id, gold.id
+
+            je = JournalEntry(date=datetime.date.today(), description='اختبار منع الإزالة')
+            db.session.add(je)
+            db.session.flush()
+            line = JournalEntryLine(journal_entry_id=je.id, account_id=gold_id,
+                                    debit_21k=1.0)
+            db.session.add(line)
+            db.session.commit()
+
+        with app.test_client() as c:
+            r = c.post(f'/api/accounts/{cash_id}/remove-parallel',
+                       headers=admin_headers)
+            assert r.status_code == 409
+            assert r.get_json()['error'] == 'PARALLEL_HAS_JE_LINES'
+
+        with app.app_context():
+            assert Account.query.get(cash_id) is not None, 'الحساب الأساسي يجب أن يبقى'
+            assert Account.query.get(gold_id) is not None, 'الحساب الموازي لا يُحذَف عند الرفض'
+            assert Account.query.get(cash_id).memo_account_id == gold_id, 'الرابط يجب أن يبقى'
+
+    def test_parallel_with_children_returns_409(self, admin_headers):
+        """الحساب الموازي له حسابات فرعية → 409 PARALLEL_HAS_CHILDREN."""
+        with app.app_context():
+            cash, gold = self._make_linked_pair('3885', '73885', name='موازي له أبناء')
+            cash_id, gold_id = cash.id, gold.id
+
+            child = Account(account_number='738851', name='حساب فرعي اختبار',
+                            type='Asset', transaction_type='gold',
+                            tracks_weight=True, parent_id=gold_id)
+            db.session.add(child)
+            db.session.commit()
+
+        with app.test_client() as c:
+            r = c.post(f'/api/accounts/{cash_id}/remove-parallel',
+                       headers=admin_headers)
+            assert r.status_code == 409
+            assert r.get_json()['error'] == 'PARALLEL_HAS_CHILDREN'
+
+        with app.app_context():
+            assert Account.query.get(gold_id) is not None
+            assert Account.query.get(cash_id).memo_account_id == gold_id
+
+    # ── atomicity ─────────────────────────────────────────────────────────────
+
+    def test_rejection_leaves_db_unchanged(self, admin_headers):
+        """عند الرفض، لا يتغير أي شيء في قاعدة البيانات (transactional rollback)."""
+        from models import JournalEntry, JournalEntryLine
+        import datetime
+
+        with app.app_context():
+            cash, gold = self._make_linked_pair('3886', '73886', name='اختبار ذرية')
+            cash_id, gold_id = cash.id, gold.id
+
+            je = JournalEntry(date=datetime.date.today(), description='اختبار atomicity')
+            db.session.add(je)
+            db.session.flush()
+            db.session.add(JournalEntryLine(journal_entry_id=je.id,
+                                             account_id=gold_id, debit_24k=2.5))
+            db.session.commit()
+            original_memo_id = cash.memo_account_id
+
+        with app.test_client() as c:
+            r = c.post(f'/api/accounts/{cash_id}/remove-parallel',
+                       headers=admin_headers)
+            assert r.status_code == 409
+
+        with app.app_context():
+            cash_after = Account.query.get(cash_id)
+            gold_after = Account.query.get(gold_id)
+            assert cash_after.memo_account_id == gold_id, 'الرابط يجب أن يبقى بعد الرفض'
+            assert gold_after is not None, 'الموازي يجب أن يبقى بعد الرفض'
+            assert gold_after.memo_account_id == cash_id, 'ربط الموازي يجب أن يبقى أيضاً'

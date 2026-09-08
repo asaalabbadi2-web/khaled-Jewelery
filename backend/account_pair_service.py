@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 
-from models import Account, AuditLog, db
+from models import Account, AuditLog, JournalEntryLine, db
 
 
 class AccountPairLinkError(ValueError):
@@ -144,3 +144,123 @@ def unlink_account(account: Account, *, created_by: str = 'system', auto_commit:
 
     if auto_commit:
         db.session.commit()
+
+
+# ─── إزالة الحساب الموازي ─────────────────────────────────────────────────────
+
+class AccountPairRemovalError(ValueError):
+    """تُرفع عند رفض إزالة الحساب الموازي. .code يُميّز سبب الرفض."""
+
+    def __init__(self, message: str, *, code: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _check_parallel_removable(account_id: int) -> None:
+    """يتحقق من خلو الحساب من أي تبعية تمنع حذفه.
+    يرفع AccountPairRemovalError فور اكتشاف أول تبعية.
+    """
+    from models import (AccountingMapping, Customer, Employee, Invoice,
+                        Office, SafeBox, Settings, Supplier, VoucherAccountLine)
+    from sqlalchemy import or_
+
+    if Account.query.filter_by(parent_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي له حسابات فرعية', code='PARALLEL_HAS_CHILDREN')
+    if JournalEntryLine.query.filter_by(account_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي له حركات محاسبية', code='PARALLEL_HAS_JE_LINES')
+    if VoucherAccountLine.query.filter_by(account_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي له حركات في سندات', code='PARALLEL_HAS_VOUCHER_LINES')
+    if Invoice.query.filter_by(wage_inventory_account_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي مستخدم في فواتير', code='PARALLEL_HAS_INVOICE_REF')
+    if SafeBox.query.filter_by(account_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي مرتبط بخزينة', code='PARALLEL_IS_SAFEBOX')
+    if AccountingMapping.query.filter_by(account_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي له ربط محاسبي تلقائي',
+            code='PARALLEL_HAS_ACCOUNTING_MAPPING')
+    settings = Settings.query.first()
+    if settings and (
+        settings.stones_pending_account_id == account_id
+        or settings.stones_display_revenue_account_id == account_id
+    ):
+        raise AccountPairRemovalError(
+            'الحساب الموازي مستخدم في إعدادات النظام',
+            code='PARALLEL_HAS_SYSTEM_CONFIG')
+    if Customer.query.filter(
+        or_(Customer.account_id == account_id,
+            Customer.account_category_id == account_id)
+    ).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي مرتبط بعميل', code='PARALLEL_HAS_ENTITY_LINK')
+    if Supplier.query.filter(
+        or_(Supplier.account_id == account_id,
+            Supplier.account_category_id == account_id)
+    ).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي مرتبط بمورد', code='PARALLEL_HAS_ENTITY_LINK')
+    if Office.query.filter_by(account_category_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي مرتبط بمكتب', code='PARALLEL_HAS_ENTITY_LINK')
+    if Employee.query.filter_by(account_id=account_id).first():
+        raise AccountPairRemovalError(
+            'الحساب الموازي مرتبط بموظف', code='PARALLEL_HAS_ENTITY_LINK')
+
+
+def remove_parallel_account(primary: Account, *, created_by: str = 'system') -> dict:
+    """يُزيل الحساب الموازي لـprimary مع الحفاظ على primary نفسه.
+
+    الترتيب (atomic — المُستدعي يتحكم في commit):
+      1. تحقق من وجود الموازي.
+      2. تحقق من خلوّه من أي تبعية.
+      3. unlink_account() → فسخ الربط الثنائي + AuditLog للفسخ.
+      4. حذف الموازي.
+      5. AuditLog إضافي لعملية الإزالة الكاملة.
+
+    Returns:
+        dict بمعلومات الحساب المحذوف: {id, account_number, name}.
+
+    Raises:
+        AccountPairRemovalError: عند أي رفض — .code يحمل سبب الرفض.
+    """
+    if primary.memo_account_id is None:
+        raise AccountPairRemovalError(
+            'لا يوجد حساب موازٍ لهذا الحساب', code='NO_PARALLEL')
+
+    parallel = Account.query.get(primary.memo_account_id)
+    if parallel is None:
+        raise AccountPairRemovalError(
+            'الحساب الموازي المرتبط غير موجود', code='PARALLEL_NOT_FOUND')
+
+    _check_parallel_removable(parallel.id)
+
+    removed_info = {
+        'id': parallel.id,
+        'account_number': parallel.account_number,
+        'name': parallel.name,
+    }
+
+    unlink_account(primary, created_by=created_by)
+    db.session.delete(parallel)
+
+    db.session.add(AuditLog(
+        user_name=created_by or 'system',
+        action='remove_parallel_account',
+        entity_type='Account',
+        entity_id=primary.id,
+        entity_number=primary.account_number,
+        details=json.dumps({
+            'primary_account_id': primary.id,
+            'primary_account_number': primary.account_number,
+            'removed_parallel_id': removed_info['id'],
+            'removed_parallel_number': removed_info['account_number'],
+            'removed_parallel_name': removed_info['name'],
+        }, ensure_ascii=False),
+        success=True,
+    ))
+
+    return removed_info

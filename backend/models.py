@@ -358,23 +358,22 @@ class Account(db.Model):
             existing.transaction_type = parallel_type
             existing.tracks_weight = bool(parallel_tracks_weight)
 
-            # ربط الحساب الموجود (مع ربط عكسي لضمان سهولة التنقل)
-            if self.transaction_type == 'cash':
-                # financial -> memo
-                self.memo_account_id = existing.id
-                existing.memo_account_id = self.id
-            else:
-                # memo -> financial
-                existing.memo_account_id = self.id
-                self.memo_account_id = existing.id
-
             # Keep parenting mirrored when possible.
             if parallel_parent_id and existing.parent_id != parallel_parent_id:
                 existing.parent_id = parallel_parent_id
+                db.session.add(existing)
+
+            # جميع كتابات memo_account_id تمر حصراً عبر link_accounts() —
+            # الطريق الوحيد المعتمد — لضمان تنظيف stale pointers و1:1 و Audit Log.
+            from account_pair_service import link_accounts as _link
+            if self.transaction_type == 'cash':
+                _link(self, existing, created_by='create_parallel_account')
+            else:
+                _link(existing, self, created_by='create_parallel_account')
 
             db.session.flush()
             return existing
-        
+
         # إنشاء الحساب الموازي
         parallel_account = Account(
             account_number=parallel_number,
@@ -384,23 +383,18 @@ class Account(db.Model):
             tracks_weight=parallel_tracks_weight,
             parent_id=parallel_parent_id
         )
-        
+
         db.session.add(parallel_account)
-        db.session.flush()
-        
-        # ربط الحسابين
+        db.session.flush()  # ضروري: link_accounts() يتطلب id لكلا الطرفين
+
+        # جميع كتابات memo_account_id تمر حصراً عبر link_accounts().
+        from account_pair_service import link_accounts as _link
         if self.transaction_type == 'cash':
-            # الحساب الأصلي مالي → الموازي وزني
-            self.memo_account_id = parallel_account.id
-            parallel_account.memo_account_id = self.id
+            _link(self, parallel_account, created_by='create_parallel_account')
         else:
-            # الحساب الأصلي وزني → الموازي مالي
-            # نربط الحساب المالي (الموازي) بالحساب الوزني (الأصلي)
-            parallel_account.memo_account_id = self.id
-            self.memo_account_id = parallel_account.id
-        
+            _link(parallel_account, self, created_by='create_parallel_account')
+
         db.session.flush()
-        
         return parallel_account
 
     def __repr__(self):
