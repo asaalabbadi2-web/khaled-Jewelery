@@ -54,6 +54,41 @@ class AppColors {
   static Color goldBackground20 = gold.withValues(alpha: 0.2);
   static Color goldBackground30 = gold.withValues(alpha: 0.3);
 
+  // ===== ألوان شجرة الحسابات =====
+
+  /// مدين — أخضر داكن
+  static const Color debit = Color(0xFF0F6E56);
+
+  /// دائن — أحمر داكن
+  static const Color credit = Color(0xFFA32D2D);
+
+  /// ذهبي محاسبي (الحسابات الوزنية، سهم التوسيع)
+  static const Color goldTone = Color(0xFFC9A84C);
+
+  /// خطوط شجرة التسلسل الهرمي
+  static const Color treeLine = Color(0xFFEBE3D0);
+
+  /// خلفية الحسابات التجميعية (Parent)
+  static const Color parentRowBg = Color(0xFFFAF7F0);
+
+  /// لون الحسابات المعطلة / النص الخافت
+  static const Color muted = Color(0xFF5F5E5A);
+
+  /// لون سهم التوسيع
+  static const Color expandArrow = Color(0xFFA89968);
+
+  // شارات أنواع الحسابات
+  static const Color assetBadgeBg    = Color(0xFFE1F5EE);
+  static const Color assetBadgeFg    = Color(0xFF0F6E56);
+  static const Color liabBadgeBg     = Color(0xFFFCEBEB);
+  static const Color liabBadgeFg     = Color(0xFFA32D2D);
+  static const Color equityBadgeBg   = Color(0xFFEEEDFE);
+  static const Color equityBadgeFg   = Color(0xFF534AB7);
+  static const Color revenueBadgeBg  = Color(0xFFEAF3DE);
+  static const Color revenueBadgeFg  = Color(0xFF3B6D11);
+  static const Color expenseBadgeBg  = Color(0xFFFAEEDA);
+  static const Color expenseBadgeFg  = Color(0xFF854F0B);
+
   // ===== Theme للـ AppBar الذهبي =====
 
   /// إعدادات AppBar الذهبي الافتراضية
