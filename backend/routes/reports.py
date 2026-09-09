@@ -34,6 +34,7 @@ from core.database import _db_has_column
 from core.dates import _parse_iso_date
 from auth_decorators import get_current_user, require_auth, require_permission
 
+from pricing.constants import SAR_USD_PEG, TROY_OZ_TO_GRAMS
 from pricing.karat_service import convert_to_main_karat, get_main_karat
 from accounting.mappings import get_account_id_by_number, get_account_id_for_mapping
 from core.settings import _get_settings_singleton
@@ -1378,7 +1379,7 @@ def get_inventory_status_report():
     price_reference_date = None
     if latest_price:
         try:
-            price_per_gram_24k = (float(latest_price.price or 0.0) / 31.1035) * 3.75
+            price_per_gram_24k = (float(latest_price.price or 0.0) / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
             price_reference_date = latest_price.date.isoformat() if latest_price.date else None
         except (TypeError, ValueError):
             price_per_gram_24k = None
@@ -4448,7 +4449,7 @@ def get_gold_price_history_report():
         .all()
     )
 
-    usd_to_sar_factor = 3.75 / 31.1035  # (USD → SAR) / grams per ounce
+    usd_to_sar_factor = SAR_USD_PEG / TROY_OZ_TO_GRAMS
 
     def usd_oz_to_sar_gram(value):
         if value in (None, 0):
@@ -4839,7 +4840,7 @@ def get_gold_position_report():
         })
 
     latest_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
-    usd_to_sar_per_gram = 3.75 / 31.1035
+    usd_to_sar_per_gram = SAR_USD_PEG / TROY_OZ_TO_GRAMS
     price_reference = None
     if latest_price and latest_price.price:
         per_gram_24k = round_weight(latest_price.price * usd_to_sar_per_gram)
@@ -4914,7 +4915,7 @@ def get_weight_based_income_statement():
         latest_gold_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
         live_gold_price_per_gram_24k = 0.0
         if latest_gold_price and latest_gold_price.price:
-            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
+            live_gold_price_per_gram_24k = (latest_gold_price.price / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
         if live_gold_price_per_gram_24k <= 0:
             live_gold_price_per_gram_24k = 400.0  # fallback يمنع القسمة على صفر
 
@@ -4928,7 +4929,7 @@ def get_weight_based_income_statement():
         latest_gold_price = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
         live_gold_price_per_gram_24k = 0.0
         if latest_gold_price and latest_gold_price.price:
-            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
+            live_gold_price_per_gram_24k = (latest_gold_price.price / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
         if live_gold_price_per_gram_24k <= 0:
             live_gold_price_per_gram_24k = 400.0  # قيمة احتياطية لضمان عدم القسمة على صفر
 
@@ -4945,7 +4946,7 @@ def get_weight_based_income_statement():
         gold_price_source = 'not_available'
         gold_price_updated_at = None
         if latest_gold_price and latest_gold_price.price:
-            live_gold_price_per_gram_24k = (latest_gold_price.price / 31.1035) * 3.75
+            live_gold_price_per_gram_24k = (latest_gold_price.price / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
             gold_price_source = 'database'
             gold_price_updated_at = latest_gold_price.date.isoformat() if latest_gold_price.date else None
         if live_gold_price_per_gram_24k <= 0:
@@ -5650,10 +5651,6 @@ def get_gram_profit_report():
 
         margin_per_gram = avg_sell_per_gram - avg_buy_per_gram
         trading_profit_cash = margin_per_gram * total_weight_sold
-        trading_profit_weight = (
-            trading_profit_cash / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
-        )
-
         # ══════════════════════════════════════════════════════════════════
         # الطبقات ② ③ ④ — من القيود اليومية على حسابات include_in_gram_profit
         # (مع وراثة: تفعيل الأب يشمل جميع أبنائه تلقائياً)
@@ -5693,10 +5690,21 @@ def get_gram_profit_report():
         #   741xx = مقابلات المبيعات الوزنية  (Layer ① → trading_profit)
         #   751xx = مقابلات تكلفة المبيعات الوزنية (Layer ① → avg_buy)
         # ونستثني أيضاً أي حساب عليه exclude_from_gram_profit=True
-        _counterpart_parent_accs = Account.query.filter(
+        _counterpart_roots = Account.query.filter(
             Account.account_number.in_(['741', '751'])
         ).all()
-        _counterpart_group_ids = {a.id for a in _counterpart_parent_accs}
+        # D-3 FIX: جمع كل المنحدرين بشكل مُعادي — الفلتر الضحل (parent_id) لا يرى الأحفاد
+        _counterpart_all_ids: set = {a.id for a in _counterpart_roots}
+
+        def _collect_counterpart_descendants(parent_ids: set) -> None:
+            if not parent_ids:
+                return
+            children = Account.query.filter(Account.parent_id.in_(parent_ids)).all()
+            new_ids = {ch.id for ch in children if ch.id not in _counterpart_all_ids}
+            _counterpart_all_ids.update(new_ids)
+            _collect_counterpart_descendants(new_ids)
+
+        _collect_counterpart_descendants({a.id for a in _counterpart_roots})
 
         weight_memo_accs = (
             Account.query
@@ -5704,11 +5712,7 @@ def get_gram_profit_report():
                 Account.account_number.like('74%'),
                 Account.account_number.like('75%'),
             ))
-            .filter(Account.id.notin_(_counterpart_group_ids))
-            .filter(or_(
-                Account.parent_id.is_(None),
-                Account.parent_id.notin_(_counterpart_group_ids),
-            ))
+            .filter(Account.id.notin_(_counterpart_all_ids))
             .filter(func.coalesce(Account.exclude_from_gram_profit, False) == False)
             .all()
         )
@@ -5868,42 +5872,46 @@ def get_gram_profit_report():
             [x for x in extra_revenue_details if x['type'] == 'cash'],   'cash_amount')
         extra_revenue_details = extra_revenue_details_w + extra_revenue_details_c
 
-        # تحويل الإيراد النقدي إلى وزن
-        extra_revenue_cash_as_weight = (
-            extra_revenue_cash / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
-        )
-        # تحويل المصروف النقدي إلى وزن
-        expense_cash_as_weight = (
-            expense_cash_total / avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
-        )
-
-        # إجمالي الطبقة ② (وزني + نقدي محوّل)
-        total_extra_revenue_weight = extra_revenue_weight + extra_revenue_cash_as_weight
-        # إجمالي الطبقة ③
+        # إجمالي الطبقة ③ مستقلة عن avg_buy
         total_expense_weight_direct = expense_weight_direct
-        # إجمالي الطبقة ④ (محوّل لوزن)
-        total_expense_cash_weight = expense_cash_as_weight
-
-        # ══════════════════════════════════════════════════════════════════
-        # النتيجة النهائية
-        # ══════════════════════════════════════════════════════════════════
-
+        # ربح المتاجرة النقدي (مستقل عن avg_buy)
         gross_profit = trading_profit_cash
-        gross_profit_weight = trading_profit_weight
 
-        net_profit_weight = (
-            trading_profit_weight           # ① ربح المتاجرة
-            + total_extra_revenue_weight    # ② إيرادات إضافية
-            - total_expense_weight_direct   # ③ مصاريف وزنية
-            - total_expense_cash_weight     # ④ مصاريف نقدية (محوّلة)
-        )
+        # ══════════════════════════════════════════════════════════════════
+        # الحقول المشتقة من avg_buy — null عند avg_buy=0  (ADR-024 §D-1)
+        # ══════════════════════════════════════════════════════════════════
+        if avg_buy_per_gram > 0:
+            trading_profit_weight        = trading_profit_cash / avg_buy_per_gram
+            extra_revenue_cash_as_weight = extra_revenue_cash / avg_buy_per_gram
+            expense_cash_as_weight       = expense_cash_total / avg_buy_per_gram
+            total_extra_revenue_weight   = extra_revenue_weight + extra_revenue_cash_as_weight
+            total_expense_cash_weight    = expense_cash_as_weight
+            gross_profit_weight          = trading_profit_weight
+            net_profit_weight            = (
+                trading_profit_weight          # ① ربح المتاجرة
+                + total_extra_revenue_weight   # ② إيرادات إضافية
+                - total_expense_weight_direct  # ③ مصاريف وزنية
+                - total_expense_cash_weight    # ④ مصاريف نقدية (محوّلة)
+            )
+            net_profit_cash      = net_profit_weight * avg_buy_per_gram
+            net_margin_pct       = (net_profit_cash / total_sales_cash * 100) if total_sales_cash > 0 else 0.0
+            total_oper_expenses  = expense_cash_total + expense_weight_direct * avg_buy_per_gram
+            unavailable_reason   = None
+        else:
+            trading_profit_weight        = None
+            extra_revenue_cash_as_weight = None
+            expense_cash_as_weight       = None
+            total_extra_revenue_weight   = None
+            total_expense_cash_weight    = None
+            gross_profit_weight          = None
+            net_profit_weight            = None
+            net_profit_cash              = None
+            net_margin_pct               = None
+            total_oper_expenses          = None
+            unavailable_reason           = 'no_cash_purchases'
 
-        # ربح نقدي معادل (للعرض)
-        net_profit_cash = net_profit_weight * avg_buy_per_gram if avg_buy_per_gram > 0 else 0.0
-
-        net_margin_pct = (
-            (net_profit_cash / total_sales_cash * 100) if total_sales_cash > 0 else 0.0
-        )
+        def _rn(v, d=3):
+            return round(v, d) if v is not None else None
 
         return jsonify({
             'start_date': start_date_str,
@@ -5920,7 +5928,7 @@ def get_gram_profit_report():
             'avg_buy_per_gram': round(avg_buy_per_gram, 2),
             'margin_per_gram': round(margin_per_gram, 2),
             'trading_profit_cash': round(trading_profit_cash, 2),
-            'trading_profit_weight': round(trading_profit_weight, 3),
+            'trading_profit_weight': _rn(trading_profit_weight, 3),
             'total_sales_cash': round(total_sales_cash, 2),
             'total_purchases_cash': round(total_all_purchases_cash, 2),
             'customer_purchases_cash': round(total_purchases_cash, 2),
@@ -5932,8 +5940,8 @@ def get_gram_profit_report():
             # الطبقة ② — إيرادات إضافية
             'extra_revenue_weight': round(extra_revenue_weight, 3),
             'extra_revenue_cash': round(extra_revenue_cash, 2),
-            'extra_revenue_cash_as_weight': round(extra_revenue_cash_as_weight, 3),
-            'total_extra_revenue_weight': round(total_extra_revenue_weight, 3),
+            'extra_revenue_cash_as_weight': _rn(extra_revenue_cash_as_weight, 3),
+            'total_extra_revenue_weight': _rn(total_extra_revenue_weight, 3),
             'extra_revenue_details': extra_revenue_details,
 
             # الطبقة ③ — مصاريف وزنية مباشرة
@@ -5942,22 +5950,25 @@ def get_gram_profit_report():
 
             # الطبقة ④ — مصاريف نقدية (محوّلة)
             'expense_cash_total': round(expense_cash_total, 2),
-            'expense_cash_as_weight': round(total_expense_cash_weight, 3),
+            'expense_cash_as_weight': _rn(total_expense_cash_weight, 3),
             'expense_cash_details': expense_cash_details,
 
             # النتيجة النهائية
             'gross_profit': round(gross_profit, 2),
-            'gross_profit_weight': round(gross_profit_weight, 3),
-            'net_profit': round(net_profit_cash, 2),
-            'net_profit_weight': round(net_profit_weight, 3),
-            'net_margin_pct': round(net_margin_pct, 2),
+            'gross_profit_weight': _rn(gross_profit_weight, 3),
+            'net_profit': _rn(net_profit_cash, 2),
+            'net_profit_weight': _rn(net_profit_weight, 3),
+            'net_margin_pct': _rn(net_margin_pct, 2),
 
             # حقول توافقية (backward compat)
             'manufacturing_wages': round(expense_cash_total, 2),
             'other_expenses': 0.0,
-            'total_operating_expenses': round(expense_cash_total + expense_weight_direct * avg_buy_per_gram, 2),
-            'profit_after_wages': round(net_profit_cash, 2),
-            'profit_after_wages_weight': round(net_profit_weight, 3),
+            'total_operating_expenses': _rn(total_oper_expenses, 2),
+            'profit_after_wages': _rn(net_profit_cash, 2),
+            'profit_after_wages_weight': _rn(net_profit_weight, 3),
+
+            # سبب عدم التوفر (None إن كان المقياس محدداً)
+            'unavailable_reason': unavailable_reason,
         }), 200
 
     except Exception as e:
@@ -7026,7 +7037,7 @@ def get_admin_dashboard():
     try:
         latest = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
         if latest and latest.price:
-            spot_price_24k_per_gram = (float(latest.price) / 31.1035) * 3.75
+            spot_price_24k_per_gram = (float(latest.price) / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
             spot_price_timestamp = latest.date.isoformat() if latest.date else None
     except Exception:
         spot_price_24k_per_gram = None
@@ -7394,7 +7405,7 @@ def get_admin_dashboard():
             .first()
         )
         if yesterday_price and yesterday_price.price and spot_price_24k_per_gram:
-            yesterday_spot = (float(yesterday_price.price) / 31.1035) * 3.75
+            yesterday_spot = (float(yesterday_price.price) / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
             if yesterday_spot > 0:
                 gold_price_change_pct = ((spot_price_24k_per_gram - yesterday_spot) / yesterday_spot) * 100
     except Exception:
@@ -7919,6 +7930,45 @@ def get_admin_dashboard():
         'sensitive_operations': sensitive_operations,
         'sales_purchases_summary': sales_purchases_summary,
     }), 200
+
+@reports_bp.route('/reports/gold_acquisition_reconciliation', methods=['GET'])
+@require_permission('reports.financial')
+def get_gold_acquisition_reconciliation():
+    """
+    شراء الذهب الشهري — تسوية نظام الفواتير مقابل القيود المحاسبية.
+
+    Q1 (بسط avg_buy):  customer_purchases + settlement_purchases − customer_buy_returns
+    Q2 — مسارَان:
+      A (مرتبط بفواتير):  sum(cash_credit − cash_debit) لقيود تشير إلى فواتير Q1
+      B (قائم على حسابات): قيود في الفترة تُدين حسابات ذهب (tracks_weight) لكنها خارج نطاق A
+      → يكشف: سند صرف مباشر، قيد يدوي، أو فاتورة مصنّفة خطأً
+
+    التباين = Q2(A+B) − Q1
+      إيجابي → نقدية خرجت لاقتناء ذهب خارج مسار avg_buy (فاتورة ناقصة أو قيد يدوي)
+      سالب   → فواتير بلا قيود مُرحَّلة
+      صفر    → النظامان متسقان
+    """
+    try:
+        start_date_str = request.args.get('start_date')
+        end_date_str = request.args.get('end_date')
+
+        if not start_date_str or not end_date_str:
+            return jsonify({'error': 'يجب تحديد start_date و end_date'}), 400
+
+        start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date_str, '%Y-%m-%d') + timedelta(days=1)
+
+        from services.gold_acquisition_reconciliation import compute as _reconcile
+        result = _reconcile(start_dt, end_dt)
+
+        return jsonify({
+            'period': {'start': start_date_str, 'end': end_date_str},
+            **result,
+        }), 200
+
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
 
 def _time_ago(dt, now):
     """Helper to format time ago in Arabic."""

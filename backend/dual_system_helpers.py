@@ -36,6 +36,7 @@ Note: These functions must be called from within a Flask app context
 """
 
 from config import MAIN_KARAT as CONFIG_MAIN_KARAT, WEIGHT_SUPPORT_ACCOUNTS
+from pricing.constants import SAR_USD_PEG, TROY_OZ_TO_GRAMS
 
 _MAIN_KARAT_CACHE = None
 
@@ -297,10 +298,7 @@ def create_dual_journal_entry(journal_entry_id, account_id, cash_debit=0, cash_c
             if not latest_price:
                 raise Exception("لا يوجد سعر ذهب محفوظ")
             
-            # 🔧 FIXED: تحويل سعر الأونصة إلى سعر الجرام بالريال
-            # 1 أونصة = 31.1035 جرام
-            # 1 دولار = 3.75 ريال سعودي
-            price_per_gram_24k_sar = (latest_price.price / 31.1035) * 3.75
+            price_per_gram_24k_sar = (latest_price.price / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
             
             # الحصول على العيار الرئيسي من الإعدادات
             settings = Settings.query.first()

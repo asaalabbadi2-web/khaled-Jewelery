@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+
+from pricing.constants import SAR_USD_PEG, TROY_OZ_TO_GRAMS
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 
@@ -217,8 +219,7 @@ def _get_price_per_gram_24k_sar(db_session) -> float | None:
         latest = db_session.query(GoldPrice).order_by(GoldPrice.date.desc()).first()
         if not latest or not latest.price:
             return None
-        # 1 oz = 31.1035g, 1 USD = 3.75 SAR
-        return (float(latest.price) / 31.1035) * 3.75
+        return (float(latest.price) / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
     except Exception:
         return None
 

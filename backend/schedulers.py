@@ -55,12 +55,18 @@ def _start_safebox_reconciliation(app):
     return start_safebox_reconciliation_scheduler(app)
 
 
+def _start_gold_acquisition_reconciliation(app):
+    from gold_acquisition_reconciliation_scheduler import start_gold_acquisition_reconciliation_scheduler
+    return start_gold_acquisition_reconciliation_scheduler(app)
+
+
 _SCHEDULER_STARTERS: dict[str, object] = {
-    'clearing_settlement':   _start_clearing_settlement,
-    'bonus':                 _start_bonus,
-    'gold_price':            _start_gold_price,
-    'backup':                _start_backup,
-    'safebox_reconciliation': _start_safebox_reconciliation,
+    'clearing_settlement':              _start_clearing_settlement,
+    'bonus':                            _start_bonus,
+    'gold_price':                       _start_gold_price,
+    'backup':                           _start_backup,
+    'safebox_reconciliation':           _start_safebox_reconciliation,
+    'gold_acquisition_reconciliation':  _start_gold_acquisition_reconciliation,
 }
 
 # ── Public API ────────────────────────────────────────────────────────────────

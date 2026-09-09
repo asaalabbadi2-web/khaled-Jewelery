@@ -5,6 +5,8 @@ Extracted from routes.py to break the circular dependency:
 """
 from __future__ import annotations
 
+from .constants import SAR_USD_PEG, TROY_OZ_TO_GRAMS
+
 
 def get_main_karat() -> int:
     from models import Settings
@@ -28,7 +30,7 @@ def get_current_gold_price() -> dict:
     latest = GoldPrice.query.order_by(GoldPrice.date.desc()).first()
     if latest and latest.price:
         try:
-            price_per_gram_24k = (latest.price / 31.1035) * 3.75
+            price_per_gram_24k = (latest.price / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
             updated_at = latest.date.isoformat() if latest.date else None
         except Exception as exc:
             print(f"⚠️ Failed to normalize gold price: {exc}")

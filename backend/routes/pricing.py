@@ -17,6 +17,7 @@ from gold_costing_service import GoldCostingService, ScrapCostingService
 from gold_price import fetch_gold_price, save_gold_price
 from models import GoldPrice, InventoryCostingConfig, Invoice, db
 from utils import get_main_karat
+from pricing.constants import SAR_USD_PEG, TROY_OZ_TO_GRAMS
 
 pricing_bp = Blueprint('pricing', __name__)
 
@@ -56,7 +57,7 @@ def get_gold_price():
         try:
             price_usd = fetch_gold_price()
             if price_usd:
-                price_per_gram_sar = (price_usd / 31.1035) * 3.75
+                price_per_gram_sar = (price_usd / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
                 save_gold_price(current_app._get_current_object(), price_usd)
                 print(f'[SUCCESS] تم جلب وحفظ سعر جديد: ${price_usd}/أونصة = {price_per_gram_sar:.2f} ر.س/جم')
                 main_karat = get_main_karat()
@@ -74,7 +75,7 @@ def get_gold_price():
         except Exception as e:
             print(f'[ERROR] فشل جلب السعر من API: {e}')
             if latest:
-                price_per_gram_sar = (latest.price / 31.1035) * 3.75
+                price_per_gram_sar = (latest.price / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
                 main_karat = get_main_karat()
                 return jsonify({
                     'price_24k': round(price_per_gram_sar, 2),
@@ -89,7 +90,7 @@ def get_gold_price():
                 })
 
     if latest:
-        price_per_gram_sar = (latest.price / 31.1035) * 3.75
+        price_per_gram_sar = (latest.price / TROY_OZ_TO_GRAMS) * SAR_USD_PEG
         main_karat = get_main_karat()
         return jsonify({
             'price_24k': round(price_per_gram_sar, 2),
