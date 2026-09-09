@@ -1811,6 +1811,117 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         break;
     }
 
+    // unavailable_reason هو مصدر الحقيقة — يُفحص قبل isAllZero
+    final unavailableReason = g['unavailable_reason'] as String?;
+    if (unavailableReason != null) {
+      final reasonText = {
+        'no_cash_purchases': isArabic
+            ? 'لا مشتريات نقدية في هذه الفترة'
+            : 'No cash purchases in this period',
+        'avg_buy_out_of_range': isArabic
+            ? 'متوسط الشراء خارج النطاق المتوقع'
+            : 'Avg buy out of expected range',
+      }[unavailableReason] ??
+          (isArabic ? 'بيانات غير كافية' : 'Insufficient data');
+      final wSold = weightSold.toStringAsFixed(3);
+      final salesStr = _formatCurrency(gd('total_sales_cash'));
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: _s(16), vertical: _s(14)),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: AlignmentDirectional.centerStart,
+            end: AlignmentDirectional.centerEnd,
+            colors: [
+              AppColors.primaryGold.withValues(alpha: 0.10),
+              AppColors.primaryGold.withValues(alpha: 0.04),
+              theme.cardColor,
+            ],
+          ),
+          borderRadius: BorderRadius.circular(_s(14)),
+          border: Border.all(
+            color: AppColors.primaryGold.withValues(alpha: 0.20),
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: _s(48),
+              height: _s(48),
+              decoration: BoxDecoration(
+                color: Colors.orange.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.warning_amber_rounded,
+                color: Colors.orange,
+                size: _s(24),
+              ),
+            ),
+            SizedBox(width: _s(12)),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Text(
+                        isArabic ? 'ربح الجرام الذهبي' : 'Gold Gram Profit',
+                        style: TextStyle(
+                          fontSize: _s(13.5),
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.primaryGold,
+                        ),
+                      ),
+                      SizedBox(width: _s(8)),
+                      Container(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: _s(7),
+                          vertical: _s(2),
+                        ),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryGold.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(_s(20)),
+                        ),
+                        child: Text(
+                          periodLabel,
+                          style: TextStyle(
+                            fontSize: _s(9.5),
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.primaryGold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: _s(3)),
+                  Text(
+                    isArabic
+                        ? 'غير محسوب — $reasonText'
+                        : 'Unavailable — $reasonText',
+                    style: TextStyle(
+                      fontSize: _s(11),
+                      color: Colors.orange.shade700,
+                    ),
+                  ),
+                  SizedBox(height: _s(4)),
+                  Text(
+                    isArabic
+                        ? '$wSold جم مباعة  •  $salesStr مبيعات'
+                        : '$wSold g sold  •  $salesStr sales',
+                    style: TextStyle(
+                      fontSize: _s(11),
+                      color: theme.hintColor,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     if (isAllZero) {
       return Container(
         padding: EdgeInsets.symmetric(horizontal: _s(16), vertical: _s(14)),

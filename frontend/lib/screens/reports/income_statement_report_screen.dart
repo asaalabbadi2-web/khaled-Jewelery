@@ -694,6 +694,136 @@ class _IncomeStatementReportScreenState
       return 0.0;
     }
 
+    // unavailable_reason هو مصدر الحقيقة — يُفحص قبل أي استخدام للحقول المشتقة من avg_buy
+    final unavailableReason = g['unavailable_reason'] as String?;
+    if (unavailableReason != null) {
+      final reasonLabel = {
+        'no_cash_purchases': isArabic
+            ? 'لا مشتريات نقدية في هذه الفترة'
+            : 'No cash purchases in this period',
+        'avg_buy_out_of_range': isArabic
+            ? 'متوسط الشراء خارج النطاق المتوقع'
+            : 'Avg buy price out of expected range',
+      }[unavailableReason] ??
+          (isArabic
+              ? 'بيانات غير كافية لحساب ربح الجرام'
+              : 'Insufficient data to compute gram profit');
+      final mainKarat = g['main_karat']?.toString() ?? '21';
+      final wSold = val('weight_sold').toStringAsFixed(3);
+      return Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [const Color(0xFF1D1800), const Color(0xFF0F0E00)]
+                : [const Color(0xFFFFFDE7), const Color(0xFFFFF8E1)],
+          ),
+          border: Border.all(color: goldColor.withOpacity(0.3), width: 1.5),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.warning_amber_rounded,
+                        color: Colors.orange, size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          isArabic ? 'ربح الجرام الذهبي' : 'Gold Gram Profit',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: isDark ? Colors.white : Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            isArabic ? 'غير محسوب' : 'Unavailable',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.orange,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                reasonLabel,
+                style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+              ),
+              const SizedBox(height: 16),
+              _GramStatRow(
+                items: [
+                  _GramStat(
+                    label: isArabic ? 'إجمالي المبيعات' : 'Total Sales',
+                    value: _formatCurrency(val('total_sales_cash')),
+                    icon: Icons.receipt,
+                    color: Colors.green.shade700,
+                    isDark: isDark,
+                  ),
+                  _GramStat(
+                    label: isArabic
+                        ? 'وزن مباع ($mainKarat)'
+                        : 'Sold (${mainKarat}k)',
+                    value: '$wSold ${isArabic ? "جم" : "g"}',
+                    icon: Icons.trending_up,
+                    color: Colors.blue,
+                    isDark: isDark,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              _GramStatRow(
+                items: [
+                  _GramStat(
+                    label: isArabic ? 'متوسط بيع/جم' : 'Avg sell/g',
+                    value: _formatCurrency(val('avg_sell_per_gram')),
+                    icon: Icons.sell,
+                    color: Colors.green,
+                    isDark: isDark,
+                  ),
+                  _GramStat(
+                    label: isArabic ? 'متوسط شراء/جم' : 'Avg buy/g',
+                    value: isArabic ? '—' : '—',
+                    icon: Icons.shopping_bag,
+                    color: Colors.orange,
+                    isDark: isDark,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final weightSold = val('weight_sold');
     final weightBought = val('weight_purchased');
     final avgSell = val('avg_sell_per_gram');

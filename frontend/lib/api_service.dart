@@ -1742,15 +1742,17 @@ class ApiService {
   }
 
   // Account Methods
-  Future<List<dynamic>> getAccounts() async {
+  Future<List<dynamic>> getAccounts({bool skipBalances = false}) async {
     try {
-      final response = await _authedGet(Uri.parse('$_baseUrl/accounts'))
-          .timeout(
-            const Duration(seconds: 10),
-            onTimeout: () {
-              throw Exception('Connection timeout - تأكد من تشغيل Backend');
-            },
-          );
+      final uri = Uri.parse('$_baseUrl/accounts').replace(
+        queryParameters: skipBalances ? {'skip_balances': '1'} : null,
+      );
+      final response = await _authedGet(uri).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          throw Exception('Connection timeout - تأكد من تشغيل Backend');
+        },
+      );
 
       if (response.statusCode == 200) {
         return json.decode(utf8.decode(response.bodyBytes));

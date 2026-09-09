@@ -826,7 +826,7 @@ class _AddVoucherScreenState extends State<AddVoucherScreen> {
         _apiService.getCustomers(),
         _apiService.getSuppliers(),
         _apiService.getEmployees(isActive: true, perPage: 200),
-        _apiService.getAccounts(),
+        _apiService.getAccounts(skipBalances: true),
         _apiService.getAppConfig(),
       ]);
 

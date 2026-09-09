@@ -5,7 +5,7 @@ import json
 from datetime import datetime, date, timedelta
 
 from flask import Blueprint, g, jsonify, request
-from sqlalchemy import String, cast, func, or_
+from sqlalchemy import String, cast, case, func, or_
 from sqlalchemy.orm import joinedload
 
 from models import (
@@ -295,50 +295,62 @@ def get_vouchers():
                 )
             )
 
-    filtered_vouchers = query.order_by(None).all()
+    # ── Summary via SQL aggregates (no full .all()) ──────────────────────
+    # Clone the query to a scalar aggregate before adding ORDER BY / pagination.
+    summary_q = query.order_by(None).with_entities(
+        func.count(Voucher.id),
+        func.sum(case((Voucher.voucher_type == 'receipt', 1), else_=0)),
+        func.sum(case((Voucher.voucher_type == 'payment', 1), else_=0)),
+        func.sum(case((Voucher.voucher_type == 'adjustment', 1), else_=0)),
+        func.sum(case((func.lower(func.coalesce(Voucher.status, '')) == 'pending', 1), else_=0)),
+        func.sum(case((func.lower(func.coalesce(Voucher.status, '')) == 'approved', 1), else_=0)),
+        func.sum(case((func.lower(func.coalesce(Voucher.status, '')) == 'cancelled', 1), else_=0)),
+        func.sum(case((func.lower(func.coalesce(Voucher.status, '')) == 'rejected', 1), else_=0)),
+        func.sum(func.coalesce(Voucher.amount_cash, 0.0)),
+        func.sum(func.coalesce(Voucher.amount_gold, 0.0)),
+    )
+    sr = summary_q.one()
+    current_summary = {
+        'total_vouchers': int(sr[0] or 0),
+        'receipt_count': int(sr[1] or 0),
+        'payment_count': int(sr[2] or 0),
+        'adjustment_count': int(sr[3] or 0),
+        'pending_count': int(sr[4] or 0),
+        'approved_count': int(sr[5] or 0),
+        'cancelled_count': int(sr[6] or 0),
+        'rejected_count': int(sr[7] or 0),
+        'total_cash': round(float(sr[8] or 0.0), 2),
+        'total_gold': round(float(sr[9] or 0.0), 6),
+        'total_gold_main_karat': 0.0,  # gold_main_karat requires per-karat conversion; omit in fast path
+    }
 
-    current_summary = _empty_summary()
-    creator_names = set()
-    party_names = set()
-    for voucher in filtered_vouchers:
-        current_summary['total_vouchers'] += 1
-        if voucher.voucher_type == 'receipt':
-            current_summary['receipt_count'] += 1
-        elif voucher.voucher_type == 'payment':
-            current_summary['payment_count'] += 1
-        elif voucher.voucher_type == 'adjustment':
-            current_summary['adjustment_count'] += 1
+    # ── Distinct creators (one lightweight query) ────────────────────────
+    creator_rows = (
+        query.order_by(None)
+        .with_entities(Voucher.created_by)
+        .distinct()
+        .all()
+    )
+    creator_names = sorted({(r[0] or '').strip() for r in creator_rows if (r[0] or '').strip()})
+    available_creators = [{'name': n} for n in creator_names]
 
-        normalized_status = (voucher.status or '').strip().lower()
-        if normalized_status == 'pending':
-            current_summary['pending_count'] += 1
-        elif normalized_status == 'approved':
-            current_summary['approved_count'] += 1
-        elif normalized_status == 'cancelled':
-            current_summary['cancelled_count'] += 1
-        elif normalized_status == 'rejected':
-            current_summary['rejected_count'] += 1
-
-        current_summary['total_cash'] += float(voucher.amount_cash or 0.0)
-
-        gold_summary = voucher._gold_display_summary()
-        current_summary['total_gold'] += float(gold_summary.get('amount_gold_display') or 0.0)
-        current_summary['total_gold_main_karat'] += float(gold_summary.get('amount_gold_main_karat') or 0.0)
-
-        creator_name = (voucher.created_by or '').strip()
-        if creator_name:
-            creator_names.add(creator_name)
-
-        party_name = _resolve_party_name(voucher)
-        if party_name:
-            party_names.add(party_name)
-
-    current_summary['total_cash'] = round(float(current_summary['total_cash']), 2)
-    current_summary['total_gold'] = round(float(current_summary['total_gold']), 6)
-    current_summary['total_gold_main_karat'] = round(float(current_summary['total_gold_main_karat']), 6)
-
-    available_creators = [{'name': name} for name in sorted(creator_names)]
-    available_parties = [{'name': name} for name in sorted(party_names)]
+    # ── Distinct party names (COALESCE over joined tables) ───────────────
+    party_q = _ensure_party_joins(query.order_by(None))
+    party_rows = (
+        party_q
+        .with_entities(
+            func.coalesce(
+                func.nullif(Customer.name, ''),
+                func.nullif(Supplier.name, ''),
+                func.nullif(Employee.name, ''),
+                func.nullif(Voucher.party_name, ''),
+            )
+        )
+        .distinct()
+        .all()
+    )
+    party_names = sorted({(r[0] or '').strip() for r in party_rows if (r[0] or '').strip()})
+    available_parties = [{'name': n} for n in party_names]
 
     created_sort_expr = func.coalesce(Voucher.created_at, Voucher.date)
 
@@ -800,11 +812,53 @@ def create_voucher():
         if upsert_error is not None:
             db.session.rollback()
             return upsert_error
-        
+
+        # ── Auto-approve when voucher_auto_post is ON ──────────────────────
+        try:
+            from core.settings import _get_settings_singleton
+            _post_settings = _get_settings_singleton(create_if_missing=False)
+            _should_auto_post = bool(
+                _post_settings and getattr(_post_settings, 'voucher_auto_post', False)
+            )
+        except Exception:
+            _should_auto_post = False
+
+        if _should_auto_post:
+            try:
+                approved_by = data.get('created_by', 'system')
+                journal_entry = create_journal_entry_from_voucher(voucher)
+                journal_entry.is_posted = True
+                journal_entry.posted_at = datetime.now()
+                journal_entry.posted_by = approved_by
+                db.session.flush()
+
+                voucher.status = 'approved'
+                voucher.approved_at = datetime.now()
+                voucher.approved_by = approved_by
+                voucher.journal_entry_id = journal_entry.id
+
+                _append_safe_transactions_for_voucher(voucher, created_by=approved_by)
+
+                try:
+                    from posting_routes import _create_and_post_karat_diff_entries_for_voucher
+                    _create_and_post_karat_diff_entries_for_voucher(voucher, approved_by)
+                except Exception:
+                    pass
+
+                try:
+                    _update_account_balances_from_journal_lines(journal_entry.lines or [])
+                except Exception:
+                    pass
+            except Exception as _ae:
+                # auto-approve failed — leave voucher as pending, don't fail creation
+                import traceback as _tb
+                _tb.print_exc()
+                print(f'[create_voucher] auto-approve failed, left as pending: {_ae}')
+
         db.session.commit()
-        
+
         return jsonify(voucher.to_dict()), 201
-        
+
     except Exception as e:
         db.session.rollback()
         import traceback

@@ -578,42 +578,60 @@ def get_account_statement_merged_by_number(account_number):
 @accounts_bp.route('/accounts', methods=['GET'])
 def get_accounts():
     """الحصول على جميع الحسابات مع دعم الهيكل الهرمي (parent-child)"""
+    # ?skip_balances=1 — skip expensive live-balance computation (for pickers/selects)
+    skip_balances = request.args.get('skip_balances', '0') in ('1', 'true', 'yes')
+
     accounts = Account.query.all()
 
-    live_by_id = live_balances_by_account_ids([a.id for a in accounts])
+    live_by_id = {} if skip_balances else live_balances_by_account_ids([a.id for a in accounts])
+
+    # Build safe_box lookup in one query instead of N per-account queries
+    if not skip_balances:
+        all_account_ids = [a.id for a in accounts]
+        _safe_boxes_by_account: dict = {}
+        try:
+            for sb in SafeBox.query.filter(SafeBox.account_id.in_(all_account_ids)).all():
+                aid = int(sb.account_id)
+                # keep the first active one per account (ordered by is_active desc, id asc)
+                if aid not in _safe_boxes_by_account or (
+                    not _safe_boxes_by_account[aid].is_active and sb.is_active
+                ):
+                    _safe_boxes_by_account[aid] = sb
+        except Exception:
+            _safe_boxes_by_account = {}
+
+        # Build parent/child lookup maps to avoid N+1 per account
+        _parent_map: dict = {a.id: a for a in accounts}
+    else:
+        _safe_boxes_by_account = {}
+        _parent_map = {}
 
     result = []
     for acc in accounts:
         account_dict = acc.to_dict()
 
-        try:
-            sb = (
-                SafeBox.query.filter(SafeBox.account_id == acc.id)
-                .order_by(SafeBox.is_active.desc(), SafeBox.id.asc())
-                .first()
-            )
-        except Exception:
-            sb = None
-        if sb is not None:
-            try:
-                account_dict['safe_box_id'] = int(sb.id)
-            except Exception:
-                account_dict['safe_box_id'] = None
-            try:
-                account_dict['safe_box_type'] = (getattr(sb, 'safe_type', None) or None)
-            except Exception:
-                account_dict['safe_box_type'] = None
-            try:
-                account_dict['safe_box_name'] = (getattr(sb, 'name', None) or None)
-            except Exception:
-                account_dict['safe_box_name'] = None
+        if not skip_balances:
+            sb = _safe_boxes_by_account.get(int(acc.id))
+            if sb is not None:
+                try:
+                    account_dict['safe_box_id'] = int(sb.id)
+                except Exception:
+                    account_dict['safe_box_id'] = None
+                try:
+                    account_dict['safe_box_type'] = (getattr(sb, 'safe_type', None) or None)
+                except Exception:
+                    account_dict['safe_box_type'] = None
+                try:
+                    account_dict['safe_box_name'] = (getattr(sb, 'name', None) or None)
+                except Exception:
+                    account_dict['safe_box_name'] = None
 
         live = live_by_id.get(int(acc.id)) if getattr(acc, 'id', None) is not None else None
         live = live if isinstance(live, dict) else {'cash': 0.0, '18k': 0.0, '21k': 0.0, '22k': 0.0, '24k': 0.0}
         account_dict['balances'] = {
             'cash': round(float(live.get('cash') or 0.0), 2),
         }
-        if bool(getattr(acc, 'tracks_weight', False)):
+        if not skip_balances and bool(getattr(acc, 'tracks_weight', False)):
             w18 = float(live.get('18k') or 0.0)
             w21 = float(live.get('21k') or 0.0)
             w22 = float(live.get('22k') or 0.0)
@@ -632,24 +650,25 @@ def get_accounts():
                 ),
             }
 
-        if acc.parent_id:
-            parent = Account.query.get(acc.parent_id)
-            if parent:
-                account_dict['parent_account'] = {
-                    'id': parent.id,
-                    'account_number': parent.account_number,
-                    'name': parent.name
-                }
+        if not skip_balances:
+            if acc.parent_id:
+                parent = _parent_map.get(acc.parent_id)
+                if parent:
+                    account_dict['parent_account'] = {
+                        'id': parent.id,
+                        'account_number': parent.account_number,
+                        'name': parent.name
+                    }
 
-        children = Account.query.filter_by(parent_id=acc.id).all()
-        if children:
-            account_dict['sub_accounts'] = [{
-                'id': child.id,
-                'account_number': child.account_number,
-                'name': child.name,
-                'bank_name': child.bank_name,
-                'account_number_external': child.account_number_external
-            } for child in children]
+            children = [a for a in accounts if a.parent_id == acc.id]
+            if children:
+                account_dict['sub_accounts'] = [{
+                    'id': child.id,
+                    'account_number': child.account_number,
+                    'name': child.name,
+                    'bank_name': child.bank_name,
+                    'account_number_external': child.account_number_external
+                } for child in children]
 
         result.append(account_dict)
 
